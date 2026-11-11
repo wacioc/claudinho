@@ -102,7 +102,7 @@ notarises when `APPLE_KEYCHAIN_PROFILE` names a profile saved with `xcrun notary
 
 - A person has only used the app on Windows. On macOS and Linux the packaged app has been started on hosted
   machines by `pack-check.js`, with a stand-in for Claude Code, and the CPU limits were checked.
-- The Windows installer is not signed, and the installers carry Electron's default icon. The signed Mac build
-  has run on the owner's Mac, not yet in the workflow (section 11 of the build history). A packaged build must keep Electron's
+- The Windows installer is not signed, and the installers carry Electron's default icon. No signed Mac
+  release has gone out yet (section 11 of the build history). A packaged build must keep Electron's
   `RunAsNode` fuse on (see `cpu.js`); `pack-check.js` fails when it is off.
 - The open points are listed in the README under "Limits" and in section 11 of the build history.

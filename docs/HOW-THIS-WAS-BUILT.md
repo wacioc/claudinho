@@ -720,10 +720,10 @@ Not exercised:
   stand-in for Claude Code; everything in section 7 is untried there.
 - The effect of App Nap on the app's timers was not measured. The design avoids depending on it.
 - The Windows installer is not signed, the app has Electron's default icon, and it does not update itself.
-- The signed and notarised Mac build has run on the owner's Mac only: Apple accepted both apps, Gatekeeper
-  reports them as notarised from the disk images, a copy marked as downloaded starts, and `pack-check.js`
-  passed on the Apple silicon app with the hardened runtime. The `installers` workflow has not signed yet; it
-  waits for the repository secrets.
+- The signed and notarised Mac build has run on the owner's Mac and in the `installers` workflow, started by
+  hand on the `mac-signing` branch: Apple accepted both apps, Gatekeeper reports them as notarised from the
+  disk images, and `pack-check.js` passed on both with the hardened runtime. On the owner's Mac a copy marked
+  as downloaded starts. No signed release has gone out yet.
 - A packaged build must keep Electron's `RunAsNode` fuse on, or the helper process needs another way to start.
   `pack-check.js` fails when it is off.
 - On Ubuntu 24.04 and later the AppImage runs without Chromium's sandbox. A `.deb` with an AppArmor profile
