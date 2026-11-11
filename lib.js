@@ -1,4 +1,5 @@
 // Pure helpers. No Electron imports, so `node test.js` can exercise them.
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -155,6 +156,42 @@ function hookReply(ev, choice) {
   return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision } };
 }
 
+// ---------- the record of input requests ----------
+
+// What an input request offered: one entry per question asked, or one for a tool-permission prompt. Who picked
+// what is filled in later (see auditPick). ev: the hook event; kind: what inputKind made of it.
+// key: what the tool call's later events can be matched by when the answer was given in the terminal.
+function auditEntries(ev, kind) {
+  if (kind === 'question') {
+    return ev.tool_input.questions.map(q => ({ kind, ask: q.question, options: (q.options || []).map(o => o.label), recommended: pickRecommended(q), key: ev.tool_use_id || null }));
+  }
+  // A permission prompt comes down to two answers. Approving is what the timed and auto levels do.
+  return [{ kind, ask: `${ev.tool_name}: ${permissionSummary(ev)}`, options: ['approve', 'deny'], recommended: 'approve', key: toolKey(ev) }];
+}
+
+// One tool call, told apart by its tool and its input. A permission prompt carries no id of its own, but the
+// input it shows is, byte for byte, the input the tool call reports when it has run.
+const toolKey = ev => crypto.createHash('sha1').update(`${ev.tool_name}\n${JSON.stringify(ev.tool_input)}`).digest('hex').slice(0, 16);
+
+// What was picked for an entry, from the choice that settled its request: 'recommended' | 'deny' | { answers }.
+function auditPick(entry, choice) {
+  if (entry.kind === 'permission') return choice === 'deny' ? 'deny' : 'approve';
+  const answer = choice && choice.answers && choice.answers[entry.ask];
+  return answer == null ? entry.recommended : [].concat(answer).join(', ');
+}
+
+// ---------- Claude Code's own version ----------
+
+// "2.1.322 (Claude Code)" -> "2.1.322"; null when there is no version in the text.
+const parseVersion = text => (/\d+\.\d+\.\d+/.exec(String(text)) || [null])[0];
+// Is version a newer than version b? Both as "1.2.3"; anything else counts as "no".
+function newerVersion(a, b) {
+  const [x, y] = [a, b].map(v => (parseVersion(v) || '').split('.').map(Number));
+  if (x.length < 3 || y.length < 3) return false;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+  return false;
+}
+
 // ---------- launching claude ----------
 
 // Status line wrapper: save the JSON Claude Code pipes in (cost, context, rate limits), then hand it to the
@@ -169,6 +206,8 @@ function statusLineCommand(file, original) {
 // Per-instance settings passed with --settings: they sit above user/project settings for that session only.
 function instanceSettings({ statusFile, hookUrl, userStatusLine }) {
   const hook = [{ type: 'http', url: hookUrl, timeout: 7200 }]; // a "timed" request may be held for up to an hour
+  // Every tool call reports here when it has run. Five seconds at most: nothing may hold a session's tools up.
+  const after = [{ matcher: '*', hooks: [{ type: 'http', url: `${hookUrl}/after`, timeout: 5 }] }];
   return {
     statusLine: { ...userStatusLine, type: 'command', command: statusLineCommand(statusFile, userStatusLine && userStatusLine.command) },
     hooks: {
@@ -179,6 +218,10 @@ function instanceSettings({ statusFile, hookUrl, userStatusLine }) {
       // holds a prompt back until they have finished, and reports nothing else when they do. (An http hook
       // cannot be put on SessionStart itself, and hooks of one event run side by side in no set order.)
       UserPromptSubmit: [{ hooks: [{ type: 'http', url: hookUrl }] }],
+      // An input request answered in the terminal is reported by no hook. What was picked shows only in what
+      // the tool call did next: a question's result holds the answers, and a tool that ran had been approved.
+      PostToolUse: after,
+      PostToolUseFailure: after,
     },
   };
 }
@@ -455,29 +498,7 @@ function walk(root, rel, out, depth = 0) {
 }
 
 function scanConfig(root) {
-  const files = [...ROOT_FILES.filter(f => fs.existsSync(path.join(root, f))), ...walk(root, '.claude', []), ...walk(root, '.github', [])].sort();
-  const count = re => files.filter(f => re.test(f)).length;
-  const hasHooks = ['.claude/settings.json', '.claude/settings.local.json'].some(f => {
-    try { return Object.keys(JSON.parse(fs.readFileSync(path.join(root, f), 'utf8')).hooks || {}).length > 0; } catch { return false; }
-  });
-  return {
-    files,
-    summary: {
-      claude: count(/^\.claude\//) > 0 || files.includes('CLAUDE.md'),
-      github: count(/^\.github\//) > 0,
-      skills: count(/^\.claude\/skills\/[^/]+\/SKILL\.md$/i),
-      agents: count(/^\.claude\/agents\/.+\.md$/i),
-      commands: count(/^\.claude\/commands\/.+\.md$/i),
-      settings: count(/^\.claude\/settings(\.local)?\.json$/),
-      hooks: hasHooks,
-      mcp: files.includes('.mcp.json'),
-      memory: files.includes('CLAUDE.md'),
-      workflows: count(/^\.github\/workflows\/.+\.ya?ml$/i),
-      issueTemplates: count(/^\.github\/ISSUE_TEMPLATE\/./i),
-      prTemplate: count(/^\.github\/pull_request_template/i) > 0,
-      codeowners: count(/^\.github\/CODEOWNERS$/) > 0,
-    },
-  };
+  return { files: [...ROOT_FILES.filter(f => fs.existsSync(path.join(root, f))), ...walk(root, '.claude', []), ...walk(root, '.github', [])].sort() };
 }
 
 // Trust boundary for the editor: only paths the scan could list may be read or written.
@@ -520,6 +541,7 @@ module.exports = {
   worktreeName, openBlockers, defaultTemplate, renderTemplate, issuePrompt, prAction, issuesQuery, mapIssue, parseGitHub,
   PR_FIELDS, checksOf, mapPr, groupName,
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,
+  auditEntries, auditPick, toolKey, parseVersion, newerVersion,
   childEnv, isInside, realPath, samePath, parseWorktrees, labelFor, scanConfig, configPath, ROOT_FILES, scanHome, homePath,
   SAMPLE_SECONDS, samplerCommand, cpuSeconds, parseProcs, treeOf, treeUsage, byName,
   WEIGHTS, MIN_SHARE, shareCpu, scopeUnit, scopeProps, scopeCommand, throttleTargets, nextDuty,

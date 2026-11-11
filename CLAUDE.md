@@ -1,8 +1,9 @@
 # claudinho
 
 A desktop monitor (Electron) for the Claude Code instances running in a repo: live terminals in groups, their
-worktrees, GitHub issues with dispatch into worktrees, the open pull requests, an editor for the `.claude`
-setup, per-instance CPU limits, and resuming every session after the app stops.
+worktrees, GitHub issues with dispatch into worktrees, the open pull requests, notifications with a record of
+every input request, an editor for the `.claude` setup, per-instance CPU limits, and resuming every session
+after the app stops.
 
 - [README.md](README.md): what it does, how to run it, and its limits.
 - [docs/HOW-THIS-WAS-BUILT.md](docs/HOW-THIS-WAS-BUILT.md): the brief, the decisions and their reasons, the
@@ -71,6 +72,14 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
   the blocker lookup although the scratch folder has no GitHub remote.
 - The Pull requests tab is tested read-only in an empty folder whose `origin` is a public repository with
   many open pull requests. Nothing is started there.
+- Input requests need a session that is asked before it uses a tool. Where the machine's default is auto
+  mode, give the scratch repository `"permissions": { "defaultMode": "default" }` in its `.claude/settings.json`.
+  A test answers in the terminal by writing keys to the instance (`api.write`): Enter, Down, Escape.
+- `CLAUDINHO_RELEASES=<address>` makes the app read Claude Code's newest version from there, so a test can
+  serve a higher one and see the update button. Pressing it runs the real `claude update`: check first that
+  the installed version is the newest, or the test updates Claude Code.
+- The tray icon cannot be seen through the DevTools protocol. Its pictures can: `trayImages(n)` in the window
+  draws them.
 - `pack-check.js` starts no real Claude Code session. On macOS and Linux a stand-in plays Claude Code; on
   Windows it starts no instance. The packaged app with the real Claude Code is tried by hand: after
   `npm run dist`, start `dist/win-unpacked/claudinho.exe` like any other test copy.
@@ -89,4 +98,4 @@ A version whose tag is not on GitHub has no release.
   machines by `pack-check.js`, with a stand-in for Claude Code, and the CPU limits were checked.
 - The installers are not signed and carry Electron's default icon. A packaged build must keep Electron's
   `RunAsNode` fuse on (see `cpu.js`); `pack-check.js` fails when it is off.
-- The open points are listed in the README under "Limits" and in section 10 of the build history.
+- The open points are listed in the README under "Limits" and in section 11 of the build history.

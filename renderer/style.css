@@ -30,12 +30,23 @@ header .repo { color: var(--dim); flex: 0 1 auto; min-width: 60px; overflow: hid
 header .spacer { flex: 1 0 0; }
 #usage { display: flex; gap: 14px; }
 .usage-win.ok { color: var(--ok); } .usage-win.warn { color: var(--warn); } .usage-win.bad { color: var(--bad); } .usage-win.stale { opacity: .55; }
+/* the bell, with the number of new notifications in a red circle on its corner, and the list it opens */
+#btn-bell { position: relative; }
+#n-bell { position: absolute; top: -5px; right: -7px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: #e5484d; color: #fff; font: bold 11px/17px var(--mono); text-align: center; }
+#btn-update { border-color: var(--ok); color: var(--ok); }
+#notes { position: fixed; top: 46px; right: 12px; z-index: 15; width: 460px; max-width: 92vw; max-height: 70vh; overflow: auto; background: var(--panel); border: 1px solid var(--dim); border-radius: 6px; white-space: normal; }
+.notes-head { padding: 8px 12px; color: var(--accent); border-bottom: 1px solid var(--line); }
+.note { display: flex; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--line); border-left: 3px solid transparent; cursor: pointer; overflow-wrap: anywhere; }
+.note:hover { background: var(--line); }
+.note.fresh { border-left-color: #e5484d; }
+.note .mark { flex: none; width: 16px; text-align: center; font-weight: bold; color: var(--dim); }
+.note.input .mark { color: var(--warn); } .note.done .mark, .note.update .mark { color: var(--ok); } .note.auto .mark { color: var(--busy); }
 .tab { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--dim); padding: 4px 8px; }
 .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 #setup { margin-left: auto; }
 .chip { border: 1px solid var(--line); border-radius: 10px; padding: 0 8px; color: var(--dim); white-space: nowrap; }
-.chip.on { color: var(--fg); } .chip.warn { color: var(--warn); border-color: var(--warn); }
+.chip.warn { color: var(--warn); border-color: var(--warn); }
 .chip button { border: 0; padding: 0 0 0 6px; background: none; color: var(--dim); }
 
 main { min-height: 0; }
@@ -47,6 +58,9 @@ main > section { height: 100%; display: flex; flex-direction: column; min-height
 #external:empty, #grid:empty, #resumable:empty { display: none; }
 .card { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); overflow: hidden; cursor: pointer; display: flex; flex-direction: column; min-width: 0; }
 .card:hover { border-color: var(--dim); }
+/* done: the last turn has ended. A request for input, which follows, shows over it. */
+.card.done { border-color: var(--ok); box-shadow: 0 0 0 1px var(--ok); }
+.tick { flex: none; color: var(--ok); font-weight: bold; }
 .card.attention { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn); }
 .card.ext { cursor: default; border-style: dashed; }
 /* a session in a group: a stripe in the group's colour, and the group's name beside the title */
@@ -95,6 +109,13 @@ main > section { height: 100%; display: flex; flex-direction: column; min-height
 .env .secret { color: var(--dim); cursor: pointer; }
 .env i { color: var(--warn); font-style: normal; }
 .side input[type=search] { width: 100%; }
+.audit { max-height: 300px; overflow: auto; }   /* a long record scrolls in place, so what follows stays in reach */
+.audit-row { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.audit-row .ask { overflow-wrap: anywhere; }
+.audit-row .opts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.opt { border: 1px solid var(--line); border-radius: 10px; padding: 0 7px; color: var(--dim); overflow-wrap: anywhere; }
+.opt.picked { border-color: var(--ok); color: var(--ok); }
+.opt i { font-style: normal; color: var(--accent); }
 .procs table { margin-top: 6px; }
 .procs td { padding: 1px 10px 1px 0; border: 0; }
 .procs td:first-child { color: var(--busy); overflow-wrap: anywhere; }

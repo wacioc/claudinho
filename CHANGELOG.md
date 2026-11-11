@@ -4,6 +4,32 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.3.0 (2026-11-11)
+
+**Notifications**
+
+- A bell in the top right with the number of new notifications in a red circle, and a tray icon that shows the
+  same number. A notification is raised when a session asks for input, when it has answered for itself, and
+  when it is done.
+- A session whose turn has ended is marked on its card with a green outline and a green checkmark.
+
+**Instances**
+
+- A record of every input request per session, in the detail view: what was asked, the options, the
+  recommended one, the one picked, and whether that was by hand, by the timer running out, or automatic.
+  Answers given in the terminal are recorded too. The record is kept across a restart.
+- The start dialogs offer the model as a list: fable, opus, sonnet, haiku.
+
+**Claude Code**
+
+- The header shows the installed version of Claude Code. When a newer one is out, a button and a notification
+  appear, and pressing either runs `claude update`.
+
+**Removed**
+
+- The row of tags in the top right that counted the folder's `.claude` and `.github` files. The tag that names
+  the GitHub repository stays.
+
 ## 0.2.0 (2026-11-11)
 
 **Instances**

@@ -121,8 +121,9 @@ function formDialog(title, fields, ok = 'OK', submit) {
 
 const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh', 'max'].map(e => [e, e || 'default']);
 const LEVELS = [['manual', 'Manual: always wait for me'], ['timed', 'Timed: wait, then take the recommended option'], ['auto', 'Auto: take the recommended option at once']];
+const MODELS = ['fable', 'opus', 'sonnet', 'haiku'];
 const launchFields = () => [
-  { key: 'model', label: 'Model', type: 'text', list: 'models', value: prefs.model, placeholder: 'default', hint: 'An alias (fable, opus, sonnet, haiku) or a full model name.' },
+  { key: 'model', label: 'Model', type: 'select', value: MODELS.includes(prefs.model) ? prefs.model : 'opus', options: MODELS.map(m => [m, m]) },
   { key: 'effort', label: 'Effort', type: 'select', value: prefs.effort, options: EFFORTS },
   { key: 'level', label: 'When input is needed', type: 'select', value: prefs.level, options: LEVELS, hint: `Covers Claude's questions and tool-permission prompts. Timed waits ${state.settings.timedMinutes} min.` },
 ];
@@ -148,6 +149,63 @@ function stripe(card, group) {
   card.style.setProperty('--group', group ? groupColor(group) : '');
 }
 
+// ---------- notifications ----------
+
+// The tray icon: the app's mark, or the number of new notifications in a red circle. The window draws it,
+// because the main process has nothing to draw text with. One picture per screen scale, 16 px at 100%.
+function trayImages(count) {
+  return [1, 1.25, 1.5, 2, 3].map(scale => {
+    const size = Math.round(16 * scale), c = document.createElement('canvas');
+    c.width = c.height = size;
+    const g = c.getContext('2d');
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    const text = !count ? 'c' : count > 9 ? '9+' : String(count);
+    g.fillStyle = count ? '#e5484d' : '#11151c';
+    g.beginPath();
+    if (count) g.arc(size / 2, size / 2, size / 2, 0, 2 * Math.PI); else g.roundRect(0, 0, size, size, size * 0.22);
+    g.fill();
+    g.fillStyle = count ? '#fff' : '#e6b450';
+    g.font = `bold ${Math.round(size * (text.length > 1 ? 0.58 : 0.78))}px "Segoe UI", system-ui, sans-serif`;
+    g.fillText(text, size / 2, size * 0.54);
+    return [scale, c.toDataURL('image/png')];
+  });
+}
+
+const NOTE_MARKS = { input: '?', auto: '»', done: '✓', update: '⬆' };
+let shownFresh = -1;
+function renderBell() {
+  const fresh = (state.notifications || []).filter(n => !n.seen).length;
+  if (fresh === shownFresh) return;
+  shownFresh = fresh;
+  $('#n-bell').textContent = fresh > 99 ? '99+' : fresh;
+  $('#n-bell').hidden = !fresh;
+  $('#btn-bell').title = fresh ? plural(fresh, 'new notification') : 'Notifications';
+  api.call('tray', trayImages(fresh), fresh).catch(() => {});   // a system without a tray: the bell still counts
+}
+
+// The list behind the bell, newest first. Opening it is what makes its entries no longer new.
+function openNotes() {
+  const list = (state.notifications || []).slice().reverse();
+  $('#notes').replaceChildren(h('div.notes-head', 'Notifications'), ...(list.length ? list.map(n => h('div', {
+    className: `note ${n.kind}${n.seen ? '' : ' fresh'}`,
+    title: n.kind === 'update' ? 'Run `claude update`' : terms.has(n.inst) ? 'Show this instance' : '',
+    onclick: () => {
+      $('#notes').hidden = true;
+      if (n.kind === 'update') updateClaude();
+      else if (terms.has(n.inst)) { show('instances'); openDetail(n.inst); }
+    },
+  }, h('span.mark', NOTE_MARKS[n.kind]), h('div', n.label && h('b', `${n.label} `), n.text, h('div.hint', new Date(n.at).toLocaleTimeString()))))
+    : [h('div.empty', 'Nothing yet. A session that asks for input, or is done, shows up here.')]));
+  $('#notes').hidden = false;
+  if (list.some(n => !n.seen)) call('seen');
+}
+
+async function updateClaude() {
+  toast('Running `claude update`…');
+  const line = await call('updateClaude');
+  if (line) toast(line);
+}
+
 // ---------- top bar ----------
 
 function usageWin(label, w, at) {
@@ -168,19 +226,18 @@ function renderTop() {
     : a && a.loggedIn ? `✉ ${a.email}${a.subscriptionType ? ` · ${a.subscriptionType}` : ''}` : 'Not logged in: run `claude` and /login';
   $('#usage').replaceChildren(...(u ? [usageWin('5h', u.five_hour, u.at), usageWin('7d', u.seven_day, u.at)]
     : [h('span.hint', '5h / 7d usage shows up after an instance gets its first reply')]));
+  // Claude Code itself: the version installed, and a button when a newer one is out.
+  const cc = state.claude || {};
+  $('#claude-version').textContent = cc.version ? `Claude Code ${cc.version}` : '';
+  $('#btn-update').hidden = !cc.latest && !cc.updating;
+  $('#btn-update').disabled = !!cc.updating;
+  $('#btn-update').textContent = cc.updating ? '⬆ updating…' : `⬆ ${cc.latest}`;
+  $('#btn-update').title = `Claude Code ${cc.latest} is out. Press to run \`claude update\`. Sessions that are running keep the version they started with.`;
+  renderBell();
   $('#btn-new').disabled = !r || !state.claudeFound;
   $('#btn-worktree').disabled = !r || !r.isGit || !state.claudeFound;
   if (!r) return $('#setup').replaceChildren();
-  const s = r.setup, on = (cond, text) => cond && h('span.chip.on', text);
-  $('#setup').replaceChildren(...[
-    h('span.chip', r.github ? `GitHub ${r.github.owner}/${r.github.name}` : r.isGit ? 'git, no GitHub remote' : 'plain folder'),
-    !s.claude && h('span.chip', 'no .claude setup'),
-    on(s.memory, 'CLAUDE.md'), on(s.skills, plural(s.skills, 'skill')), on(s.agents, plural(s.agents, 'agent')),
-    on(s.commands, plural(s.commands, 'command')), on(s.settings, 'settings'), on(s.hooks, 'hooks'), on(s.mcp, 'MCP'),
-    !s.github && h('span.chip', 'no .github config'),
-    on(s.workflows, plural(s.workflows, 'workflow')), on(s.issueTemplates, plural(s.issueTemplates, 'issue template')),
-    on(s.prTemplate, 'PR template'), on(s.codeowners, 'CODEOWNERS'),
-  ].filter(Boolean));
+  $('#setup').replaceChildren(h('span.chip', r.github ? `GitHub ${r.github.owner}/${r.github.name}` : r.isGit ? 'git, no GitHub remote' : 'plain folder'));
   $('#worktrees').replaceChildren(...r.worktrees.filter(w => !w.main).map(w => h('option', { value: w.path.split(/[\\/]/).pop() })));
 }
 
@@ -230,7 +287,8 @@ function createCard(inst) {
   const host = h('div.term-host'), wrap = h('div.term-wrap', host);
   const p = {
     title: h('span.title'), group: h('span.group'), badge: h('span.badge'), meta: h('div.meta'), up: h('span.chip'), pending: h('div.pending'),
-    info: h('dl'), env: h('div.env'), procs: h('div.procs'),
+    done: h('span.tick', { title: 'Done: its last turn has ended, and nothing has been asked of it since.' }, '✓'),
+    info: h('dl'), env: h('div.env'), procs: h('div.procs'), audit: h('div.audit'),
     groupIn: h('input', { type: 'text', list: 'groups', maxLength: 40, placeholder: 'none', title: 'Sessions with the same group name are marked as belonging together. Clear the name to take this one out of its group.',
       onchange: e => call('setInstance', inst.id, { group: e.target.value }) }),
     merge: h('input', { type: 'checkbox', onchange: e => call('setInstance', inst.id, { autoMerge: e.target.checked }) }),
@@ -240,13 +298,14 @@ function createCard(inst) {
       [['low', 'Low: half a share'], ['normal', 'Normal'], ['high', 'High: a double share']].map(([v, text]) => h('option', { value: v }, text))),
   };
   const card = h('article.card', { onclick: e => { if (detailId !== inst.id && !e.target.closest('button, .pending-box')) openDetail(inst.id); } },
-    h('div.head', p.title, p.group, p.badge, h('span.spacer'),
+    h('div.head', p.done, p.title, p.group, p.badge, h('span.spacer'),
       h('button.back', { onclick: e => { e.stopPropagation(); closeDetail(); } }, '← All instances'),
       h('button.x', { title: 'Stop and remove', onclick: e => { e.stopPropagation(); closeInstance(inst.id); } }, '✕')),
     p.meta, p.pending,
     h('div.body', wrap, h('aside.side',
       h('h3', 'Session'), p.info,
       h('label', 'Group ', p.groupIn),
+      h('h3', 'Input requests'), p.audit,
       h('h3', 'CPU and memory'), p.procs,
       h('label', 'CPU weight ', p.weight),
       h('h3', 'Automation'),
@@ -320,6 +379,9 @@ function updateCard(t, inst, order) {
   stripe(t.card, inst.group);
   t.card.style.order = order;
   if (document.activeElement !== t.p.groupIn) t.p.groupIn.value = inst.group || '';
+  t.p.done.hidden = !inst.done;
+  t.card.classList.toggle('done', !!inst.done);
+  if (detailId === inst.id && t.auditRev !== inst.auditRev) loadAudit(t);
   t.p.badge.textContent = st.text;
   t.p.badge.className = `badge ${st.cls}`;
   t.p.badge.title = inst.starting ? 'Its first prompt has not gone in yet: Claude Code is still running the SessionStart hooks of this new worktree. Issues that are queued wait for it.' : '';
@@ -352,11 +414,25 @@ function renderEnv(t) {
   }));
 }
 
+// The record of a session's input requests, newest first: what was asked, what was on offer, which option the
+// app would pick, which one was picked, and how.
+const HOW = { manual: 'manual', timed: 'timed expired, auto picked', auto: 'auto' };
+function loadAudit(t) {
+  t.auditRev = t.inst.auditRev;
+  call('audit', t.inst.id).then(rows => t.p.audit.replaceChildren(...(rows.length ? [h('div.hint', '✓ picked   ★ recommended'), ...rows.reverse().map(e => h('div.audit-row',
+    h('div.hint', `${new Date(e.at).toLocaleTimeString()} · ${e.kind === 'question' ? 'question' : 'tool call'} · ${e.picked ? HOW[e.how] : 'no answer yet'}`),
+    h('div.ask', e.ask),
+    h('div.opts', e.options.map(o => h('span', { className: `opt${o === e.picked ? ' picked' : ''}` }, o === e.picked && '✓ ', o, o === e.recommended && h('i', ' ★')))),
+    e.picked && !e.options.includes(e.picked) && h('div.hint', e.picked === 'dismissed' ? 'dismissed without an answer' : `picked: ${e.picked}`)))]
+    : [h('div.hint', 'None so far: this session has not asked a question or for a permission.')])));
+}
+
 function openDetail(id) {
   const t = terms.get(id);
   if (!t) return;
   if (detailId) closeDetail();
   detailId = id;
+  loadAudit(t);
   $('#view-instances').classList.add('detail');
   t.card.classList.add('detail');
   layoutSoon(t);
@@ -593,7 +669,7 @@ function showMenu(x, y, items) {
   m.style.left = `${Math.min(x, innerWidth - m.offsetWidth - 8)}px`;
   m.style.top = `${Math.min(y, innerHeight - m.offsetHeight - 8)}px`;
 }
-document.addEventListener('click', () => { $('#ctx').hidden = true; });
+document.addEventListener('click', e => { $('#ctx').hidden = true; if (!e.target.closest('#notes')) $('#notes').hidden = true; });
 
 const PROMPT_HINT = 'A Jinja2 template: {{ issue_id }}, {{ issue_title }} and {{ issue_url }} are filled in for the issue.';
 // What a batch is called unless another name is typed: its issues, or the first three and how many more.
@@ -776,6 +852,8 @@ $('#btn-worktree').onclick = () => newInstance(true);
 $('#btn-resume-all').onclick = async () => { for (const r of state.resumable.slice()) await call('resume', r.id); };
 $('#btn-refresh-worktrees').onclick = loadWorktrees;
 $('#btn-refresh-prs').onclick = loadPrs;
+$('#btn-bell').onclick = e => { e.stopPropagation(); if ($('#notes').hidden) openNotes(); else $('#notes').hidden = true; };
+$('#btn-update').onclick = updateClaude;
 $('#hide-outside').checked = !!prefs.hideOutside;
 $('#hide-outside').onchange = e => { prefs.hideOutside = e.target.checked; savePrefs(); renderInstances(); };
 $('#btn-refresh-issues').onclick = loadIssues;

@@ -1,5 +1,5 @@
 // Electron main process: the window, repo/GitHub commands, the Claude Code instances (PTYs) and the hook server.
-const { app, BrowserWindow, Menu, ipcMain, dialog, shell, clipboard } = require('electron');
+const { app, BrowserWindow, Menu, Tray, ipcMain, dialog, shell, clipboard, nativeImage, net } = require('electron');
 const { execFile, execFileSync, spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -71,6 +71,9 @@ const instances = new Map();
 let interrupted = Array.isArray(saved.sessions) ? saved.sessions : [];
 const queue = [];         // dispatched issues waiting for a pool slot or for their blockers
 let poolLimit = 1;
+const notifications = []; // what the bell lists, newest last (see notify)
+let tray = null;          // the tray icon; the window draws its picture (see rpc.tray)
+const claudeCode = { version: null, latest: null, updating: false };   // Claude Code itself (see checkClaude)
 const CORES = os.cpus().length;
 const procUsage = new Map();   // root pid -> CPU and memory of that session's process tree
 
@@ -93,6 +96,9 @@ function snapshot() {
   return {
     version: app.getVersion(), claudeFound: !!claudeBin, repo, account, usage: saved.usage, settings: saved.settings, cores: CORES,
     cpuMechanism: cpu.mechanism, cpuError: cpu.error,
+    notifications: notifications.slice(-100),
+    // latest: only when it is newer than what is installed
+    claude: { version: claudeCode.version, latest: lib.newerVersion(claudeCode.latest, claudeCode.version) ? claudeCode.latest : null, updating: claudeCode.updating },
     // Not the ones whose conversation is live again somewhere (resumed by hand in a terminal, say).
     resumable: interrupted.filter(r => !sessions.some(s => s.sessionId && s.sessionId === r.sessionId)).map(r => ({
       id: r.id, label: r.worktree || path.basename(r.root), worktree: r.worktree, dir: r.worktree ? path.join(r.root, '.claude', 'worktrees', r.worktree) : r.root,
@@ -107,6 +113,7 @@ function snapshot() {
         status: i.status, session: { status: s.status || s.state, waitingFor: s.waitingFor, name: s.name },
         pending: i.pending.map(p => p.view), pr: i.pr, merge: i.merge, procs: i.exited ? undefined : procUsage.get(i.pid),
         weight: i.weight, limit: i.limited && !i.exited ? cpu.limit(i.id) : 1, group: i.group, starting: i.starting && !i.exited,
+        done: i.done && !i.exited, auditRev: i.auditRev,
       };
     }),
     external: externalSessions().map(s => ({
@@ -123,7 +130,8 @@ function userStatusLine() { return readJson(path.join(configDir(), 'settings.jso
 
 // resume + transcript: continue that conversation instead of starting one (see "sessions on disk").
 // group: the name of the group it belongs to, if any (see lib.groupName).
-function spawnInstance({ cwd, worktree, resume, transcript, model, effort, prompt, level = 'manual', autoMerge = false, kind = 'instance', issue = null, pooled = false, weight = 'normal', group = null }) {
+// audit: the input requests on record for a session that is being resumed.
+function spawnInstance({ cwd, worktree, resume, transcript, model, effort, prompt, level = 'manual', autoMerge = false, kind = 'instance', issue = null, pooled = false, weight = 'normal', group = null, audit = [] }) {
   if (!claudeBin) throw new Error('Claude Code CLI (claude) was not found on PATH.');
   const root = cwd || repo.path;
   const id = crypto.randomBytes(4).toString('hex');
@@ -148,6 +156,8 @@ function spawnInstance({ cwd, worktree, resume, transcript, model, effort, promp
     // A new worktree with a first prompt: until that prompt has gone in, the session is still running its
     // SessionStart hooks, where a repository sets a fresh worktree up (see onHook and pump).
     starting: !!(wt && prompt && !resume),
+    // done: its last turn has ended and no prompt has gone in since. audit: every input request (see onHook).
+    done: false, audit: Array.isArray(audit) ? audit : [], auditRev: 0,
     status: null, pending: [], pr: null, merge: null, finished: false, exited: false, weight, limited,
   };
   instances.set(id, inst);
@@ -229,6 +239,7 @@ async function tick() {
 const sessionRecord = i => ({
   id: i.id, root: i.root, worktree: i.wt && path.basename(i.wt), kind: i.kind, issue: i.issue, pooled: i.pooled, model: i.model, effort: i.effort,
   level: i.level, autoMerge: i.autoMerge, weight: i.weight, group: i.group, prompt: i.prompt, sessionId: i.sessionId, transcript: i.transcript, savedAt: Date.now(),
+  audit: i.audit,
 });
 function saveSessions() {
   // An instance that ended stays on record for a moment longer: when the machine shuts down, Claude Code may
@@ -355,9 +366,12 @@ function syncSampler() {
 function startHookServer() {
   return new Promise(resolve => {
     const server = http.createServer((req, res) => {
-      const [, token, id] = req.url.split('/');
+      const [, token, id, tail] = req.url.split('/');
       const inst = instances.get(id);
       if (req.method !== 'POST' || token !== hookToken || !inst) { res.writeHead(404); return res.end(); }
+      // Every tool call of the session reports here when it has run (see lib.instanceSettings). Its body, which
+      // holds the tool's whole result, is only worth reading while an input request is still without an answer.
+      if (tail === 'after' && !inst.audit.some(e => !e.picked)) { req.resume(); res.writeHead(200); return res.end(); }
       let body = '';
       req.on('data', c => { body += c; });
       req.on('end', () => {
@@ -381,14 +395,37 @@ function onHook(inst, ev, res) {
   if (ev.hook_event_name === 'Stop') { reply(); onStop(inst); return; }
   if (ev.hook_event_name === 'UserPromptSubmit') {
     reply();
-    if (inst.starting) { inst.starting = false; push(); pump(); }   // its start hooks are done: the next worktree may come
+    inst.done = false;      // a new turn begins
+    // A request still open when a prompt goes into an idle session was dismissed with Escape, which ends a turn
+    // without a Stop. In a busy session the prompt is a message sent along the way, and an approved tool may
+    // still be running: that one is left open until its turn ends.
+    if ((sessionOf(inst) || {}).status !== 'busy') closeAudit(inst);
+    if (inst.starting) { inst.starting = false; pump(); }   // its start hooks are done: the next worktree may come
+    push();
     return;
   }
+  if (ev.hook_event_name === 'PostToolUse' || ev.hook_event_name === 'PostToolUseFailure') { reply(); answeredElsewhere(inst, ev); return; }
   const kind = lib.inputKind(ev);
-  if (!kind || inst.level === 'manual') return reply();
-  if (inst.level === 'auto') return reply(lib.hookReply(ev, 'recommended'));
+  if (!kind) return reply();
+  // On record from here on: what was asked, what was on offer and what the app would pick. What was picked,
+  // and how, is added when the request is settled.
+  const asked = lib.auditEntries(ev, kind).map(e => ({ ...e, at: Date.now(), picked: null, how: null }));
+  inst.audit.push(...asked);
+  inst.audit.splice(0, Math.max(0, inst.audit.length - 300));   // ponytail: the last 300 per session; write them to a file of their own if more are wanted
+  inst.auditRev++;
+  const what = asked.map(e => e.ask).join(' | ');
+  if (inst.level === 'manual') {   // answered in the terminal: see answeredElsewhere
+    notify('input', `needs input: ${what}`, inst);
+    return reply();
+  }
+  if (inst.level === 'auto') {
+    settleAudit(inst, asked, 'recommended', 'auto');
+    notify('auto', `answered for itself: ${what} → ${asked.map(e => e.picked).join(' | ')}`, inst);
+    return reply(lib.hookReply(ev, 'recommended'));
+  }
   // timed: hold the request, show it on the card, take the recommended choice at the deadline.
   const ms = saved.settings.timedMinutes * 60000;
+  notify('input', `needs input within ${saved.settings.timedMinutes} min: ${what}`, inst);
   const p = {
     view: {
       id: crypto.randomBytes(4).toString('hex'), kind, deadline: Date.now() + ms,
@@ -396,23 +433,68 @@ function onHook(inst, ev, res) {
         ? { questions: ev.tool_input.questions.map(q => ({ question: q.question, multiSelect: !!q.multiSelect, options: q.options, recommended: lib.pickRecommended(q) })) }
         : { tool: ev.tool_name, detail: lib.permissionSummary(ev) }),
     },
-    settle(choice) {
+    // how: 'manual' when the owner chose on the card, 'timed' when the wait ran out.
+    settle(choice, how = 'manual') {
       clearTimeout(p.timer);
       inst.pending = inst.pending.filter(x => x !== p);
+      if (choice !== 'terminal') settleAudit(inst, asked, choice, how);   // 'terminal': the answer is given there
       reply(lib.hookReply(ev, choice));
       push();
     },
   };
-  p.timer = setTimeout(() => p.settle('recommended'), ms);
+  p.timer = setTimeout(() => p.settle('recommended', 'timed'), ms);
   res.on('close', () => { if (!res.writableEnded) p.settle('terminal'); }); // Claude Code dropped the hook (Esc, exit)
   inst.pending.push(p);
   push();
 }
 
+function settleAudit(inst, entries, choice, how) {
+  for (const e of entries) { e.picked = lib.auditPick(e, choice); e.how = how; }
+  inst.auditRev++;
+  push();
+}
+
+// An input request was answered where the app could not see it, in the terminal or on another device. No hook
+// reports that answer. It shows in what the tool call did next: the result of a question holds the answers,
+// and a tool that ran had been approved. (Measured on Claude Code 2.1.322; see the build history.)
+function answeredElsewhere(inst, ev) {
+  const open = inst.audit.filter(e => !e.picked);
+  if (ev.tool_name === 'AskUserQuestion') {
+    const answers = (ev.tool_response && ev.tool_response.answers) || {};
+    const mine = open.filter(e => e.key === ev.tool_use_id && answers[e.ask] != null);
+    if (mine.length) settleAudit(inst, mine, { answers }, 'manual');
+    return;
+  }
+  const entry = open.find(e => e.key === lib.toolKey(ev));
+  if (entry) settleAudit(inst, [entry], 'recommended', 'manual');
+}
+
+// The turn ended, or a new prompt went in, with a request still open: it was refused or dismissed. Claude Code
+// reports neither, so this is read from the tool never having run.
+function closeAudit(inst) {
+  const open = inst.audit.filter(e => !e.picked);
+  for (const e of open) { e.picked = e.kind === 'permission' ? 'deny' : 'dismissed'; e.how = 'manual'; }
+  if (open.length) { inst.auditRev++; push(); }
+}
+
+// What the owner may want to know without watching every card: a session asks for input, has answered for
+// itself, or is done; a newer Claude Code is out. Kept in memory, newest last.
+function notify(kind, text, inst) {
+  notifications.push({
+    id: crypto.randomBytes(4).toString('hex'), at: Date.now(), kind, text, seen: false,
+    inst: inst ? inst.id : null, label: inst ? lib.labelFor(inst.root, inst.cwd, repo ? repo.worktrees : []).label : null,
+  });
+  notifications.splice(0, Math.max(0, notifications.length - 200));
+  push();
+}
+
 async function onStop(inst) {
   inst.pending.slice().forEach(p => p.settle('terminal'));   // the turn is over: nothing can still be waiting
+  closeAudit(inst);
   if (inst.kind === 'generator') send('config-changed');
   await checkPr(inst);
+  inst.done = true;
+  notify('done', inst.pr ? `is done: pull request #${inst.pr.number}${inst.merge ? ` (${inst.merge})` : ''}` : 'is done', inst);
   push(); pump();
 }
 
@@ -436,6 +518,26 @@ async function checkPr(inst) {
     } catch (e) { inst.merge = `failed: ${e.message}`; }
   }
 }
+
+// ---------- Claude Code itself: the version installed, and whether a newer one is out ----------
+
+// Where the official installer reads the newest version from: one line of text per release channel.
+// CLAUDINHO_RELEASES points a test at an address of its own.
+const RELEASES = process.env.CLAUDINHO_RELEASES || 'https://downloads.claude.ai/claude-code-releases';
+async function checkClaude() {
+  if (!claudeBin) return;
+  try { claudeCode.version = lib.parseVersion(await run(claudeBin, ['--version'])); } catch { /* keep what was read before */ }
+  try {
+    const channel = readJson(path.join(configDir(), 'settings.json')).autoUpdatesChannel === 'stable' ? 'stable' : 'latest';
+    const res = await net.fetch(`${RELEASES}/${channel}`);
+    const latest = res.ok ? lib.parseVersion(await res.text()) : null;
+    // One notification per version, not one per check.
+    if (latest && latest !== claudeCode.latest && lib.newerVersion(latest, claudeCode.version)) notify('update', `Claude Code ${latest} is out; ${claudeCode.version} is installed. Press to run \`claude update\`.`);
+    if (latest) claudeCode.latest = latest;
+  } catch { /* offline: the next check may get through */ }
+  push();
+}
+setInterval(checkClaude, 6 * 3600 * 1000);
 
 // ---------- issue dispatch pool ----------
 
@@ -477,7 +579,6 @@ async function openRepo(dir) {
     path: dir, name: path.basename(dir), isGit,
     github: isGit ? lib.parseGitHub(await git(['remote', 'get-url', 'origin'])) : null,
     worktrees: isGit ? lib.parseWorktrees(await git(['worktree', 'list', '--porcelain'])) : [],
-    setup: lib.scanConfig(dir).summary,
     // The default prompt for issue worktrees.
     // ponytail: prompts saved before 0.1.0 wrote the issue number as {n}, so every load turns a literal {n}
     // into the placeholder. Drop the replaceAll once no state file from before 0.1.0 is around.
@@ -551,6 +652,38 @@ const rpc = {
     const p = inst && inst.pending.find(x => x.view.id === requestId);
     if (p) p.settle(choice);
   },
+  // Every input request of the session, oldest first: what was asked, the options, the recommended one, the one
+  // picked and how (manual, timed, auto). `picked` is null while the answer is still out.
+  audit(id) {
+    const inst = instances.get(id);
+    return inst ? inst.audit.map(({ at, kind, ask, options, recommended, picked, how }) => ({ at, kind, ask, options, recommended, picked, how })) : [];
+  },
+  // The bell's list was opened: nothing in it is new any more.
+  seen() { for (const n of notifications) n.seen = true; push(); },
+  // The tray icon. The window draws it, with the number of new notifications on it, because the main process
+  // has nothing to draw text with. images: [[scale factor, PNG data URL], ...]
+  tray(images, count) {
+    const image = nativeImage.createEmpty();
+    for (const [scaleFactor, dataURL] of images) {
+      if (typeof scaleFactor !== 'number' || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(dataURL)) throw new Error('Not a tray picture.');
+      image.addRepresentation({ scaleFactor, dataURL });
+    }
+    if (!tray) {
+      tray = new Tray(image);
+      tray.on('click', () => { if (win.isMinimized()) win.restore(); win.show(); win.focus(); });
+    } else tray.setImage(image);
+    const n = Math.max(0, Math.floor(Number(count)) || 0);
+    tray.setToolTip(n ? `claudinho: ${n} new notification${n === 1 ? '' : 's'}` : 'claudinho');
+  },
+  // `claude update` installs the newest version of the release channel. Sessions that are running keep the
+  // version they started with; what is started afterwards gets the new one.
+  async updateClaude() {
+    if (!claudeBin) throw new Error('Claude Code CLI (claude) was not found on PATH.');
+    if (claudeCode.updating) return null;
+    claudeCode.updating = true; push();
+    try { return (await run(claudeBin, ['update'])).trim().split(/\r?\n/).pop(); }
+    finally { claudeCode.updating = false; await checkClaude(); }
+  },
   env(id) {
     const inst = instances.get(id);
     if (!inst) return [];
@@ -598,10 +731,7 @@ const rpc = {
   // Paths starting with "~/" are in the home config folder, the rest in the open folder.
   configList: () => ({ ...lib.scanConfig(repo.path), home: { dir: configDir(), files: lib.scanHome(configDir()).map(f => `~/${f}`) } }),
   configRead: rel => fs.readFileSync(configFile(rel), 'utf8'),
-  configWrite(rel, text) {
-    fs.writeFileSync(configFile(rel), text);
-    repo.setup = lib.scanConfig(repo.path).summary; push();
-  },
+  configWrite(rel, text) { fs.writeFileSync(configFile(rel), text); },
   async gitChanges() {
     if (!repo.isGit) return null;
     const out = await run('git', ['status', '--porcelain', '-uall', '--', '.claude', '.github', ...lib.ROOT_FILES], repo.path);
@@ -672,6 +802,7 @@ app.whenReady().then(async () => {
   await startHookServer();
   createWindow();
   if (claudeBin) run(claudeBin, ['auth', 'status']).then(out => { account = JSON.parse(out); push(); }, () => {});
+  checkClaude();
   const arg = process.argv.slice(app.isPackaged ? 1 : 2).find(a => !a.startsWith('-'));
   const start = arg && fs.existsSync(arg) ? path.resolve(arg) : saved.repoPath;
   if (start && fs.existsSync(start)) await openRepo(start);
@@ -685,5 +816,6 @@ app.on('window-all-closed', () => {
   for (const inst of instances.values()) if (!inst.exited) { try { inst.proc.kill(); } catch { /* already gone */ } }
   save();
   fs.rmSync(path.join(dataDir, 'instances'), { recursive: true, force: true });
+  if (tray) tray.destroy();   // or its icon stays in the tray until the mouse passes over it
   app.quit();
 });

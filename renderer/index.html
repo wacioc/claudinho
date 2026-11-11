@@ -17,6 +17,9 @@
   <span class="spacer"></span>
   <span id="account"></span>
   <span id="usage"></span>
+  <span id="claude-version" class="hint"></span>
+  <button id="btn-update" hidden></button>
+  <button id="btn-bell" title="Notifications">🔔<span id="n-bell" hidden></span></button>
   <button id="btn-settings" title="Settings">⚙</button>
 </header>
 <nav>
@@ -77,9 +80,9 @@
   </section>
 </main>
 <menu id="ctx" hidden></menu>
+<div id="notes" hidden></div>
 <dialog id="dlg"></dialog>
 <div id="toast" hidden></div>
-<datalist id="models"><option value="fable"><option value="opus"><option value="sonnet"><option value="haiku"></datalist>
 <datalist id="worktrees"></datalist>
 <datalist id="groups"></datalist>
 <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>

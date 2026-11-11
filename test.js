@@ -99,6 +99,35 @@ assert.strictEqual(settings.statusLine.padding, 2);
 assert.strictEqual(settings.hooks.PreToolUse[0].matcher, 'AskUserQuestion');
 // the prompt hook answers at once, so it keeps Claude Code's own short timeout instead of the hour of the others
 assert.deepStrictEqual(settings.hooks.UserPromptSubmit, [{ hooks: [{ type: 'http', url: 'http://127.0.0.1:1/t/i' }] }]);
+// every tool call reports when it has run, to an address of its own and with a short limit
+assert.deepStrictEqual(settings.hooks.PostToolUse, [{ matcher: '*', hooks: [{ type: 'http', url: 'http://127.0.0.1:1/t/i/after', timeout: 5 }] }]);
+assert.strictEqual(settings.hooks.PostToolUseFailure, settings.hooks.PostToolUse);
+
+// the record of input requests
+const tea = { hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_1', tool_input: { questions: [
+  { question: 'Tea or coffee?', options: [{ label: 'Tea' }, { label: 'Coffee (Recommended)' }] },
+  { question: 'Which toppings?', multiSelect: true, options: [{ label: 'Milk' }, { label: 'Sugar' }] }] } };
+const teaAsked = lib.auditEntries(tea, lib.inputKind(tea));
+assert.deepStrictEqual(teaAsked, [
+  { kind: 'question', ask: 'Tea or coffee?', options: ['Tea', 'Coffee (Recommended)'], recommended: 'Coffee (Recommended)', key: 'toolu_1' },
+  { kind: 'question', ask: 'Which toppings?', options: ['Milk', 'Sugar'], recommended: 'Milk', key: 'toolu_1' }]);
+assert.strictEqual(lib.auditPick(teaAsked[0], 'recommended'), 'Coffee (Recommended)');                          // the timer ran out, or the auto level
+assert.strictEqual(lib.auditPick(teaAsked[0], { answers: { 'Tea or coffee?': 'Tea' } }), 'Tea');                // chosen by hand
+assert.strictEqual(lib.auditPick(teaAsked[1], { answers: { 'Which toppings?': ['Milk', 'Sugar'] } }), 'Milk, Sugar');
+const wantsBash = { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'npm test' } };
+const [bashPrompt] = lib.auditEntries(wantsBash, lib.inputKind(wantsBash));
+assert.deepStrictEqual({ ...bashPrompt, key: null }, { kind: 'permission', ask: 'Bash: npm test', options: ['approve', 'deny'], recommended: 'approve', key: null });
+assert.strictEqual(lib.auditPick(bashPrompt, 'recommended'), 'approve');
+assert.strictEqual(lib.auditPick(bashPrompt, 'deny'), 'deny');
+// a prompt is matched to its tool call by the tool and its input, whatever else the later event carries
+assert.strictEqual(bashPrompt.key, lib.toolKey({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_response: { stdout: 'ok' } }));
+assert.notStrictEqual(bashPrompt.key, lib.toolKey({ tool_name: 'Bash', tool_input: { command: 'npm test -- --watch' } }));
+
+// Claude Code's version
+assert.strictEqual(lib.parseVersion('2.1.322 (Claude Code)\n'), '2.1.322');
+assert.strictEqual(lib.parseVersion('<html>not found</html>'), null);
+assert.ok(lib.newerVersion('2.1.323', '2.1.322') && lib.newerVersion('2.2.0', '2.1.999') && lib.newerVersion('2.1.100', '2.1.99'));
+assert.ok(!lib.newerVersion('2.1.322', '2.1.322') && !lib.newerVersion('2.1.311', '2.1.322') && !lib.newerVersion('2.1.323', null) && !lib.newerVersion(null, '2.1.322'));
 // normal launch: only API credentials are removed
 assert.deepStrictEqual(lib.childEnv({ PATH: 'p', Anthropic_Api_Key: 'k', ANTHROPIC_AUTH_TOKEN: 't', CLAUDE_CODE_GIT_BASH_PATH: 'b', CLAUDE_CONFIG_DIR: 'd' }),
   { PATH: 'p', CLAUDE_CODE_GIT_BASH_PATH: 'b', CLAUDE_CONFIG_DIR: 'd', COLORTERM: 'truecolor' });
@@ -226,11 +255,11 @@ assert.ok(!lib.samePath(root, path.dirname(root)) && lib.samePath(path.join(root
 // .claude / .github scan, and the editor's path guard
 for (const f of ['CLAUDE.md', '.claude/settings.json', '.claude/skills/deploy/SKILL.md', '.claude/agents/reviewer.md', '.claude/worktrees/w/big.txt', '.github/workflows/ci.yml']) {
   fs.mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
-  fs.writeFileSync(path.join(root, f), f.endsWith('settings.json') ? '{"hooks":{"Stop":[]}}' : 'x');
+  fs.writeFileSync(path.join(root, f), 'x');
 }
 const scan = lib.scanConfig(root);
 assert.ok(!scan.files.some(f => f.includes('worktrees')), 'worktree checkouts are not config');
-assert.deepStrictEqual([scan.summary.skills, scan.summary.agents, scan.summary.workflows, scan.summary.hooks, scan.summary.memory], [1, 1, 1, true, true]);
+assert.deepStrictEqual(scan.files, ['.claude/agents/reviewer.md', '.claude/settings.json', '.claude/skills/deploy/SKILL.md', '.github/workflows/ci.yml', 'CLAUDE.md']);
 assert.strictEqual(lib.defaultTemplate(root).includes('PROCESS.md'), false);
 assert.ok(lib.configPath(root, '.claude/agents/reviewer.md').startsWith(root));
 const winOnly = process.platform === 'win32' ? ['.claude/..\\src\\x.js'] : [];   // "\" only separates paths on Windows

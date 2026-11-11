@@ -52,14 +52,51 @@ The first `npm install` downloads the Electron binary.
 
 | Tab | What it shows |
 |---|---|
-| **Instances** | Every Claude Code instance as a live terminal, titled with its worktree (or the folder name), with model, context window, API-equivalent cost, uptime, and the CPU and memory used by it and everything it started. Click one for the full terminal, a per-process breakdown, its environment variables, the auto-merge checkbox and the input level. Sessions that belong to a group carry its name and colour. Sessions started outside the app appear as status-only cards, which a filter can hide, and sessions that were open when the app last stopped appear as cards with a Resume button. |
+| **Instances** | Every Claude Code instance as a live terminal, titled with its worktree (or the folder name), with model, context window, API-equivalent cost, uptime, and the CPU and memory used by it and everything it started. Click one for the full terminal, a per-process breakdown, its environment variables, the auto-merge checkbox and the input level. Sessions that belong to a group carry its name and colour, and one whose turn has ended a green outline and checkmark. Sessions started outside the app appear as status-only cards, which a filter can hide, and sessions that were open when the app last stopped appear as cards with a Resume button. |
 | **Worktrees** | Every worktree under `.claude/worktrees`: its branch, whether it holds uncommitted changes or commits that exist nowhere else, its last commit, and the session at work in it. Each can be removed from here. |
 | **Issues** | Open issues by default, with the issues blocking each one. Select one or many, right-click, "Tackle with Claude Code". |
 | **Pull requests** | The repository's open pull requests, drafts and those ready for review: branch, checks, review state, and the session at work on each. A click on a title opens it on GitHub. |
 | **.claude** | Everything under `.claude` and `.github` of the open folder, and your own configuration from the home folder (`~/.claude`): `CLAUDE.md`, `settings.json`, agents, skills, commands, rules. All of it is editable inline. Saving a file of the open folder offers to commit and push. "New skill" and "New agent" generate one from a prompt in a terminal, where Claude can ask follow-up questions. |
 
-The header shows the app's version, the logged-in account, and the 5-hour and 7-day usage as last reported by
-Claude Code.
+The header shows the app's version, the logged-in account, the 5-hour and 7-day usage as last reported by
+Claude Code, the version of Claude Code that is installed, and the bell.
+
+### Notifications
+
+The bell in the top right carries the number of new notifications in a red circle, and the tray icon shows the
+same number. Pressing the bell lists them, newest first; that is also what makes them no longer new. A click on
+an entry opens the instance it is about.
+
+| A notification says | When |
+|---|---|
+| needs input | A session asks a question or for a permission, at the Manual and at the Timed level. |
+| answered for itself | The same at the Auto level, with what was asked and what was picked. |
+| is done | A session's turn has ended. |
+| Claude Code … is out | A newer version than the installed one has been released. |
+
+A session whose turn has ended is also marked on its card, with a green outline and a green checkmark, until the
+next prompt goes in.
+
+### The record of input requests
+
+The detail view of an instance lists every input request of that session under **Input requests**: the
+question or the tool call, the options, which one is the recommended one (★), which one was picked (✓), and how
+it was settled:
+
+| How | Meaning |
+|---|---|
+| manual | You chose: on the card, in the terminal, or on another device. |
+| timed expired, auto picked | The Timed level waited, nobody answered, and the recommended option was taken. |
+| auto | The Auto level took the recommended option at once. |
+
+A permission prompt has two options here, approve and deny. The record is saved with the session, so it is
+still there after a restart.
+
+### Claude Code's own version
+
+The header shows which version of Claude Code is installed. When a newer one has been released, a button with
+that version appears beside it, and a notification with it. Pressing either runs `claude update`. Sessions that
+are running keep the version they started with; what is started afterwards gets the new one.
 
 ### Closing an instance
 
@@ -190,6 +227,13 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
 - Each instance gets its own `--settings` file. It wraps your status line so the JSON Claude Code feeds it (cost,
   context, rate limits) is also saved for the app, and it adds HTTP hooks pointing at a local server inside the app:
   `PreToolUse` on `AskUserQuestion` and `PermissionRequest` for the input levels, `Stop` to notice a finished turn.
+- An input request answered in the terminal is reported by no hook. What was picked is read from what the
+  tool call did next, through `PostToolUse` and `PostToolUseFailure`: the result of a question holds the
+  answers, and a tool that ran had been approved. One that never ran before its turn ended was refused.
+- The newest Claude Code version is read from the address the official installer reads it from,
+  `https://downloads.claude.ai/claude-code-releases/latest` (or `stable`, if that is your release channel), at
+  the start and every six hours. It is the one address the app itself contacts.
+- The tray icon's picture is drawn by the window, with the number on it, and handed to the main process.
 - Session status comes from `claude agents --json`; the account from `claude auth status`.
 - CPU and memory come from one listing of all processes every 2 seconds (PowerShell and CIM on Windows, `ps`
   elsewhere), running only while there is a session to measure. A session's numbers cover its process tree:
@@ -198,7 +242,7 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   (`shareCpu` in `lib.js`) for the systems whose kernel cannot share by weight.
 - Issues come from `gh api graphql`; blockers are GitHub's native issue dependencies. Pull requests come from
   `gh pr list`.
-- "Finished its `SessionStart` hooks" is read from a fourth hook, `UserPromptSubmit`: Claude Code holds the
+- "Finished its `SessionStart` hooks" is read from another hook, `UserPromptSubmit`: Claude Code holds the
   first prompt back until those hooks are done, and gives no other sign of it. The status line and
   `claude agents` both react while the hooks are still running.
 - Worktrees come from `git worktree list`. Before one is removed, `git status` and `git rev-list` say what would
@@ -242,6 +286,15 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   wins; give a second copy its own `--user-data-dir`.
 - Sessions started elsewhere are status-only: a terminal cannot be attached to them, and they cannot be put
   into a group.
+- Windows 11 puts a new tray icon among the hidden ones. Drag it onto the taskbar, or switch it on under
+  Settings, Personalization, Taskbar, "Other system tray icons", to have the number in view. On Linux a tray
+  icon needs a desktop that shows them. The tray icon has not been tried on macOS or Linux.
+- Notifications are a list inside the app and a number; the app raises no pop-up of the operating system.
+  They are not kept when the app stops.
+- For a request answered in the terminal, the record is completed when the tool call has ended, so an approved
+  command that runs for ten minutes reads "no answer yet" for those ten minutes. Approving a plan (leaving plan
+  mode) is not treated as an input request, by the input levels or by the record. What Claude Code refuses by
+  itself in auto mode was never put to you, and is not in the record either.
 - One worktree at a time holds for issues sent from the Issues tab, which always start with a prompt. A
   session started without a prompt gives no sign that its `SessionStart` hooks are done, so "Resume all
   interrupted" and worktrees started by hand are not held back. A session that stops at a dialog before its

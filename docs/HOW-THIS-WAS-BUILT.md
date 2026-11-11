@@ -76,6 +76,9 @@ Requests that followed, in order:
 8. Installers for Windows, macOS and Linux. Section 8 covers it.
 9. A fourth round: the open pull requests, groups of sessions, a filter for sessions started elsewhere, and
    batch worktrees that start one after another. Section 9 covers it.
+10. A fifth round: notifications with a tray icon, a record of every input request, a mark for sessions that
+    are done, Claude Code's version with an update button, a list of models, and fewer tags. Section 10 covers
+    it.
 
 ## 2. Four questions, four answers
 
@@ -604,8 +607,109 @@ Not exercised:
 - A repository with more than 200 open pull requests.
 - Any of this on macOS or Linux.
 
-## 10. Still open
+## 10. The fifth round: notifications, the record of input requests, updates
 
+Right after version 0.2.0 was released, the owner asked for eight things:
+
+1. Notifications: an icon in the top right, with the number of new ones in a red circle.
+2. The same number on the app's tray icon.
+3. A notification for an input request "when on manual or auto mode", and for a session that is done.
+4. For each session, an audit of all its input requests, for questions and for tool calls: the options, the
+   recommended one, the one picked, and whether that was manual, timed expired and auto picked, or auto.
+5. Sessions that have finished their task marked with a green outline and a green checkmark.
+6. A notification when a new version of Claude Code is released, with an icon that runs `claude update` when
+   pressed, and the installed version on display.
+7. The model offered as fable, opus, sonnet and haiku when a session is dispatched for an issue.
+8. The CLAUDE.md, skills, agents, settings, hooks and workflows tags in the top right removed.
+
+### How each was read, and why
+
+**Timed is notified too.** The owner named manual and auto. A timed request also waits for the owner, and with
+a deadline, so it raises the same "needs input" notification. When its wait runs out, the record says so; no
+second notification is raised.
+
+**"Done" is the end of a turn.** Claude Code reports it with the `Stop` hook. A turn stopped with Escape
+reports nothing, and is not done. The mark goes when the next prompt goes in, which the `UserPromptSubmit` hook
+of the fourth round reports. This is wider than the "finished" of the dispatch pool, which also asks for an
+open pull request and stays as it was.
+
+**The tray's number is a picture.** Outside macOS, Electron has no number or text for a tray icon, so the icon
+is redrawn: the app's mark at zero, a red circle with the number otherwise, "9+" from ten on. The main process
+has nothing to draw text with, so the window draws the pictures, one per screen scale, and hands them over. No
+pop-up of the operating system is raised: none was asked for, and on macOS Electron shows one only for a signed
+app.
+
+**The record needed an answer that no hook reports.** A request settled through the app's own hook is known at
+once: the Auto level, a choice on the card, the timer. One answered in the terminal is not. The hooks page says
+so for permission prompts and is silent about questions, so it was measured, on Claude Code 2.1.322, with every
+hook passing without an opinion and keys typed into the terminal:
+
+| What was done in the terminal | What Claude Code reported afterwards |
+|---|---|
+| A question answered, with Enter or with Down and Enter | `PostToolUse` for `AskUserQuestion`, with the id of the tool call that `PreToolUse` had carried, and the answers by question. |
+| A question dismissed with Escape | Nothing: no `PostToolUse`, no failure, no `Stop`. |
+| A permission prompt approved | `PostToolUse` for the tool. The prompt itself (`PermissionRequest`) has no id, but the tool input it shows is, byte for byte, the input that `PostToolUse` carries. |
+| A permission prompt refused with Escape | Nothing. |
+
+So two more hooks now report every tool call that has run. An open question is closed by its id, an open
+permission prompt by its tool and input. What is still open when the turn ends, or when a prompt goes into an
+idle session, was refused or dismissed. Three things follow from reading it this way:
+
+- An approved call is on record when it has ended, not when it was approved.
+- Every tool call of every session makes one request to the app, on the same machine. The request has an
+  address of its own, and while no request of that session is open the app answers without reading the body,
+  which holds the tool's whole result. Its time limit is five seconds, so an app that hangs cannot hold a
+  session's tools up for longer.
+- "Allow, and do not ask again" cannot be told from "allow once".
+
+**Updating.** `claude update` cannot only check. The newest version is read from where the official install
+scripts read it: one line of text per release channel, and the owner's channel setting decides which. The setup
+page says an update takes effect "the next time you start Claude Code", so the button asks nothing when
+sessions are running.
+
+**The list of models** replaced a text field with suggestions, in all three start dialogs and not only the one
+for issues. The field came filled in, and a browser offers only the suggestions that match what the field
+holds, so the other models never showed. A full model name can no longer be typed there.
+
+**The tags** went as a row, with the ones the owner had not named (commands, MCP, the templates, "no .claude
+setup"). The tag that names the GitHub repository stays. The counting behind them, in `lib.js`, went too. What
+the brief asked for, detecting a `.claude` setup, is what the `.claude` tab shows.
+
+### How it was verified
+
+On Windows, with the window driven as before, in a scratch repository set to ask before every tool. Four
+sessions on the smallest model, each asked to put a question, to write a file, or both.
+
+| What was done | What the record and the app showed |
+|---|---|
+| Manual: a question answered in the terminal with Down and Enter, then a write approved there with Enter. | "Coffee (Recommended)", manual; "approve", manual. Two "needs input" notifications, then "is done". The card got its green outline and checkmark. |
+| Manual: a write refused in the terminal with Escape, then a new prompt typed. | Open until the prompt went in, then "deny", manual. Not marked done in between. |
+| Auto: the same question and write. | Both with the recommended option, auto, and an "answered for itself" notification each, naming what was picked. |
+| Timed, one minute: the first of two questions answered on the card, the second left alone. | "Tea", manual; "Milk (Recommended)", timed expired, auto picked. |
+| The bell after all of it; then opened. | 12 in the red circle, 12 entries all marked new; 0 once the list was open. A click on an entry opened that instance, with its record. |
+| Every process of the app killed; restart; one session resumed. | Its two entries were still on record. Notifications were not kept, by design. |
+| The version address replaced by one that says 9.9.9. | The header read "Claude Code 2.1.322" beside a button "9.9.9", with a notification. Pressing the button ran the real `claude update`, which answered "Claude Code is up to date (2.1.322)". |
+| The start dialog, and the top right of the window. | The model is a list of the four names. One tag is left. |
+
+Not exercised:
+
+- The tray icon on macOS and Linux. On Windows the icon itself was not seen: Windows 11 put it among the hidden
+  icons, where it had it on record for the test app. Its pictures were looked at in the window, at three sizes.
+- An update that installs something. The installed version was the newest.
+- Questions with several answers, or with an answer typed in, when answered in the terminal.
+
+### What went wrong
+
+| Symptom | Cause | What changed |
+|---|---|---|
+| The tray pictures, put into the page for a look, showed as broken images. | The page's own content rule refuses `data:` pictures. The tray is not affected: it gets them through the main process. | The check puts the canvases themselves into the page. |
+
+## 11. Still open
+
+- The tray icon is untried on macOS and Linux, and on Windows 11 it starts among the hidden icons.
+- Approving a plan is not an input request for the app: not for the input levels, and so not for the record or
+  the notifications either.
+- The start dialogs offer four model names. A full model name cannot be typed there any more.
 - "Resume all interrupted", and worktrees started by hand, are not held back one after another. A session
   that starts without a prompt gives no sign that its `SessionStart` hooks are done (see the table in
   section 9).
@@ -630,7 +734,7 @@ Not exercised:
 - A flag placed before the `.` on the command line makes the app open its own source folder (see the table
   above). The app could find the folder argument more carefully.
 
-## 11. Continuing the work
+## 12. Continuing the work
 
 - **Windows** is the development machine. `npm run check:cpu` runs the job-object mechanism directly.
 - **Linux** was a WSL distribution (Ubuntu 24.04, systemd 255). The default mechanism there is the kernel one;
@@ -662,17 +766,24 @@ Not exercised:
   the blocker lookup although the folder has no GitHub remote.
 - **The Pull requests tab** is tested read-only: an empty folder with `git init` and an `origin` that points at
   a public repository with many open pull requests.
+- **Input requests** need a session that is asked before it uses a tool. On a machine whose default is auto
+  mode, the scratch repository's `.claude/settings.json` gets `"permissions": { "defaultMode": "default" }` for
+  the test. Answers in the terminal are typed by writing keys to the instance.
+- **The update button** is tested with `CLAUDINHO_RELEASES` pointing at a one-line server that names a higher
+  version. Pressing the button runs the real `claude update`, so the test first makes sure the installed
+  version is the newest.
 - This repository has no `docs/PROCESS.md` on purpose. The app, like the owner's helper, tells an agent to
   follow that file when it exists, and this record is a history, not a process to follow.
 
-## 12. Sources
+## 13. Sources
 
 The owner's rule for the session was to name the documentation before building on it. These are the pages the
 work relied on.
 
 **Claude Code** (`https://code.claude.com/docs/en/…`): `hooks`, `statusline`, `settings`, `cli-reference`,
 `worktrees`, `sessions`, `sub-agents`, `skills`, `authentication`, `env-vars`, `model-config`,
-`permission-modes`, `claude-directory`, `agent-view`.
+`permission-modes`, `claude-directory`, `agent-view`, `setup`, `permissions`. The install scripts behind
+<https://claude.ai/install.sh> and <https://claude.ai/install.ps1> show where the newest version is read from.
 
 **git**
 
@@ -719,7 +830,8 @@ work relied on.
 
 **Libraries**
 
-- <https://www.electronjs.org/docs/latest/>
+- <https://www.electronjs.org/docs/latest/>, for the fifth round its pages `api/tray`, `api/native-image` and
+  `api/net`
 - <https://github.com/microsoft/node-pty>
 - <https://xtermjs.org/docs/>
 
