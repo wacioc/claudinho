@@ -1,6 +1,6 @@
 {
   "name": "claudinho",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Desktop monitor for the Claude Code instances running in a repo",
   "license": "MIT",
   "private": true,
@@ -16,12 +16,33 @@
   "build": {
     "appId": "io.github.wacioc.claudinho",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
-    "files": ["main.js", "preload.js", "lib.js", "cpu.js", "renderer/**", "!**/*.pdb"],
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib.js",
+      "cpu.js",
+      "renderer/**",
+      "!**/*.pdb"
+    ],
     "asar": false,
     "npmRebuild": false,
-    "toolsets": { "appimage": "1.0.3" },
-    "mac": { "target": { "target": "dmg", "arch": ["arm64", "x64"] }, "identity": "-", "hardenedRuntime": false },
-    "linux": { "target": "AppImage" }
+    "toolsets": {
+      "appimage": "1.0.3"
+    },
+    "mac": {
+      "target": {
+        "target": "dmg",
+        "arch": [
+          "arm64",
+          "x64"
+        ]
+      },
+      "identity": "-",
+      "hardenedRuntime": false
+    },
+    "linux": {
+      "target": "AppImage"
+    }
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
