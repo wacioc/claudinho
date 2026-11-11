@@ -718,31 +718,24 @@ the app, on the Mac and on Windows. Then came two requests, in these words:
 > I also want the functionality in claudinho to update itself, when a new release is published in github, it
 > should display a notification somewhere that a newer version is available and do the update.
 
+And, once the first of them was built:
+
+> if a claude code instance has finished it's work and has opened a PR (either normal instance or worktree), I
+> want both in the global view as well as the individual view the option to merge the PR (or Mark ready for
+> review if it's a draft).
+
 ### Signing
 
-**macOS: prepared, not in the tree.** The owner has a developer account. What signing takes was worked out and
-written, then set aside, because it cannot be run without the owner's certificate and would block every release
-until then. It is parked as a git stash (`git stash list` names it). Applied, it does this:
+**macOS: done by the owner, as 0.3.1.** While this round's features were being built on the Windows PC, the
+owner signed the Mac apps in a session of their own, on their Mac, and released that as 0.3.1 (sections 8 and
+12 carry what that session recorded). The work here was then put on top of it. A variant written on the PC
+before that, with an App Store Connect key in place of the Apple ID, was dropped unrun. Two things from it are
+worth keeping: electron-builder's page says `APPLE_API_KEY` holds the key's text, while version 26.18.0 passes
+it to `notarytool --key`, which takes a file's path; and under the hardened runtime, programs inside the
+terminals cannot use the microphone or the camera, or script other apps, unless the app is given entitlements
+for that. The second is untried either way.
 
-- `package.json` loses `mac.identity: "-"` and `mac.hardenedRuntime: false`. electron-builder then signs with
-  the "Developer ID Application" certificate it finds, turns the hardened runtime on with its own default
-  entitlements, and notarises each app when the notary key is in the environment. It applies no signature at
-  all when it finds no certificate, so the workflow must not build without one.
-- The workflow gives five repository secrets to the macOS build step and to no other: `CSC_LINK` (the
-  certificate as a base64 `.p12`), `CSC_KEY_PASSWORD`, `APPLE_API_KEY` (the text of the notary key's `.p8`
-  file), `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`. The step stops when one is missing, writes the key to a
-  file, and hands electron-builder that file's path: electron-builder's page says `APPLE_API_KEY` holds the
-  key's text, but version 26.18.0 passes it to `notarytool --key`, which takes a path.
-- The check then also runs `xcrun stapler validate` and `spctl --assess` on each app.
-
-The secrets are only given to the macOS step because electron-builder reads `CSC_LINK` on Windows too and
-would try to sign the Windows installer with it. With signing in place, `MANUAL_UPDATE` in `main.js` goes as
-well: the app's own update then works on a Mac (see below). Still to decide then: the default entitlements
-allow more than Electron 45 needs, and programs inside the terminals cannot use the microphone, the camera or
-script other apps under the hardened runtime unless the app is given entitlements for that.
-
-One consequence was put to the owner first: the name the developer account is registered under is written
-into every signed copy and into the public build log.
+Signing is also what lets a Mac copy update itself (below).
 
 **Windows: left unsigned, by the owner's decision.** Microsoft's own pages say that a signature does not remove
 the SmartScreen warning for a new program: it shows the publisher's name instead of "unknown publisher", and
@@ -799,18 +792,44 @@ with Full-auto.
 |---|---|
 | `electron-updater`, a new dependency. | Replacing a running app is different on each system: a silent installer on Windows, a swapped file for an AppImage, Squirrel on macOS. It is the updater that belongs to electron-builder, reads the releases the workflow already makes, and checks the download against the checksum in the release. Writing those three installs by hand would be more code than the rest of the feature, in the one place where a mistake leaves an installed app unable to repair itself. |
 | Nothing is downloaded until the owner presses. | Installing restarts the app, which stops every session. With sessions running the window asks first; the app's own question at quitting is skipped for that one quit, since it was just answered. |
-| On macOS the update is only announced; the button opens the release page. | Squirrel takes only an app signed with a developer certificate. `MANUAL_UPDATE` goes when signing is in place. The Mac build makes a `.zip` beside each `.dmg` from now on, because electron-builder writes `latest-mac.yml`, which the announcement reads, only with that target. |
+| The Mac build makes a `.zip` beside each `.dmg`. | On macOS the update goes through Squirrel, which takes a `.zip`, and only from the developer who signed the running app. electron-builder writes `latest-mac.yml` only with that target. Before 0.3.1 was signed, the Mac copy only announced a release and opened its page; that went when the work was put on top of 0.3.1. |
 | A release holds more files. | `latest.yml`, `latest-mac.yml`, `latest-linux.yml` and the `.blockmap` files are what the update reads. The workflow uploads them with the installers; electron-builder writes them although publishing is off. |
 | `CLAUDINHO_UPDATES` points the app at an address of a test's. | The same way `CLAUDINHO_RELEASES` does for Claude Code's version. |
-| The update is tried on every build, on Windows and on Linux. | The step that matters, a running app replacing itself, exists only in a packaged and installed copy, and on the owner's PC that copy is the owner's own. So the workflow builds a second installer that claims version 99.0.0, serves it to the first one, and `pack-check.js --update` passes when the copy on the disk has become 99.0.0 and runs again. |
+| The update is tried on every build, on all three systems. | The step that matters, a running app replacing itself, exists only in a packaged and installed copy, and on the owner's PC that copy is the owner's own. So the workflow builds a second installer that claims version 99.0.0, serves it to the first one, and `pack-check.js --update` passes when the copy on the disk has become 99.0.0 and runs again. On Linux this runs on a copy of the AppImage, which an update replaces, so that what is published is the first build. On macOS the app is copied off its read-only image, and the second build is signed but not notarised. |
 
 Verified on the PC: the build writes `latest.yml`, the block map and `app-update.yml`; a packaged copy pointed
 at a stand-in that names 99.0.0 and has no installer shows the button and the notification, asks before
 stopping a running session and leaves everything alone on "no", and reports the download that fails with its
 reason. The workflow's second-build command produces a 99.0.0 installer.
 
-Not exercised yet: the install itself. It runs for the first time when the workflow does. On macOS nothing but
-the announcement can work.
+The install itself ran in the `installers` workflow, started by hand on the branch that holds this round, on
+top of 0.3.1:
+
+| System | What happened |
+|---|---|
+| Windows Server 2025 | The installed 0.3.1 found 99.0.0, downloaded it, closed, was replaced by the silent installer and ran again as 99.0.0. |
+| macOS 26, Apple silicon | The same through Squirrel, from a copy of the signed and notarised app, to a second build signed with the same certificate. |
+| Ubuntu 24.04 | The AppImage was replaced by the 99.0.0 file and ran again. |
+
+Not exercised: an update from one published release to the next, which only the release after this one can
+show, and an Intel Mac.
+
+### Merge buttons on the cards
+
+A card whose session has ended its turn, or has ended altogether, with a pull request still open carries one
+button in its header, on the wall and in the detail view: **Mark ready for review** for a draft, **Merge PR**
+otherwise. Marking ready asks nothing. Merging asks first, because it cannot be taken back, and runs
+`gh pr merge` with the method from the settings; what GitHub refuses is shown as it says it. For this the app
+now keeps, per instance, whether its pull request is a draft and whether it is open, merged or closed, and
+records a draft too, which it used to ignore unless auto-merge was on. The button is there whatever the
+auto-merge box says, so a pull request the app holds can be merged by hand.
+
+Verified live: a session without auto-merge opened a draft and ended its turn. The card showed "Mark ready for
+review" in both views; pressed, the draft was ready and the button read "Merge PR"; "no" to the question left
+the pull request alone, "yes" merged it, GitHub agreed, and the button was gone.
+
+Open: the app learns of a pull request when a turn ends, so one that is merged or closed on GitHub meanwhile
+still shows its button until the next turn, and a session resumed after a restart shows none until then.
 
 ### What went wrong
 
@@ -823,10 +842,7 @@ the announcement can work.
 
 ## 12. Still open
 
-- Signing: the macOS change is parked (section 11) and needs the owner's certificate and notary key. Windows
-  stays unsigned by decision.
-- The app's own update has not replaced an installed copy yet; the workflow's check is its first run. On macOS
-  it only announces.
+- Windows stays unsigned, by decision (section 11).
 - Auto-merge reads prose, not code, and leaves turns without a pull request alone. The cases not exercised
   live are listed in section 11.
 - The tray icon is untried on macOS and Linux, and on Windows 11 it starts among the hidden icons.

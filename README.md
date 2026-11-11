@@ -117,7 +117,7 @@ again; the sessions that were open come back as cards with a Resume button.
 |---|---|
 | Windows | The new installer is run silently. Windows asks nothing: its question at a first install is about files that came through a browser. |
 | Linux | The AppImage file is replaced by the new one, under the new version's file name. |
-| macOS | Not by the app yet. macOS's own update mechanism accepts only an app signed with a developer certificate, and the installers are not signed. The button opens the release page instead: install the new `.dmg` from there. |
+| macOS | Through macOS's own update mechanism, which takes the release's `.zip` and accepts it only when it is signed by the same developer as the running app. A copy older than 0.3.1 is not signed and cannot update itself: install a newer `.dmg` by hand once. |
 
 A copy run from source does not look for releases.
 
@@ -212,6 +212,14 @@ With several issues selected you also choose how many agents run at once (max 4)
 | Manual | Agents are told not to merge. |
 | Semi-auto | The agent is told to merge its PR only if it judges that safe. |
 | Full-auto | Every agent gets auto-merge: the app merges its PR once the agent says it is ready (next section). |
+
+### Merging a pull request yourself
+
+When a session's turn has ended and its branch has an open pull request, its card carries a button in the
+header, on the wall and in the detail view. For a draft it reads **Mark ready for review**; otherwise **Merge
+PR**, which asks before it merges, with the method set under ⚙. What GitHub refuses, a conflict or a rule of
+the branch, is shown as GitHub says it. The button is there for any instance, started in a worktree or in the
+folder itself, with or without auto-merge.
 
 ### Auto-merge
 
@@ -362,10 +370,12 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   15 seconds after the session's reply, in a repository that does not require them, are not waited for. A turn
   that ends without a pull request is left to you, whatever the session asks in it. If the review cannot run
   (no usage left, say), the pull request is held and the card says so.
-- The app's own update is run to the end on Windows and on Linux each time a release is built, on a hosted
-  machine, and a release whose update fails is not published. On a Mac the app only announces a newer release,
-  until the installers are signed. Downloads are checked against the checksum in the release, not against a
-  signature.
+- The app's own update is run to the end on Windows, macOS and Linux each time a release is built, on a hosted
+  machine, and a release whose update fails is not published. Downloads are checked against the checksum in
+  the release; on macOS the system also checks the signature, on Windows and Linux nothing does.
+- The button to merge or mark ready shows what the app knew when the session's turn ended. A pull request
+  merged or closed on GitHub since then still has its button until the next turn, and a session resumed after
+  a restart has none until then.
 - The Pull requests tab lists the first 200 open pull requests.
 - With Remote Control on, a permission prompt can also be answered from your other devices, whichever comes first.
 - From the home folder, the editor lists what you write yourself: `CLAUDE.md`, `settings.json`,

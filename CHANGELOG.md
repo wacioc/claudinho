@@ -18,11 +18,16 @@ the [releases page](https://github.com/wacioc/claudinho/releases).
 - Before, a pull request was merged as soon as a turn ended, whatever the session had written, and a draft was
   never merged.
 
+**Instances**
+
+- A card whose session is done and has an open pull request carries a button, on the wall and in the detail
+  view: **Mark ready for review** for a draft, **Merge PR** otherwise.
+
 **The app's own version**
 
 - The app looks for newer releases of itself. A button and a notification announce one, and pressing either
-  installs it and restarts the app, after asking if sessions are running. This works on Windows and Linux; on
-  macOS the button opens the release page, until the installers are signed.
+  installs it and restarts the app, after asking if sessions are running. A Mac copy must be 0.3.1 or later
+  for this, the first signed version.
 - A release holds more files from now on: beside the installers, what the update reads.
 
 ## 0.3.1 (2026-11-11)

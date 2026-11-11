@@ -110,6 +110,10 @@ repository secrets `CSC_LINK` (the Developer ID Application certificate with its
 does not report the app as notarised. On a Mac, `npm run dist` signs with the certificate in the keychain and
 notarises when `APPLE_KEYCHAIN_PROFILE` names a profile saved with `xcrun notarytool store-credentials`.
 
+Each system's job also builds a second installer that claims version 99.0.0 and has the first one update
+itself to it (`pack-check.js --update`). The Mac one is signed with the same certificate, which macOS asks of
+an update, and not notarised. A release whose update fails is not published.
+
 ## Not done yet
 
 - A person has only used the app on Windows. On macOS and Linux the packaged app has been started on hosted
