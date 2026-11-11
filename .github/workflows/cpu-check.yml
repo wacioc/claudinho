@@ -1,0 +1,23 @@
+name: cpu-check
+# The real-load check of the CPU limits on a Mac, the one system this project has no machine for.
+# It starts only by hand (Actions tab, "Run workflow") and keeps the runner's cores busy for about four minutes.
+on: workflow_dispatch
+jobs:
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Machine
+        run: |
+          sw_vers
+          uname -m
+          sysctl -n hw.ncpu
+          node -v
+      - name: Logic self-check
+        run: node test.js
+      - name: CPU limits under real load
+        if: ${{ always() }}
+        run: node cpu-check.js
+        env:
+          CPU_CHECK_VERBOSE: '1'

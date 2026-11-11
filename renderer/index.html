@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+<title>claudinho</title>
+<link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <span class="brand">claudinho</span>
+  <span id="repo-name" class="repo"></span>
+  <button id="btn-open">Open folder…</button>
+  <button id="btn-clone">Clone from GitHub…</button>
+  <span class="spacer"></span>
+  <span id="account"></span>
+  <span id="usage"></span>
+  <button id="btn-settings" title="Settings">⚙</button>
+</header>
+<nav>
+  <button class="tab active" data-view="instances">Instances <span id="n-instances"></span></button>
+  <button class="tab" data-view="issues">Issues <span id="n-issues"></span></button>
+  <button class="tab" data-view="config">.claude</button>
+  <span id="setup" class="chips"></span>
+</nav>
+<main>
+  <section id="view-instances">
+    <div class="toolbar">
+      <button id="btn-new">+ New instance</button>
+      <button id="btn-worktree">+ New worktree…</button>
+      <span id="queue" class="chips"></span>
+    </div>
+    <div id="scroll">
+      <div id="grid"></div>
+      <div id="external"></div>
+      <div id="empty" class="empty"></div>
+    </div>
+  </section>
+  <section id="view-issues" hidden>
+    <div class="toolbar">
+      <select id="issue-state">
+        <option value="OPEN">Open</option>
+        <option value="CLOSED">Closed</option>
+        <option value="ALL">All</option>
+      </select>
+      <label><input type="checkbox" id="issue-blocked"> Blocked only</label>
+      <button id="btn-refresh-issues">↻ Refresh</button>
+      <span class="hint">Click, Ctrl-click or Shift-click to select, then right-click to send Claude Code after them.</span>
+    </div>
+    <div id="issues"></div>
+  </section>
+  <section id="view-config" hidden>
+    <aside id="tree"></aside>
+    <div id="editor"><div class="empty">Pick a file on the left to view or edit it.</div></div>
+  </section>
+</main>
+<menu id="ctx" hidden></menu>
+<dialog id="dlg"></dialog>
+<div id="toast" hidden></div>
+<datalist id="models"><option value="fable"><option value="opus"><option value="sonnet"><option value="haiku"></datalist>
+<datalist id="worktrees"></datalist>
+<script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+<script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
