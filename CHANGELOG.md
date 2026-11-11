@@ -4,6 +4,13 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.3.1 (2026-11-11)
+
+- The macOS apps are signed with a Developer ID and notarised by Apple. A downloaded copy now opens after one
+  question from macOS, where before it was refused until allowed in Privacy & Security. The Windows installer
+  is still not signed.
+- Nothing changed in what the app does.
+
 ## 0.3.0 (2026-11-11)
 
 **Notifications**
