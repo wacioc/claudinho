@@ -43,8 +43,8 @@ main > section { height: 100%; display: flex; flex-direction: column; min-height
 
 /* ---- instances ---- */
 #scroll { flex: 1; min-height: 0; overflow: auto; }
-#grid, #external { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 12px; padding: 12px; align-content: start; }
-#external:empty, #grid:empty { display: none; }
+#grid, #external, #resumable { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 12px; padding: 12px; align-content: start; }
+#external:empty, #grid:empty, #resumable:empty { display: none; }
 .card { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); overflow: hidden; cursor: pointer; display: flex; flex-direction: column; min-width: 0; }
 .card:hover { border-color: var(--dim); }
 .card.attention { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn); }
@@ -56,7 +56,7 @@ main > section { height: 100%; display: flex; flex-direction: column; min-height
 .badge.busy::before, .badge.wait::before, .badge.idle::before { content: "● "; }
 .meta { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 10px; }
 .note { padding: 0 10px 8px; color: var(--dim); }
-.head .x, .head .back { padding: 0 8px; }
+.head .x, .head .back, .card.ext .head button { padding: 0 8px; }
 .card .back, .card .side { display: none; }
 .body { min-height: 0; }
 .term-wrap { overflow: hidden; background: var(--bg); pointer-events: none; }
@@ -69,7 +69,7 @@ main > section { height: 100%; display: flex; flex-direction: column; min-height
 .countdown { color: var(--warn); margin-left: auto; }
 
 /* detail: the same card, grown to fill the view, with the side panel shown */
-#view-instances.detail .toolbar, #view-instances.detail #external, #view-instances.detail #empty { display: none; }
+#view-instances.detail .toolbar, #view-instances.detail #external, #view-instances.detail #resumable, #view-instances.detail #empty { display: none; }
 #view-instances.detail #scroll { overflow: hidden; }
 #view-instances.detail #grid { display: block; padding: 0; height: 100%; }
 #view-instances.detail .card:not(.detail) { display: none; }
@@ -97,6 +97,13 @@ main > section { height: 100%; display: flex; flex-direction: column; min-height
 .procs td:first-child { color: var(--busy); overflow-wrap: anywhere; }
 .procs td.num { text-align: right; }
 
+/* ---- worktrees ---- */
+#worktree-list { flex: 1; min-height: 0; overflow: auto; }
+#worktree-list tbody tr { cursor: default; user-select: text; }
+#worktree-list a { color: var(--busy); cursor: pointer; text-decoration: underline; }
+#worktree-list button { padding: 0 8px; }
+.loss { color: var(--bad); }
+
 /* ---- issues ---- */
 #issues { flex: 1; min-height: 0; overflow: auto; }
 table { border-collapse: collapse; width: 100%; }
@@ -116,6 +123,7 @@ td.num, td.when { color: var(--dim); white-space: nowrap; }
 /* ---- .claude ---- */
 #view-config { flex-direction: row; }
 #tree { width: 320px; overflow: auto; border-right: 1px solid var(--line); }
+#tree h4 { margin: 0; padding: 10px 12px 4px; font-size: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-top: 1px solid var(--line); }
 #tree summary { padding: 5px 12px; color: var(--accent); cursor: pointer; }
 .file { padding: 2px 12px 2px 28px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file:hover { background: var(--panel); } .file.active { background: #1c2a3d; }

@@ -1,5 +1,5 @@
 /* global api, Terminal, FitAddon */
-// Renderer: three views (instances, issues, .claude) drawn from the state the main process pushes.
+// Renderer: four views (instances, worktrees, issues, .claude) drawn from the state the main process pushes.
 
 const $ = s => document.querySelector(s);
 
@@ -35,9 +35,10 @@ function toast(msg) {
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => { t.hidden = true; }, 7000);
 }
+const errText = e => String(e.message).replace(/^Error invoking remote method 'rpc': (Error: )?/, '');
 async function call(name, ...args) {
   try { return await api.call(name, ...args); }
-  catch (e) { toast(String(e.message).replace(/^Error invoking remote method 'rpc': (Error: )?/, '')); throw e; }
+  catch (e) { toast(errText(e)); throw e; }
 }
 
 function fmtDur(ms) {
@@ -83,9 +84,11 @@ function renderProcs(el, u, limit) {
 // ---------- dialogs ----------
 
 // fields: { key, label, type: text|number|select|checkbox|textarea|static, value, options, hint, ...input props }
-function formDialog(title, fields, ok = 'OK') {
+// submit: an async call made with the values before the dialog closes. If it fails, the dialog stays open and
+// says why, so that what was typed is not lost.
+function formDialog(title, fields, ok = 'OK', submit) {
   return new Promise(resolve => {
-    const dlg = $('#dlg'), inputs = {};
+    const dlg = $('#dlg'), inputs = {}, error = h('div.loss'), okBtn = h('button.primary', { type: 'submit' }, ok);
     const rows = fields.filter(Boolean).map(({ key, label, type, value, options, hint, ...rest }) => {
       let el;
       if (type === 'static') el = h('div.static', [].concat(value).map(line => h('div', line)));
@@ -98,11 +101,16 @@ function formDialog(title, fields, ok = 'OK') {
     });
     const done = v => { dlg.close(); resolve(v); };
     dlg.replaceChildren(h('form', {
-      onsubmit: e => {
+      onsubmit: async e => {
         e.preventDefault();
-        done(Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value.trim()])));
+        const v = Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value.trim()]));
+        if (submit) {
+          okBtn.disabled = true; error.textContent = '';
+          try { await submit(v); } catch (err) { error.textContent = errText(err); return; } finally { okBtn.disabled = false; }
+        }
+        done(v);
       },
-    }, h('h2', title), rows, h('div.actions', h('button', { type: 'button', onclick: () => done(null) }, 'Cancel'), h('button.primary', { type: 'submit' }, ok))));
+    }, h('h2', title), rows, error, h('div.actions', h('button', { type: 'button', onclick: () => done(null) }, 'Cancel'), okBtn)));
     dlg.oncancel = () => resolve(null);   // Esc
     dlg.showModal();
     const first = dlg.querySelector('input, select, textarea');
@@ -135,6 +143,7 @@ function usageWin(label, w, at) {
 
 function renderTop() {
   const r = state.repo, a = state.account, u = state.usage;
+  $('#version').textContent = state.version ? `v${state.version}` : '';
   $('#repo-name').replaceChildren(...(r ? [h('b', `📁 ${r.name}`), `  ${r.path}`] : ['No folder open']));
   $('#repo-name').title = r ? r.path : '';
   $('#account').textContent = !state.claudeFound ? 'Claude Code CLI not found on PATH'
@@ -333,10 +342,60 @@ function closeDetail() {
   if (t) t.card.classList.remove('detail');
   terms.forEach(layoutSoon);
 }
+// What removing a worktree would throw away, in words ('' = nothing). w: a row from the main process.
+function lossOf(w) {
+  if (w.leftover) return 'everything in this folder, which git no longer knows as a worktree';
+  if (w.error) return `whatever is in it (its state could not be read: ${w.error})`;
+  return [w.changed && plural(w.changed, 'uncommitted change'), w.unique && `${plural(w.unique, 'commit')} that ${w.unique === 1 ? 'is' : 'are'} on no other branch or remote`].filter(Boolean).join(' and ');
+}
+const NOTHING_LOST = 'Nothing is lost: it has no uncommitted changes, and its commits are on another branch or on a remote.';
+const removedText = done => `Removed the worktree ${done.name}${done.branch ? ` and its branch ${done.branch}` : ''}.`;
+const keptText = w => `The worktree ${w.name} was kept, because removing it would now discard ${lossOf(w)}. It can be removed from the Worktrees tab.`;
+
+// Closing an instance stops Claude Code and removes the instance's worktree. It asks first while Claude Code
+// is still running, and whenever work would go with the worktree.
+const closing = new Set();   // a second click on the ✕ while the first is still being dealt with does nothing
 async function closeInstance(id) {
   const t = terms.get(id);
-  if (t && !t.inst.exited && !confirm(`Stop the Claude Code instance in "${t.inst.label}"?`)) return;
-  await call('close', id);
+  if (!t || closing.has(id)) return;
+  closing.add(id);
+  try {
+    const inst = t.inst, wt = (await call('closeInfo', id)).worktree;
+    const loss = wt ? lossOf(wt) : '', removable = wt && !wt.shared;
+    let remove = removable && !loss;
+    if (!inst.exited || (removable && loss)) {
+      const v = await formDialog(`Close ${inst.label}?`, [
+        !inst.exited && { type: 'static', label: 'Claude Code', value: `Still running${statusOf(inst).cls === 'busy' ? ', in the middle of a turn' : ''}. Closing stops it; its conversation stays available to \`claude --resume\`.` },
+        wt && wt.shared && { type: 'static', label: 'Worktree', value: 'Stays where it is: another session is running in it.' },
+        removable && { key: 'remove', label: 'Remove the worktree', type: 'checkbox', value: !loss,
+          hint: [`Deletes .claude/worktrees/${wt.name}${wt.branch ? ` and its branch ${wt.branch}` : ''}. `, loss ? h('span.loss', `That discards ${loss}.`) : NOTHING_LOST] },
+      ], 'Close');
+      if (!v) return;
+      remove = !!v.remove;
+    }
+    const done = await call('close', id, remove ? (loss ? 'force' : 'safe') : undefined);
+    if (done) toast(done.removed ? removedText(done) : keptText(done.kept));
+    if (!$('#view-worktrees').hidden) loadWorktrees();
+  } finally { closing.delete(id); }
+}
+
+// Sessions that were open when the app last stopped (a power cut, a crash, or simply quitting).
+let shownResumable = '';
+function renderResumable() {
+  const list = state.resumable || [], key = JSON.stringify(list);
+  $('#btn-resume-all').hidden = list.length < 2;
+  if (key === shownResumable) return;   // unchanged: leave the buttons alone, a click may be under way
+  shownResumable = key;
+  $('#resumable').replaceChildren(...list.map(r => h('article.card.ext',
+    h('div.head', h('span.title', { title: r.dir }, `${r.worktree ? '🌳' : '📁'} ${r.label}`), h('span.badge.off', 'interrupted'), h('span.spacer'),
+      h('button.primary', { onclick: () => call('resume', r.id) }, 'Resume'),
+      h('button', { title: 'Take it off this list. Its conversation stays available to `claude --resume`.', onclick: () => call('forget', r.id) }, 'Forget')),
+    h('div.meta', [
+      [r.model || 'default model', r.effort].filter(Boolean).join(' · '), r.issue && `issue #${r.issue}`, r.autoMerge && 'auto-merge',
+      r.level !== 'manual' && `input: ${r.level}`, `open until ${new Date(r.savedAt).toLocaleString()}`,
+    ].filter(Boolean).map(c => h('span.chip', c))),
+    h('div.note', r.conversation ? 'Was open when the app last stopped. Resume continues its conversation where it left off.'
+      : 'Was open when the app last stopped, before Claude Code had saved a conversation for it. Resume starts it again.'))));
 }
 
 function renderInstances() {
@@ -348,6 +407,7 @@ function renderInstances() {
   }
   for (const inst of state.instances) updateCard(terms.get(inst.id) || createCard(inst), inst);
   if (openWhenReady && terms.has(openWhenReady)) { openDetail(openWhenReady); openWhenReady = null; }
+  renderResumable();
 
   $('#external').replaceChildren(...state.external.map(e => {
     const st = statusOf({ pending: [], session: e });
@@ -362,7 +422,7 @@ function renderInstances() {
   const total = state.instances.length + state.external.length;
   const waiting = [...state.instances, ...state.external.map(e => ({ pending: [], session: e }))].filter(i => statusOf(i).cls === 'wait').length;
   $('#n-instances').textContent = `${total || ''}${waiting ? ` ⚠${waiting}` : ''}`;
-  $('#empty').textContent = total ? '' : !state.repo ? 'Open a folder or clone a GitHub repo to get started.'
+  $('#empty').textContent = total || (state.resumable || []).length ? '' : !state.repo ? 'Open a folder or clone a GitHub repo to get started.'
     : 'No Claude Code instance is running in this folder. Start one above, or send one after an issue from the Issues tab.';
 }
 
@@ -376,6 +436,63 @@ async function newInstance(worktree) {
   if (!v) return;
   savePrefs(v);
   openWhenReady = await call('spawn', { ...v, worktree: worktree ? v.worktree || true : undefined });
+}
+
+// ---------- worktrees ----------
+
+let worktrees = null;   // rows from the main process; who is at work in each one comes from the live state
+const IS_WIN = navigator.platform.startsWith('Win');
+const pathKey = p => { const s = String(p || '').replace(/\\/g, '/').replace(/\/+$/, ''); return IS_WIN ? s.toLowerCase() : s; };
+const under = (dir, p) => pathKey(p) === pathKey(dir) || pathKey(p).startsWith(`${pathKey(dir)}/`);
+
+async function loadWorktrees() {
+  const box = $('#worktree-list');
+  if (!state.repo || !state.repo.isGit) { worktrees = null; $('#n-worktrees').textContent = ''; return box.replaceChildren(h('div.empty', 'This folder is not a git repository, so it has no worktrees.')); }
+  if (!worktrees) box.replaceChildren(h('div.empty', 'Reading the worktrees…'));
+  try { worktrees = await call('worktrees'); } catch { worktrees = null; return box.replaceChildren(h('div.empty', 'Could not read the worktrees.')); }
+  renderWorktrees();
+}
+
+let shownWorktrees = '';
+function renderWorktrees() {
+  if (!worktrees || $('#view-worktrees').hidden) return;
+  $('#n-worktrees').textContent = worktrees.length || '';
+  if (!worktrees.length) return $('#worktree-list').replaceChildren(h('div.empty', 'No worktrees under .claude/worktrees. "+ New worktree…" on the Instances tab makes one, and so does every issue sent to Claude Code.'));
+  const rows = worktrees.map(w => {
+    const inst = state.instances.find(i => !i.exited && under(w.path, i.cwd));
+    const outside = !inst && state.external.some(e => under(w.path, e.cwd));
+    return { w, inst, outside, paused: !inst && !outside && (state.resumable || []).some(r => under(w.path, r.dir)) };
+  });
+  const key = JSON.stringify(rows.map(r => [r.w, r.inst && [r.inst.id, statusOf(r.inst).text], r.outside, r.paused]));
+  if (key === shownWorktrees && $('#worktree-list table')) return;   // unchanged: leave the buttons alone, a click may be under way
+  shownWorktrees = key;
+  $('#worktree-list').replaceChildren(h('table',
+    h('thead', h('tr', ['Worktree', 'Branch', 'State', 'Last commit', 'Session', ''].map(c => h('th', c)))),
+    h('tbody', rows.map(({ w, inst, outside, paused }) => {
+      const [when, subject] = (w.last || '').split('\t');
+      const what = w.leftover ? 'a leftover folder, no longer a worktree' : w.error ? `unreadable: ${w.error}`
+        : [w.changed && plural(w.changed, 'uncommitted change'), w.unique && `${plural(w.unique, 'commit')} only here`].filter(Boolean).join(', ');
+      return h('tr',
+        h('td', { title: w.path }, `🌳 ${w.name}`),
+        h('td', w.branch || (w.leftover ? '' : 'detached')),
+        h('td', { className: what ? 'loss' : '' }, what || 'clean'),
+        h('td', subject, when && h('span.hint', ` · ${when}`)),
+        h('td', inst ? h('a', { title: 'Show this instance', onclick: () => { show('instances'); openDetail(inst.id); } }, statusOf(inst).text)
+          : outside ? 'running outside the app' : paused ? 'interrupted' : '–'),
+        h('td', h('button', { disabled: !!inst || outside, title: inst || outside ? 'A session is running in it. Closing the instance removes its worktree.' : '', onclick: () => removeWorktree(w) }, 'Remove')));
+    }))));
+}
+
+async function removeWorktree(w) {
+  const loss = lossOf(w);
+  let done;
+  const v = await formDialog(`Remove the worktree ${w.name}?`, [
+    { type: 'static', label: 'Deletes', value: [w.path, w.branch && `and the branch ${w.branch}`].filter(Boolean) },
+    { type: 'static', label: 'Lost with it', value: loss ? h('span.loss', loss) : NOTHING_LOST },
+  ], loss ? 'Remove and discard' : 'Remove', async () => { done = await api.call('removeWorktree', w.path, !!loss); });
+  if (!v) return;
+  if (done) toast(done.removed ? removedText(done) : keptText(done.kept));
+  loadWorktrees();
 }
 
 // ---------- issues ----------
@@ -433,6 +550,7 @@ function showMenu(x, y, items) {
 }
 document.addEventListener('click', () => { $('#ctx').hidden = true; });
 
+const PROMPT_HINT = 'A Jinja2 template: {{ issue_id }}, {{ issue_title }} and {{ issue_url }} are filled in for the issue.';
 async function tackle(picked) {
   const multi = picked.length > 1;
   const v = await formDialog(multi ? `Tackle ${picked.length} issues` : `Tackle #${picked[0].number}`, [
@@ -444,11 +562,10 @@ async function tackle(picked) {
     !multi && { key: 'autoMerge', label: 'Auto-merge the PR when finished', type: 'checkbox' },
     multi && { key: 'parallel', label: 'Agents running at once', type: 'number', min: 1, max: 4, value: Math.min(4, picked.length), hint: 'One instance and worktree per issue; the rest queue (max 4).' },
     multi && { key: 'autonomy', label: 'Autonomy', type: 'select', value: 'manual', options: [['manual', 'Manual: nothing gets merged automatically'], ['semi', 'Semi-auto: the agent merges if it judges it safe'], ['full', 'Full-auto: every PR is merged when its agent finishes']] },
-    { key: 'template', label: 'Prompt', type: 'textarea', rows: 3, value: state.repo.template, required: true, hint: '{n} is replaced by the issue number.' },
-  ], 'Start');
+    { key: 'template', label: 'Prompt', type: 'textarea', rows: 3, value: state.repo.template, required: true, hint: PROMPT_HINT + ' This is the default prompt, changed under ⚙; an edit here counts for this start only.' },
+  ], 'Start', v => api.call('dispatch', { ...v, issues: picked.map(i => ({ number: i.number, title: i.title, url: i.url })) }));
   if (!v) return;
   savePrefs(v);
-  await call('dispatch', { ...v, issues: picked.map(i => ({ number: i.number, title: i.title })) });
   show('instances');
 }
 
@@ -456,23 +573,31 @@ async function tackle(picked) {
 
 const GROUPS = [['Skills', /^\.claude\/skills\//], ['Agents', /^\.claude\/agents\//], ['Commands', /^\.claude\/commands\//],
   ['Other .claude files', /^\.claude\//], ['.github', /^\.github\//], ['Project root', /^/]];
+// The home config folder, which applies to every project. Its files are listed with a "~/" in front.
+const HOME_GROUPS = [['Skills', /^~\/skills\//], ['Agents', /^~\/agents\//], ['Commands', /^~\/commands\//], ['Other', /^~\//]];
+let homeDir = '';
+const shownPath = rel => (rel.startsWith('~/') ? `${homeDir}/${rel.slice(2)}` : rel);
 
 async function loadConfig() {
   if (!state.repo) return $('#tree').replaceChildren(h('div.empty', 'Open a folder first.'));
-  configFiles = (await call('configList')).files;
+  const list = await call('configList');
+  homeDir = list.home.dir.replace(/\\/g, '/');
+  configFiles = [...list.files, ...list.home.files];
   renderTree();
 }
 
 function renderTree() {
-  const rest = new Set(configFiles);
+  const rest = new Set(configFiles.filter(f => !f.startsWith('~/'))), home = new Set(configFiles.filter(f => f.startsWith('~/')));
+  const groups = (defs, left) => defs.map(([name, re]) => {
+    const files = [...left].filter(f => re.test(f));
+    files.forEach(f => left.delete(f));
+    return h('details', { open: true }, h('summary', `${name} (${files.length})`),
+      files.map(f => h('div', { className: `file${f === openFile ? ' active' : ''}`, title: shownPath(f), onclick: () => openConfig(f) }, f.replace(re, ''))));
+  });
   $('#tree').replaceChildren(
     h('div.toolbar', h('button', { onclick: newSkill, disabled: !state.claudeFound }, '+ New skill'), h('button', { onclick: newAgent, disabled: !state.claudeFound }, '+ New agent')),
-    ...GROUPS.map(([name, re]) => {
-      const files = [...rest].filter(f => re.test(f));
-      files.forEach(f => rest.delete(f));
-      return h('details', { open: true }, h('summary', `${name} (${files.length})`),
-        files.map(f => h('div', { className: `file${f === openFile ? ' active' : ''}`, title: f, onclick: () => openConfig(f) }, f.replace(re, ''))));
-    }));
+    h('h4', { title: state.repo.path }, `This folder: ${state.repo.name}`), ...groups(GROUPS, rest),
+    h('h4', { title: `${homeDir}: applies to every project on this machine` }, `Home: ${homeDir}`), ...groups(HOME_GROUPS, home));
 }
 
 async function openConfig(rel) {
@@ -480,17 +605,20 @@ async function openConfig(rel) {
   const text = await call('configRead', rel);
   openFile = rel; dirty = false;
   const saveBtn = h('button.primary', { disabled: true, onclick: async () => {
+    if (/\.json$/i.test(rel)) {   // a broken settings file is felt by every session that reads it
+      try { JSON.parse(ta.value); } catch (e) { if (!confirm(`${shownPath(rel)} is not valid JSON (${e.message}).\n\nSave it anyway?`)) return; }
+    }
     await call('configWrite', rel, ta.value);
     dirty = false; saveBtn.disabled = true;
-    toast(`Saved ${rel}`);
-    offerCommit(`Update ${rel}`);
+    toast(`Saved ${shownPath(rel)}`);
+    if (!rel.startsWith('~/')) offerCommit(`Update ${rel}`);   // the home folder is not part of this repo
   } }, 'Save');
   const ta = h('textarea', {
     spellcheck: false, value: text,
     oninput: () => { dirty = true; saveBtn.disabled = false; },
     onkeydown: e => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveBtn.click(); } },
   });
-  $('#editor').replaceChildren(h('div.toolbar', h('span.path', rel), h('span.spacer'), saveBtn), ta);
+  $('#editor').replaceChildren(h('div.toolbar', h('span.path', shownPath(rel)), h('span.spacer'), saveBtn), ta);
   renderTree();
 }
 
@@ -531,9 +659,10 @@ async function generate(prompt) {
 // ---------- wiring ----------
 
 function show(view) {
-  for (const v of ['instances', 'issues', 'config']) $(`#view-${v}`).hidden = v !== view;
+  for (const v of ['instances', 'worktrees', 'issues', 'config']) $(`#view-${v}`).hidden = v !== view;
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   if (view === 'instances') terms.forEach(layoutSoon);
+  if (view === 'worktrees') loadWorktrees();
   if (view === 'issues' && issuesFor !== (state.repo && state.repo.path)) loadIssues();
   if (view === 'config') loadConfig();
 }
@@ -541,10 +670,12 @@ function show(view) {
 function render() {
   renderTop();
   renderInstances();
+  renderWorktrees();                                // who is at work in each one may have changed
   const p = state.repo && state.repo.path;
   if (p === shownRepo) return;
   shownRepo = p;                                    // another folder was opened: drop what belonged to the old one
-  issues = []; issuesFor = null; selected.clear(); openFile = null; dirty = false; declined = '';
+  issues = []; issuesFor = null; selected.clear(); openFile = null; dirty = false; declined = ''; worktrees = null;
+  $('#n-worktrees').textContent = '';
   $('#editor').replaceChildren(h('div.empty', 'Pick a file on the left to view or edit it.'));
   show(document.querySelector('.tab.active').dataset.view);
 }
@@ -552,6 +683,8 @@ function render() {
 document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => show(b.dataset.view)));
 $('#btn-new').onclick = () => newInstance(false);
 $('#btn-worktree').onclick = () => newInstance(true);
+$('#btn-resume-all').onclick = async () => { for (const r of state.resumable.slice()) await call('resume', r.id); };
+$('#btn-refresh-worktrees').onclick = loadWorktrees;
 $('#btn-refresh-issues').onclick = loadIssues;
 $('#issue-state').onchange = loadIssues;
 $('#issue-blocked').onchange = renderIssues;
@@ -570,7 +703,9 @@ const CPU_MECHANISMS = {
   throttle: 'Pausing and resuming processes in short cycles, because this system gives ordinary apps no kernel CPU limit. Right on average; takes a few seconds to settle.',
 };
 $('#btn-settings').onclick = async () => {
-  const v = await formDialog('Settings', [
+  await formDialog('Settings', [
+    state.repo && { key: 'template', label: `Default prompt for issue worktrees in ${state.repo.name}`, type: 'textarea', rows: 4, value: state.repo.template,
+      hint: `What Claude Code is told when an instance is started for a GitHub issue. ${PROMPT_HINT} Kept per folder; clear it to get the built-in prompt back.` },
     { key: 'mergeMethod', label: 'Auto-merge method', type: 'select', value: state.settings.mergeMethod, options: [['squash', 'Squash'], ['merge', 'Merge commit'], ['rebase', 'Rebase']] },
     { key: 'timedMinutes', label: 'Timed input: minutes to wait', type: 'number', min: 1, max: 60, value: state.settings.timedMinutes, hint: 'How long the "timed" level waits for you before taking the recommended option.' },
     { key: 'cpuCeiling', label: 'CPU ceiling per instance (%)', type: 'number', min: 5, max: 100, value: state.settings.cpuCeiling,
@@ -578,8 +713,7 @@ $('#btn-settings').onclick = async () => {
     { key: 'cpuShare', label: 'Share the CPU between instances by weight', type: 'checkbox', value: state.settings.cpuShare,
       hint: 'When instances compete, each gets CPU in proportion to its weight (set per instance in its detail view). An instance that needs less leaves the rest to the others.' },
     { type: 'static', label: 'Enforced by', value: CPU_MECHANISMS[state.cpuMechanism] || `Not available here${state.cpuError ? `: ${state.cpuError}` : ''}.` },
-  ], 'Save');
-  if (v) await call('setSettings', v);
+  ], 'Save', v => api.call('setSettings', v));
 };
 
 api.on('pty-data', (id, data) => {

@@ -42,12 +42,24 @@ function findClaude() {
 
 const dataDir = app.getPath('userData');
 const stateFile = path.join(dataDir, 'state.json');
-let saved = { repoPath: null, usage: null, templates: {}, settings: { mergeMethod: 'squash', timedMinutes: 5, cpuCeiling: 100, cpuShare: false } };
+let saved = { repoPath: null, usage: null, templates: {}, sessions: [], settings: { mergeMethod: 'squash', timedMinutes: 5, cpuCeiling: 100, cpuShare: false } };
 try {
   const s = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   saved = { ...saved, ...s, settings: { ...saved.settings, ...s.settings } };
 } catch { /* first run */ }
-const save = () => { fs.mkdirSync(dataDir, { recursive: true }); fs.writeFileSync(stateFile, JSON.stringify(saved, null, 2)); };
+// Written to the side, flushed to the disk, then renamed over the old file: a power cut leaves the old state
+// or the new one, never half a file.
+// ponytail: one running copy per data folder. Two copies overwrite each other's state; give the second its
+// own --user-data-dir, or a file per copy if running several becomes a habit.
+let written = '';
+const save = () => {
+  const text = JSON.stringify(saved, null, 2);
+  if (text === written) return;
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(`${stateFile}.tmp`, text, { flush: true });
+  fs.renameSync(`${stateFile}.tmp`, stateFile);
+  written = text;
+};
 
 let win, claudeBin, hookPort;
 const hookToken = crypto.randomBytes(16).toString('hex');
@@ -55,6 +67,8 @@ let repo = null;          // the folder the app is pointed at
 let account = null;       // `claude auth status`
 let sessions = [];        // `claude agents --json`: every live Claude Code session on this machine
 const instances = new Map();
+// What was open when the app last stopped, until each is resumed or forgotten (see "sessions on disk").
+let interrupted = Array.isArray(saved.sessions) ? saved.sessions : [];
 const queue = [];         // dispatched issues waiting for a pool slot or for their blockers
 let poolLimit = 1;
 const CORES = os.cpus().length;
@@ -77,8 +91,14 @@ function externalSessions() {
 function snapshot() {
   const worktrees = repo ? repo.worktrees : [];
   return {
-    claudeFound: !!claudeBin, repo, account, usage: saved.usage, settings: saved.settings, cores: CORES,
+    version: app.getVersion(), claudeFound: !!claudeBin, repo, account, usage: saved.usage, settings: saved.settings, cores: CORES,
     cpuMechanism: cpu.mechanism, cpuError: cpu.error,
+    // Not the ones whose conversation is live again somewhere (resumed by hand in a terminal, say).
+    resumable: interrupted.filter(r => !sessions.some(s => s.sessionId && s.sessionId === r.sessionId)).map(r => ({
+      id: r.id, label: r.worktree || path.basename(r.root), worktree: r.worktree, dir: r.worktree ? path.join(r.root, '.claude', 'worktrees', r.worktree) : r.root,
+      issue: r.issue, model: r.model, effort: r.effort, level: r.level, autoMerge: r.autoMerge, savedAt: r.savedAt,
+      conversation: !!r.transcript && fs.existsSync(r.transcript),
+    })),
     instances: [...instances.values()].map(i => {
       const s = sessionOf(i) || {};
       return {
@@ -101,11 +121,13 @@ function snapshot() {
 
 function userStatusLine() { return readJson(path.join(configDir(), 'settings.json')).statusLine; }
 
-function spawnInstance({ cwd, worktree, model, effort, prompt, level = 'manual', autoMerge = false, kind = 'instance', issue = null, pooled = false }) {
+// resume + transcript: continue that conversation instead of starting one (see "sessions on disk").
+function spawnInstance({ cwd, worktree, resume, transcript, model, effort, prompt, level = 'manual', autoMerge = false, kind = 'instance', issue = null, pooled = false, weight = 'normal' }) {
   if (!claudeBin) throw new Error('Claude Code CLI (claude) was not found on PATH.');
   const root = cwd || repo.path;
   const id = crypto.randomBytes(4).toString('hex');
   if (worktree === true) worktree = `wt-${id}`;
+  const wt = worktree ? path.join(root, '.claude', 'worktrees', worktree) : null;   // where `claude -w` puts it
   const dir = path.join(dataDir, 'instances', id);
   fs.mkdirSync(dir, { recursive: true });
   const settingsFile = path.join(dir, 'settings.json'), statusFile = path.join(dir, 'status.json');
@@ -113,37 +135,46 @@ function spawnInstance({ cwd, worktree, model, effort, prompt, level = 'manual',
     statusFile, hookUrl: `http://127.0.0.1:${hookPort}/${hookToken}/${id}`, userStatusLine: userStatusLine(),
   })));
   const env = lib.childEnv(process.env);
-  const limits = { ceiling: saved.settings.cpuCeiling / 100, weight: 1 };   // every instance starts at normal weight
-  const [file, args] = cpu.command(id, claudeBin, lib.claudeArgs({ settingsFile, model, effort, worktree, prompt }), limits);
-  const proc = pty.spawn(file, args, { name: 'xterm-256color', cols: 110, rows: 30, cwd: root, env });
+  const limits = { ceiling: saved.settings.cpuCeiling / 100, weight: lib.WEIGHTS[weight] };
+  const [file, args] = cpu.command(id, claudeBin, lib.claudeArgs({ settingsFile, model, effort, worktree, prompt, resume }), limits);
+  // A new session is taken into its worktree by `claude -w`; a resumed one is started inside it.
+  const proc = pty.spawn(file, args, { name: 'xterm-256color', cols: 110, rows: 30, cwd: resume && wt ? wt : root, env });
   // On Windows this puts the new process into its job before it can start anything of its own.
   const limited = cpu.attach(id, proc.pid, limits);
   const inst = {
-    id, kind, issue, pooled, model, effort, level, autoMerge, root, proc, env, dir, statusFile, pid: proc.pid, startedAt: Date.now(),
-    cwd: worktree ? path.join(root, '.claude', 'worktrees', worktree) : root,   // where `claude -w` puts it
-    status: null, pending: [], pr: null, merge: null, finished: false, exited: false, weight: 'normal', limited,
+    id, kind, issue, pooled, model, effort, level, autoMerge, root, wt, prompt, proc, env, dir, statusFile, pid: proc.pid, startedAt: Date.now(),
+    cwd: wt || root, sessionId: resume || null, transcript: transcript || null,
+    status: null, pending: [], pr: null, merge: null, finished: false, exited: false, weight, limited,
   };
   instances.set(id, inst);
   proc.onData(d => send('pty-data', id, d));
   proc.onExit(({ exitCode }) => {
-    inst.exited = true; inst.exitCode = exitCode;
+    inst.exited = true; inst.exitCode = exitCode; inst.exitedAt = Date.now();
     inst.pending.slice().forEach(p => p.settle('terminal'));
     cpu.detach(id);
     push(); pump();
   });
-  push();
+  saveSessions(); push();
   syncSampler();
   return id;
 }
 
-function closeInstance(id) {
+// remove: 'safe' also removes the instance's worktree if nothing in it would be lost; 'force' removes it
+// whatever is in it. Returns what became of the worktree (see removeWorktree).
+async function closeInstance(id, remove) {
   const inst = instances.get(id);
   if (!inst) return;
   instances.delete(id);
-  if (!inst.exited) { try { inst.proc.kill(); } catch { /* already gone */ } }
+  const gone = inst.exited ? null : new Promise(resolve => { inst.proc.onExit(resolve); setTimeout(resolve, 5000); });
+  if (gone) { try { inst.proc.kill(); } catch { /* already gone */ } }
+  // With its worktree going too, nothing the instance started may stay behind in it (see cpu.stop).
+  if (remove && inst.wt) cpu.stop(id);
   fs.rmSync(inst.dir, { recursive: true, force: true });
   cpu.detach(id);
-  push(); pump();
+  saveSessions(); push(); pump();
+  if (!remove || !inst.wt) return;
+  await gone;   // Windows does not let go of a folder while a process still sits in it
+  return removeWorktree(inst.root, inst.wt, remove === 'force', inst.pid);
 }
 
 // The status line tee (see lib.statusLineCommand) leaves Claude Code's own numbers in a file per instance.
@@ -158,6 +189,8 @@ function readStatus(inst) {
     ctxTokens: (cu.input_tokens || 0) + (cu.cache_creation_input_tokens || 0) + (cu.cache_read_input_tokens || 0),
     branch: st.worktree && st.worktree.branch,
   };
+  // The conversation this instance is in now (it changes with /clear and /resume), and where Claude Code keeps it.
+  if (st.session_id) { inst.sessionId = st.session_id; inst.transcript = st.transcript_path || null; }
   if (st.cwd) inst.cwd = (st.worktree && st.worktree.path) || st.cwd;
   if (st.rate_limits) saved.usage = { ...st.rate_limits, at: Date.now() };
 }
@@ -182,6 +215,79 @@ async function tick() {
   // `claude agents` costs a process start each time: ease off when nothing runs here and nobody is looking.
   const watched = (win && !win.isDestroyed() && win.isFocused()) || [...instances.values()].some(i => !i.exited);
   setTimeout(tick, watched ? 3000 : 15000);
+}
+
+// ---------- sessions on disk: what a restart needs to bring each instance back ----------
+
+// Claude Code keeps every conversation on disk as it goes. What a power cut would take is what the app knows
+// on top of that: which instances were open, where, and with which settings. That is written out every ten
+// seconds, and whenever an instance comes or goes.
+const sessionRecord = i => ({
+  id: i.id, root: i.root, worktree: i.wt && path.basename(i.wt), kind: i.kind, issue: i.issue, pooled: i.pooled, model: i.model, effort: i.effort,
+  level: i.level, autoMerge: i.autoMerge, weight: i.weight, prompt: i.prompt, sessionId: i.sessionId, transcript: i.transcript, savedAt: Date.now(),
+});
+function saveSessions() {
+  // An instance that ended stays on record for a moment longer: when the machine shuts down, Claude Code may
+  // be stopped a little before the app is, and those are the sessions to bring back.
+  const open = [...instances.values()].filter(i => !i.exited || Date.now() - i.exitedAt < 15000);
+  saved.sessions = [...interrupted, ...open.map(sessionRecord)];
+  try { save(); } catch { /* the disk said no: the next round tries again */ }
+}
+setInterval(saveSessions, 10000);
+
+// ---------- worktrees under .claude/worktrees ----------
+
+const git = (args, cwd) => run('git', args, cwd).then(s => s.trim());
+const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+
+// Sessions at work inside a folder: this app's instances and every other live Claude Code session.
+function sessionsIn(dir, skipPid) {
+  const all = [...[...instances.values()].filter(i => !i.exited), ...sessions];
+  return all.filter(s => s.pid && s.pid !== skipPid && s.cwd && lib.isInside(dir, s.cwd) && alive(s.pid));
+}
+
+// The folders under <root>/.claude/worktrees (or just `only`): the worktrees git knows there, each with what
+// removing it would lose, and folders git no longer knows (left behind by a removal that could not finish).
+async function worktreeRows(root, only) {
+  const base = path.join(root, '.claude', 'worktrees');
+  const known = lib.parseWorktrees(await git(['worktree', 'list', '--porcelain'], root)).filter(w => !w.main && lib.isInside(lib.realPath(base), lib.realPath(w.path)));
+  let folders = [];
+  try { folders = fs.readdirSync(base, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => path.join(base, e.name)); } catch { /* no worktree yet */ }
+  const all = [...known, ...folders.filter(f => !known.some(w => lib.samePath(w.path, f))).map(f => ({ path: f, leftover: true }))];
+  return Promise.all(all.filter(w => !only || lib.samePath(w.path, only)).map(async w => {
+    const row = { name: path.basename(w.path), path: w.path, branch: w.branch || null, leftover: !!w.leftover };
+    if (w.leftover) return row;
+    if (!fs.existsSync(w.path)) return { ...row, error: 'its folder is gone' };
+    try {
+      row.changed = (await git(['status', '--porcelain'], w.path)).split('\n').filter(Boolean).length;
+      // Commits that would be on no branch and no remote once this worktree and its branch are gone.
+      row.unique = Number(await git(['rev-list', '--count', 'HEAD', '--not', ...(w.branch ? [`--exclude=${w.branch}`] : []), '--branches', '--remotes'], w.path));
+      row.last = await git(['log', '-1', '--format=%cr%x09%s'], w.path);
+    } catch (e) { row.error = e.message.split('\n')[0]; }
+    return row;
+  }));
+}
+
+// Remove a worktree: its folder, git's record of it, and its branch. Without `force` only when nothing would
+// be lost with it. skipPid: the instance being closed along with it.
+// Returns { removed, name, branch }, { kept: row } when it was not safe, or undefined when there was nothing.
+async function removeWorktree(root, dir, force, skipPid) {
+  if (sessionsIn(dir, skipPid).length) throw new Error('Another session is running in that worktree, so it stays.');
+  const [row] = await worktreeRows(root, dir);
+  if (!row) return;
+  if (!force && (row.leftover || row.error || row.changed || row.unique)) return { kept: row };
+  // --force twice: once for an unclean tree (settled above), once for the lock a stopped session can leave.
+  // On Windows git gives up at the first file something still holds, so the folder is finished off by hand.
+  if (!row.leftover) await git(['worktree', 'remove', '--force', '--force', dir], root).catch(() => {});
+  const stuck = await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).then(() => null, e => e);
+  if (!row.leftover) {
+    await git(['worktree', 'prune'], root);
+    // With the folder stuck, git may or may not have let go of the branch; either way it is not the news here.
+    if (row.branch) await git(['branch', '-D', row.branch], root).catch(e => { if (!stuck) throw e; });
+  }
+  if (repo && repo.path === root) { repo.worktrees = lib.parseWorktrees(await git(['worktree', 'list', '--porcelain'], root)); push(); }
+  if (stuck) throw new Error(`Could not delete ${dir}: a program still has files open in it (${stuck.code}). Close that program, then remove the folder from the Worktrees tab.`);
+  return { removed: true, name: row.name, branch: row.branch };
 }
 
 // ---------- CPU and memory of each session's process tree ----------
@@ -340,7 +446,7 @@ async function pump() {
       spawnInstance({
         cwd: job.root, worktree: lib.worktreeName(job.number, job.title), model: job.model, effort: job.effort, level: job.level,
         autoMerge: job.autoMerge, issue: job.number, pooled: job.pooled,
-        prompt: lib.issuePrompt(job.template, job.number, job.autonomy, saved.settings.mergeMethod),
+        prompt: lib.issuePrompt(job.template, job, job.autonomy, saved.settings.mergeMethod),
       });
     }
   } finally {
@@ -360,13 +466,18 @@ async function openRepo(dir) {
     github: isGit ? lib.parseGitHub(await git(['remote', 'get-url', 'origin'])) : null,
     worktrees: isGit ? lib.parseWorktrees(await git(['worktree', 'list', '--porcelain'])) : [],
     setup: lib.scanConfig(dir).summary,
-    template: saved.templates[dir] || lib.defaultTemplate(dir),
+    // The default prompt for issue worktrees.
+    // ponytail: prompts saved before 0.1.0 wrote the issue number as {n}, so every load turns a literal {n}
+    // into the placeholder. Drop the replaceAll once no state file from before 0.1.0 is around.
+    template: (saved.templates[dir] || lib.defaultTemplate(dir)).replaceAll('{n}', '{{ issue_id }}'),
   };
   saved.repoPath = dir; save(); push();
   return repo;
 }
 
 // ---------- calls from the renderer ----------
+
+const configFile = rel => (rel.startsWith('~/') ? lib.homePath(configDir(), rel.slice(2)) : lib.configPath(repo.path, rel));
 
 const rpc = {
   state: snapshot,
@@ -384,7 +495,32 @@ const rpc = {
   },
 
   spawn: o => spawnInstance({ worktree: o.worktree, model: o.model, effort: o.effort, prompt: o.prompt, level: o.level, autoMerge: !!o.autoMerge, kind: o.kind }),
+  // What closing would do to the instance's worktree, for the dialog that asks first.
+  async closeInfo(id) {
+    const inst = instances.get(id);
+    const [row] = inst && inst.wt ? await worktreeRows(inst.root, inst.wt).catch(() => []) : [];
+    return { worktree: row ? { ...row, shared: sessionsIn(inst.wt, inst.pid).length > 0 } : null };
+  },
   close: closeInstance,
+  worktrees: () => worktreeRows(repo.path),
+  removeWorktree(dir, force) {
+    const base = path.join(repo.path, '.claude', 'worktrees');
+    if (!lib.isInside(base, dir) || lib.samePath(base, dir)) throw new Error('Not a worktree of this folder.');
+    return removeWorktree(repo.path, dir, force === true);
+  },
+  resume(id) {
+    const r = interrupted.find(x => x.id === id);
+    if (!r) return;
+    // Its conversation, if Claude Code has one on disk; otherwise it starts again the way it was started.
+    const resume = r.sessionId && r.transcript && fs.existsSync(r.transcript) ? r.sessionId : undefined;
+    const dir = resume && r.worktree ? path.join(r.root, '.claude', 'worktrees', r.worktree) : r.root;
+    if (!fs.existsSync(dir)) throw new Error(`${dir} no longer exists.`);
+    const started = spawnInstance({ ...r, cwd: r.root, resume });
+    interrupted = interrupted.filter(x => x !== r);
+    saveSessions(); push();
+    return started;
+  },
+  forget(id) { interrupted = interrupted.filter(r => r.id !== id); saveSessions(); push(); },
   setInstance(id, patch) {
     const inst = instances.get(id);
     if (!inst) return;
@@ -427,22 +563,23 @@ const rpc = {
   },
   dispatch({ issues, model, effort, level, autoMerge, parallel, autonomy, template }) {
     if (!claudeBin) throw new Error('Claude Code CLI (claude) was not found on PATH.');
+    lib.issuePrompt(template, issues[0]);   // a prompt that cannot be filled in is refused here, before anything is queued
     const pooled = issues.length > 1;
     if (pooled) poolLimit = Math.min(4, Math.max(1, Number(parallel) || 1));
     else autonomy = autoMerge ? 'full' : undefined;
-    saved.templates[repo.path] = repo.template = template; save();
     for (const is of issues) {
       if (queue.some(j => j.number === is.number)) continue;
-      queue.push({ number: is.number, title: is.title, root: repo.path, model, effort, level, autonomy, template, pooled, autoMerge: autonomy === 'full', waitingOn: [] });
+      queue.push({ number: is.number, title: is.title, url: is.url, root: repo.path, model, effort, level, autonomy, template, pooled, autoMerge: autonomy === 'full', waitingOn: [] });
     }
     pump();
   },
   unqueue(number) { const i = queue.findIndex(j => j.number === number); if (i >= 0) queue.splice(i, 1); push(); },
 
-  configList: () => lib.scanConfig(repo.path),
-  configRead: rel => fs.readFileSync(lib.configPath(repo.path, rel), 'utf8'),
+  // Paths starting with "~/" are in the home config folder, the rest in the open folder.
+  configList: () => ({ ...lib.scanConfig(repo.path), home: { dir: configDir(), files: lib.scanHome(configDir()).map(f => `~/${f}`) } }),
+  configRead: rel => fs.readFileSync(configFile(rel), 'utf8'),
   configWrite(rel, text) {
-    fs.writeFileSync(lib.configPath(repo.path, rel), text);
+    fs.writeFileSync(configFile(rel), text);
     repo.setup = lib.scanConfig(repo.path).summary; push();
   },
   async gitChanges() {
@@ -461,6 +598,12 @@ const rpc = {
   },
 
   setSettings(patch) {
+    if (typeof patch.template === 'string' && repo) {   // the default prompt for issue worktrees, kept per folder
+      const template = patch.template.trim();
+      if (template) lib.issuePrompt(template, { number: 1 });   // refused here if it cannot be filled in
+      if (template) saved.templates[repo.path] = template; else delete saved.templates[repo.path];   // cleared: the built-in one again
+      repo.template = template || lib.defaultTemplate(repo.path);
+    }
     if (['squash', 'merge', 'rebase'].includes(patch.mergeMethod)) saved.settings.mergeMethod = patch.mergeMethod;
     if (patch.timedMinutes) saved.settings.timedMinutes = Math.min(60, Math.max(1, Number(patch.timedMinutes) || 5));
     if (patch.cpuCeiling) saved.settings.cpuCeiling = Math.min(100, Math.max(5, Math.round(Number(patch.cpuCeiling)) || 100));
@@ -498,7 +641,7 @@ function createWindow() {
     const choice = dialog.showMessageBoxSync(win, {
       type: 'warning', buttons: ['Stop them and quit', 'Cancel'], defaultId: 1, cancelId: 1,
       message: `${live} Claude Code instance${live > 1 ? 's are' : ' is'} still running.`,
-      detail: 'Quitting stops them. Their conversations stay resumable with `claude --resume`.',
+      detail: 'Quitting stops them. The next start offers to resume each one where it left off.',
     });
     if (choice === 1) e.preventDefault();
   });
@@ -516,6 +659,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  saveSessions();   // before anything is stopped: what is open now is what the next start offers to resume
   if (sampler) sampler.kill();
   cpu.shutdown();   // lifts every limit; nothing stays paused or capped behind us
   for (const inst of instances.values()) if (!inst.exited) { try { inst.proc.kill(); } catch { /* already gone */ } }

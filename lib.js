@@ -15,18 +15,33 @@ const openBlockers = blockers => blockers.filter(b => b.state_reason !== 'comple
 
 function defaultTemplate(repoPath) {
   return fs.existsSync(path.join(repoPath, 'docs', 'PROCESS.md'))
-    ? 'Implement #{n} following docs/PROCESS.md'
-    : "Implement GitHub issue #{n}. Read it with `gh issue view {n} --comments`, implement it, run the project's checks, then commit, push and open a pull request that closes #{n}.";
+    ? 'Implement #{{ issue_id }} following docs/PROCESS.md'
+    : "Implement GitHub issue #{{ issue_id }}. Read it with `gh issue view {{ issue_id }} --comments`, implement it, run the project's checks, then commit, push and open a pull request that closes #{{ issue_id }}.";
 }
 
+// The prompt is a Jinja2 template, of which one construct is supported: the {{ variable }} placeholder.
+// ponytail: no {% %} blocks, {# #} comments or | filters. They are refused, so that none reaches Claude as
+// plain text; swap this function for nunjucks when a prompt needs them.
+function renderTemplate(template, vars) {
+  if (/\{%|\{#/.test(template)) throw new Error('The prompt may only use {{ variable }} placeholders: {% %} blocks and {# #} comments are not supported.');
+  if (template.replace(/\{\{.*?\}\}/gs, '').includes('{{')) throw new Error('The prompt has a {{ that is never closed with }}.');
+  // One pass: a value goes in as it is and is never read again as template text (issue titles are not ours).
+  return template.replace(/\{\{(.*?)\}\}/gs, (_, expr) => {
+    const name = expr.trim();
+    if (!Object.hasOwn(vars, name)) throw new Error(`The prompt uses {{ ${name} }}, which does not exist. There are: ${Object.keys(vars).map(v => `{{ ${v} }}`).join(', ')}.`);
+    return String(vars[name]);
+  });
+}
+
+// issue: { number, title, url }
 // autonomy: 'manual' | 'semi' | 'full' | undefined (single issue without auto-merge: the repo's own process decides)
-function issuePrompt(template, number, autonomy, mergeMethod = 'squash') {
+function issuePrompt(template, issue, autonomy, mergeMethod = 'squash') {
   const tail = {
     manual: 'Do not merge the pull request; a human will review and merge it.',
     semi: `After opening the pull request, decide whether it is safe to merge without human review (checks green, change small and low-risk). If it is, merge it yourself with \`gh pr merge --${mergeMethod}\`; if not, leave it open and say why.`,
     full: 'Do not merge the pull request yourself; it is merged automatically as soon as you finish.',
   }[autonomy];
-  const base = template.replaceAll('{n}', number);
+  const base = renderTemplate(template, { issue_id: issue.number, issue_title: issue.title || '', issue_url: issue.url || '' });
   return tail ? `${base}\n\n${tail}` : base;
 }
 
@@ -134,10 +149,12 @@ function instanceSettings({ statusFile, hookUrl, userStatusLine }) {
 }
 
 // `--` keeps a prompt starting with "-" from being read as a flag.
-function claudeArgs({ settingsFile, model, effort, worktree, prompt }) {
+// resume: the id of a conversation to continue. It already has its worktree and its first prompt.
+function claudeArgs({ settingsFile, model, effort, worktree, prompt, resume }) {
   const a = ['--settings', settingsFile];
   if (model) a.push('--model', model);
   if (effort) a.push('--effort', effort);
+  if (resume) return a.concat('--resume', resume);
   if (worktree) a.push('--worktree', worktree);
   if (prompt) a.push('--', prompt);
   return a;
@@ -364,6 +381,10 @@ function nextDuty(duty, used, target) {
 
 const normPath = p => { const r = path.resolve(p); return process.platform === 'win32' ? r.toLowerCase() : r; };
 const isInside = (dir, p) => { const d = normPath(dir), x = normPath(p); return x === d || x.startsWith(d + path.sep); };
+// One folder can be spelled several ways (through a symlink, in another case, as a Windows short name), and
+// git prints its own spelling: compare what the paths resolve to.
+const realPath = p => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };   // gone: as given
+const samePath = (a, b) => normPath(realPath(a)) === normPath(realPath(b));
 
 function parseWorktrees(porcelain) {
   return porcelain.split(/\r?\n\r?\n/).map(b => b.trim()).filter(Boolean).map((b, i) => ({
@@ -432,10 +453,38 @@ function configPath(root, rel) {
   return abs;
 }
 
+// ---------- the home config folder (~/.claude) ----------
+
+// What a person edits there. The same folder holds credentials, transcripts and history, which the editor
+// must never reach: these two lists are the trust boundary for it.
+const HOME_FILES = ['CLAUDE.md', 'settings.json', 'keybindings.json'];
+const HOME_DIRS = ['agents', 'commands', 'output-styles', 'rules', 'skills'];
+
+// Paths relative to the home config folder.
+// ponytail: like the project scan, this skips symlinks, so a skill linked in from a dotfiles repo is not
+// listed. Follow links that stay inside the folder if that setup shows up.
+function scanHome(home) {
+  // A personal skill is skills/<name>/SKILL.md. Whatever else sits in skills/ (bundles synced by the desktop
+  // app, its trash) is not the user's to edit.
+  let skills = [];
+  try {
+    skills = fs.readdirSync(path.join(home, 'skills'), { withFileTypes: true })
+      .filter(e => e.isDirectory() && fs.existsSync(path.join(home, 'skills', e.name, 'SKILL.md'))).map(e => `skills/${e.name}`);
+  } catch { /* no skills folder */ }
+  return [...HOME_FILES.filter(f => fs.existsSync(path.join(home, f))), ...[...HOME_DIRS.filter(d => d !== 'skills'), ...skills].flatMap(d => walk(home, d, []))].sort();
+}
+
+function homePath(home, rel) {
+  const abs = path.resolve(home, rel);
+  const norm = path.relative(path.resolve(home), abs).split(path.sep).join('/');
+  if (!(HOME_FILES.includes(norm) || HOME_DIRS.some(d => norm.startsWith(`${d}/`)))) throw new Error(`Not a config file: ~/${rel}`);
+  return abs;
+}
+
 module.exports = {
-  worktreeName, openBlockers, defaultTemplate, issuePrompt, prAction, issuesQuery, mapIssue, parseGitHub,
+  worktreeName, openBlockers, defaultTemplate, renderTemplate, issuePrompt, prAction, issuesQuery, mapIssue, parseGitHub,
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,
-  childEnv, isInside, parseWorktrees, labelFor, scanConfig, configPath, ROOT_FILES,
+  childEnv, isInside, realPath, samePath, parseWorktrees, labelFor, scanConfig, configPath, ROOT_FILES, scanHome, homePath,
   SAMPLE_SECONDS, samplerCommand, cpuSeconds, parseProcs, treeOf, treeUsage, byName,
   WEIGHTS, MIN_SHARE, shareCpu, scopeUnit, scopeProps, scopeCommand, throttleTargets, nextDuty,
 };

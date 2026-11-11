@@ -14,10 +14,19 @@ assert.ok(long.length <= 64 && !long.endsWith('-') && long.startsWith('274-deleg
 // blockers: only "closed as completed" unblocks
 assert.deepStrictEqual(lib.openBlockers([{ number: 1, state_reason: 'completed' }, { number: 2, state_reason: null }, { number: 3, state_reason: 'not_planned' }]), [2, 3]);
 
-// prompt + autonomy
-assert.strictEqual(lib.issuePrompt('Implement #{n}, closes #{n}', 5), 'Implement #5, closes #5');
-assert.match(lib.issuePrompt('x {n}', 5, 'semi', 'rebase'), /gh pr merge --rebase/);
-assert.match(lib.issuePrompt('x {n}', 5, 'manual'), /Do not merge/);
+// prompt: a Jinja2 template of which only the {{ variable }} placeholder is supported
+const is5 = { number: 5, title: 'Fix {{ issue_url }} & <b>', url: 'https://x/5' };
+assert.strictEqual(lib.issuePrompt('Implement issue #{{issue_id}}, closes #{{ issue_id }}', is5), 'Implement issue #5, closes #5');
+// a value is neither read again as template text nor escaped; a lone }} is plain text
+assert.strictEqual(lib.issuePrompt('{{ issue_title }} ({{issue_url}}) }}', is5), 'Fix {{ issue_url }} & <b> (https://x/5) }}');
+assert.throws(() => lib.issuePrompt('#{{ issue }}', is5), /\{\{ issue \}\}, which does not exist/);
+assert.throws(() => lib.issuePrompt('#{{ issue_id | upper }}', is5), /does not exist/);   // a filter
+assert.throws(() => lib.issuePrompt('{% if issue_id %}x{% endif %}', is5), /not supported/);
+assert.throws(() => lib.issuePrompt('#{{ issue_id }', is5), /never closed/);
+assert.strictEqual(lib.issuePrompt(lib.defaultTemplate(os.tmpdir()), is5).includes('{'), false);
+// autonomy
+assert.match(lib.issuePrompt('x {{ issue_id }}', is5, 'semi', 'rebase'), /^x 5\n\n.*gh pr merge --rebase/);
+assert.match(lib.issuePrompt('x {{ issue_id }}', is5, 'manual'), /Do not merge/);
 
 // what happens to a PR when the agent stops
 assert.strictEqual(lib.prAction(null, true), 'none');
@@ -62,6 +71,8 @@ assert.strictEqual(lib.statusLineCommand("C:\\Users\\o'brien\\s.json", 'bash ~/x
 assert.strictEqual(lib.statusLineCommand('/tmp/s.json'), "cat > '/tmp/s.json'");
 assert.deepStrictEqual(lib.claudeArgs({ settingsFile: 's', model: 'opus', effort: 'high', worktree: 'w', prompt: '-x' }), ['--settings', 's', '--model', 'opus', '--effort', 'high', '--worktree', 'w', '--', '-x']);
 assert.deepStrictEqual(lib.claudeArgs({ settingsFile: 's' }), ['--settings', 's']);
+// resuming: the conversation already has its worktree and its first prompt
+assert.deepStrictEqual(lib.claudeArgs({ settingsFile: 's', model: 'opus', worktree: 'w', prompt: 'again', resume: 'abc' }), ['--settings', 's', '--model', 'opus', '--resume', 'abc']);
 const settings = lib.instanceSettings({ statusFile: '/tmp/s.json', hookUrl: 'http://127.0.0.1:1/t/i', userStatusLine: { type: 'command', command: 'mine', padding: 2 } });
 assert.strictEqual(settings.statusLine.padding, 2);
 assert.strictEqual(settings.hooks.PreToolUse[0].matcher, 'AskUserQuestion');
@@ -184,6 +195,10 @@ assert.deepStrictEqual(lib.labelFor(root, path.join(root, '.claude', 'worktrees'
 assert.deepStrictEqual(lib.labelFor(root, path.join(root, 'src')), { worktree: null, label: path.basename(root) });
 assert.strictEqual(lib.labelFor(root, path.join(root, '..', 'side'), wt).worktree, 'side');
 assert.ok(lib.isInside(root, path.join(root, 'a')) && !lib.isInside(root, root + '-other'));
+// one folder under two spellings
+if (process.platform === 'win32') assert.ok(lib.samePath(root, root.toUpperCase()));
+else { fs.symlinkSync(root, `${root}-link`); assert.ok(lib.samePath(root, `${root}-link`)); fs.unlinkSync(`${root}-link`); }
+assert.ok(!lib.samePath(root, path.dirname(root)) && lib.samePath(path.join(root, 'gone'), path.join(root, 'gone')));
 
 // .claude / .github scan, and the editor's path guard
 for (const f of ['CLAUDE.md', '.claude/settings.json', '.claude/skills/deploy/SKILL.md', '.claude/agents/reviewer.md', '.claude/worktrees/w/big.txt', '.github/workflows/ci.yml']) {
@@ -200,5 +215,20 @@ for (const bad of ['../outside.txt', '.claude/../../outside.txt', '.claude/../sr
   assert.throws(() => lib.configPath(root, bad), /Not a config file/, bad);
 }
 fs.rmSync(root, { recursive: true, force: true });
+
+// the home config folder: only what a person edits there is listed, and nothing else can be reached
+const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claudinho-home-'));
+for (const f of ['CLAUDE.md', 'settings.json', '.credentials.json', 'history.jsonl', 'projects/p/s.jsonl', 'agents/reviewer.md', 'rules/style.md',
+  'skills/mine/SKILL.md', 'skills/mine/ref/notes.md', 'skills/synced/bundle/pdf/SKILL.md', 'skills/.trash/old/SKILL.md']) {
+  fs.mkdirSync(path.dirname(path.join(home, f)), { recursive: true });
+  fs.writeFileSync(path.join(home, f), 'x');
+}
+assert.deepStrictEqual(lib.scanHome(home), ['CLAUDE.md', 'agents/reviewer.md', 'rules/style.md', 'settings.json', 'skills/mine/SKILL.md', 'skills/mine/ref/notes.md']);
+assert.deepStrictEqual(lib.scanHome(path.join(home, 'nowhere')), []);
+assert.ok(lib.homePath(home, 'skills/mine/SKILL.md').startsWith(home));
+for (const bad of ['.credentials.json', 'history.jsonl', 'projects/p/s.jsonl', 'skills/../.credentials.json', 'agents/../../outside', '../outside', 'agents', 'settings.json.bak']) {
+  assert.throws(() => lib.homePath(home, bad), /Not a config file/, bad);
+}
+fs.rmSync(home, { recursive: true, force: true });
 
 console.log('ok');

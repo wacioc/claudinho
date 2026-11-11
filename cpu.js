@@ -19,7 +19,7 @@ const lib = require('./lib');
 const CORES = os.cpus().length;
 const UNLIMITED = 0.995;
 
-const nothing = { kernelShares: false, accounts: false, command: (key, file, args) => [file, args], attach: () => false, setLimit() {}, setWeight() {}, observe() {}, cpuSeconds: () => null, detach() {}, shutdown() {} };
+const nothing = { kernelShares: false, accounts: false, command: (key, file, args) => [file, args], attach: () => false, setLimit() {}, setWeight() {}, observe() {}, cpuSeconds: () => null, stop() {}, detach() {}, shutdown() {} };
 
 // ---------- Windows: job objects ----------
 
@@ -31,6 +31,7 @@ function jobObjects() {
   const AssignProcessToJobObject = k32.func('int __stdcall AssignProcessToJobObject(void *job, void *process)');
   const SetInformationJobObject = k32.func('int __stdcall SetInformationJobObject(void *job, int infoClass, void *info, uint32_t length)');
   const QueryInformationJobObject = k32.func('int __stdcall QueryInformationJobObject(void *job, int infoClass, void *info, uint32_t length, void *returned)');
+  const TerminateJobObject = k32.func('int __stdcall TerminateJobObject(void *job, uint32_t exitCode)');
   const CloseHandle = k32.func('int __stdcall CloseHandle(void *handle)');
   const SET_QUOTA_AND_TERMINATE = 0x0101;   // the process rights AssignProcessToJobObject asks for
   const CPU_RATE = 15, ACCOUNTING = 1;      // JOBOBJECTINFOCLASS
@@ -76,6 +77,8 @@ function jobObjects() {
       if (!job || !QueryInformationJobObject(job, ACCOUNTING, info, 48, null)) return null;
       return Number(info.readBigInt64LE(0) + info.readBigInt64LE(8)) / 1e7;   // TotalUserTime + TotalKernelTime, in 100 ns
     },
+    // Ends every process in the job, also one that has detached itself from the instance's terminal.
+    stop(key) { const job = jobs.get(key); if (job) TerminateJobObject(job, 1); },
     shutdown() { for (const key of [...jobs.keys()]) detach(key); },
   };
 }
@@ -249,6 +252,12 @@ module.exports = {
   },
 
   detach(key) { m.detach(key); tracked.delete(key); },
+
+  // End everything the instance started, where that is needed to delete its folder afterwards: Windows does
+  // not let go of a folder while a program is running in it. Elsewhere this does nothing.
+  // ponytail: Windows only. On macOS and Linux whatever an instance left running keeps running after it is
+  // closed; signal the tree (or stop the systemd scope) here if that should end too.
+  stop(key) { m.stop(key); },
 
   // From each process listing: the tree's members, and the share of the machine it used since the last one.
   observe(key, procs, used) {

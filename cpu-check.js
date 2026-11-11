@@ -136,6 +136,25 @@ const scenarios = {
   // A ceiling that is lifted while the instance runs.
   release: () => scenario('ceiling lifted', { ceiling: 0.25, share: false }, [{ busy: CORES }], ([after], [before]) => before < 0.31 && after > Math.max(0.33, before * 1.25), s => { s.ceiling = 1; }),
 
+  // Closing an instance together with its worktree ends everything the instance started, also what has detached
+  // itself from its terminal: on Windows a running program holds its folder, which then could not be deleted.
+  async stop() {
+    if (cpu.mechanism !== 'job') { console.log(`skip  stop everything        (not needed with the ${cpu.mechanism} mechanism: there a folder can be deleted under a running program)`); return true; }
+    const grandchild = `require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { detached: true, stdio: 'ignore' })`;
+    const root = spawn(process.execPath, ['-e', `setTimeout(() => console.log(${grandchild}.pid), 500); setTimeout(() => {}, 60000);`], { stdio: ['ignore', 'pipe', 'ignore'] });
+    if (!cpu.attach('s', root.pid, { ceiling: 1, weight: 1 })) throw new Error('this mechanism could not take the process');
+    const child = Number(await new Promise(r => root.stdout.once('data', d => r(String(d)))));
+    const running = () => [root.pid, child].filter(pid => { try { process.kill(pid, 0); return true; } catch { return false; } }).length;
+    const before = running();
+    cpu.stop('s');
+    await sleep(1000);
+    const after = running();
+    cpu.detach('s');
+    const verdict = before === 2 && after === 0;
+    console.log(`${verdict ? 'ok  ' : 'FAIL'}  ${'stop everything'.padEnd(22)} running before: ${before} of 2 (one of them detached); after: ${after}`);
+    return verdict;
+  },
+
   // The safety net of the pause-and-resume mechanism, in two halves. First the helper process that does the
   // pausing is killed, and in the same breath the limit is lifted: no new helper is needed then, so only the
   // controller itself can resume what the old helper had paused.

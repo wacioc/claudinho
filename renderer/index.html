@@ -10,6 +10,7 @@
 <body>
 <header>
   <span class="brand">claudinho</span>
+  <span id="version" class="hint"></span>
   <span id="repo-name" class="repo"></span>
   <button id="btn-open">Open folder…</button>
   <button id="btn-clone">Clone from GitHub…</button>
@@ -20,6 +21,7 @@
 </header>
 <nav>
   <button class="tab active" data-view="instances">Instances <span id="n-instances"></span></button>
+  <button class="tab" data-view="worktrees">Worktrees <span id="n-worktrees"></span></button>
   <button class="tab" data-view="issues">Issues <span id="n-issues"></span></button>
   <button class="tab" data-view="config">.claude</button>
   <span id="setup" class="chips"></span>
@@ -29,13 +31,22 @@
     <div class="toolbar">
       <button id="btn-new">+ New instance</button>
       <button id="btn-worktree">+ New worktree…</button>
+      <button id="btn-resume-all" class="primary" hidden>Resume all interrupted</button>
       <span id="queue" class="chips"></span>
     </div>
     <div id="scroll">
+      <div id="resumable"></div>
       <div id="grid"></div>
       <div id="external"></div>
       <div id="empty" class="empty"></div>
     </div>
+  </section>
+  <section id="view-worktrees" hidden>
+    <div class="toolbar">
+      <button id="btn-refresh-worktrees">↻ Refresh</button>
+      <span class="hint">Every worktree under .claude/worktrees. Closing an instance removes its worktree; one that is still here can be removed by hand.</span>
+    </div>
+    <div id="worktree-list"></div>
   </section>
   <section id="view-issues" hidden>
     <div class="toolbar">

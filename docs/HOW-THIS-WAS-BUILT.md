@@ -70,6 +70,9 @@ Requests that followed, in order:
    mistake."
 5. Run the check of those limits on a real Mac. It ran three times; section 6 says why.
 6. Publish the app, with this record, to GitHub.
+7. A second round, the day it was published: ask before closing a running instance, clean up its worktree, a
+   Worktrees section, the home folder's configuration in the editor, a default prompt in Jinja2 syntax, saved
+   state for resuming after a power cut, and a version number. Section 7 covers it.
 
 ## 2. Four questions, four answers
 
@@ -115,8 +118,8 @@ completed. An issue with a plain `blocked` label is shown as blocked too; it jus
 leading `TYPE | ` prefix and cut to whole words within 64 characters, and the instance is started with
 `claude --worktree <name> --model … --effort … -- "<prompt>"`. The default prompt is
 "Implement #N following docs/PROCESS.md" when the target repository has that file, and a self-contained one
-otherwise. The pool starts at most 4 instances and checks the blockers of queued issues again every 5 minutes,
-as the helper does.
+otherwise. (Since the second round the prompt is a template with placeholders; see section 7.) The pool starts
+at most 4 instances and checks the blockers of queued issues again every 5 minutes, as the helper does.
 
 **"Finished" has a concrete meaning.** The agent ended its turn (the `Stop` hook fired) and its branch has an
 open pull request that is not a draft. With automatic merge on, the app then runs `gh pr merge --squash --auto`.
@@ -297,17 +300,150 @@ before the last change. That change does not touch the kernel mechanism.
   between 16% and 24%; averaged over nine seconds it was 20.4%. The likely cause is that Windows runs a capped
   job in bursts, which a 2-second sample catches unevenly. This was not investigated further.
 
-## 7. Still open
+## 7. The second round: closing, worktrees, resuming
 
-- The app itself has never been run on macOS or Linux.
+The day the app was published, the owner asked for seven more things:
+
+1. A confirmation dialog when closing an instance that is still running.
+2. If the instance is in a worktree, clean the worktree up when the instance is closed.
+3. A separate Worktrees section that lists the repository's worktrees under `.claude`.
+4. The configuration from the home folder (`CLAUDE.md`, `settings.json`, agents, skills) in the `.claude`
+   section, editable inline.
+5. A default prompt for worktrees, parametrised in Jinja2 syntax, such as `Implement issue #{{issue_id}}`, with
+   `issue_id` filled in when a session is started for a GitHub issue.
+6. Each session's state saved locally at fixed intervals, so that after a power cut each session can be resumed
+   where it left off.
+7. Versioning, with this as v0.1.0.
+
+### How each was read, and why
+
+**Closing.** The ✕ used the browser's own confirm box. It is now one of the app's dialogs, because it has more
+to say: what happens to the worktree. It appears while Claude Code is still running, and also for an instance
+that has ended if removing its worktree would discard work.
+
+**Cleaning a worktree means what it means to Claude Code:** the folder and its branch go. On a normal exit
+Claude Code does this itself, and asks when there are changes. The app ends Claude Code by ending its process,
+and for that case the documentation promises nothing, so the app does the cleanup. Claude Code also locks a
+worktree while a session uses it, and a session that is stopped leaves the lock behind (`git worktree list`
+shows `locked claude session <name> (pid …)`), which is why the removal passes `--force` twice.
+
+**What counts as lost is measured.** `git status --porcelain` gives the uncommitted changes, and
+`git rev-list --count HEAD --not --exclude=<its branch> --branches --remotes` the commits that would be on no
+branch and no remote afterwards. With both at zero the worktree goes without a question, and in the dialog the
+box starts ticked. Otherwise the dialog names the loss and the box starts unticked: the owner asked for cleanup,
+not for losing work by pressing Enter. The check is repeated after Claude Code has stopped, because an agent can
+still be writing while the dialog is open. If something appeared in between, the worktree is kept and the app
+says why.
+
+**Windows needs one more step.** A folder cannot be deleted there while a program is running in it. `node-pty`
+ends the processes attached to the instance's terminal, but one that has detached itself survives and holds the
+folder. Each instance already sits in a job object for the CPU limits, and a process cannot leave a job, so
+closing an instance together with its worktree now ends the whole job. Without that step the removal gave up
+after six seconds of retries; with it the folder was gone in half a second. On macOS and Linux a folder can be
+deleted under a running program, so nothing is ended there.
+
+**The Worktrees section** lists what `git worktree list` reports under `.claude/worktrees`, plus folders in
+there that git no longer knows. The second kind exists because of the order in which git removes a worktree:
+when it cannot delete the folder (Windows again, with a program from outside the app sitting in it), it has
+already dropped its own record. The owner asked only to see the worktrees. Each row also has a Remove button,
+because cleanup on close needs a way to finish what it could not, and to remove a worktree that was kept on
+purpose.
+
+**The home folder holds more than configuration.** Credentials, every conversation and the prompt history are
+in the same place. The editor therefore works from a fixed list, taken from the documentation of that folder:
+`CLAUDE.md`, `settings.json`, `keybindings.json`, and the folders `agents`, `commands`, `output-styles`, `rules`
+and `skills`. Anything else is refused by path, in the main process. In `skills`, only folders that hold a
+`SKILL.md` directly are listed; other tools keep bundles and a trash folder in the same place, and those are
+not the owner's to edit. `CLAUDE_CONFIG_DIR` moves the folder, and the app follows it. Saving a home file does
+not bring up the commit offer, and saving a `.json` file that does not parse asks first, since a broken
+settings file is felt by every session.
+
+**The prompt is a Jinja2 template of which one construct is supported:** the `{{ name }}` placeholder, with
+`issue_id`, `issue_title` and `issue_url`. That covers the request in a dozen lines, without a template engine
+as a dependency. Three things were decided on the way:
+
+- A template that uses a block, a comment, a filter or an unknown name is refused, with the reason, when it is
+  saved and when it is used. Jinja itself prints nothing for an unknown name, which would hand Claude
+  "Implement issue #".
+- A value goes in as it is and is never read again as template text. An issue title is written by other people.
+- The default is a setting, kept per folder. Until now the dispatch dialog remembered the last prompt typed
+  there; now an edit in that dialog counts for that start only. Prompts saved with the old `{n}` are converted
+  when they are loaded.
+
+**Session state: Claude Code already keeps the conversation.** Its documentation says sessions are "saved
+continuously to local transcript files". What a power cut would take is what the app knows on top of that:
+which instances were open, in which worktree, with which model, input level, merge setting and weight, and
+which conversation each one was in. That is written every ten seconds, and whenever an instance comes or goes.
+
+- The conversation's id and the path of its transcript come from the status line input the app already reads,
+  so they follow `/clear` and `/resume`.
+- The file is written to the side, flushed, and renamed over the old one. A power cut leaves a whole file.
+- When the app starts, everything on record is offered as an "interrupted" card. Quitting and a power cut are
+  thereby the same case, handled by one mechanism.
+- Resume runs `claude --resume <id>` inside the instance's worktree. A record without a transcript on disk (an
+  instance that never exchanged a message) is started again the way it was started.
+- An instance that has ended stays on record for 15 seconds. When a machine shuts down, Claude Code may be
+  stopped a moment before the app is, and those are exactly the sessions to bring back.
+- A record whose conversation is live again somewhere, going by `claude agents --json`, is not offered.
+
+**Versioning** is the `version` in `package.json`, shown in the header, with a changelog and tags of the form
+`vX.Y.Z`, which is what `npm version` produces.
+
+### How it was verified
+
+On Windows, with the window driven as before. Sessions were started with the smallest model and a one-line
+prompt, or with none.
+
+| What was done | What happened |
+|---|---|
+| The Worktrees tab on a repository with four worktrees left by earlier tests, all still locked. | Listed with branch, state and last commit. |
+| Remove, five times: a clean worktree; one that got a file while the dialog was open; one with an uncommitted file; one with a commit that existed nowhere else; a folder git did not know. | Removed with its branch; kept, with the reason; removed after "Remove and discard"; the same; removed. |
+| Close a running worktree instance with nothing to lose. | A dialog with the box ticked. Folder and branch gone, and its record gone from the state file. |
+| Close one with an uncommitted file in its worktree. | The box unticked. Left that way, the worktree stayed; ticked on purpose, it went. |
+| Close an instance that had left a detached process in its worktree. | Before the job-object step: "a program still has files open in it" after 6 s. With it: removed in 0.5 s, the process ended. |
+| Remove a worktree while a program from outside the app sat in it. | The dialog stayed open with that message, and no branch was left behind. The folder was listed as a leftover and removed once the program was gone. |
+| Two sessions open, then every process of the app killed at once. | The state file was whole. After the restart both were offered. Resume on the worktree session gave the same conversation id, in its worktree, on its branch, with its input level, weight and merge setting, and the earlier prompt and answer on screen. The other had no conversation yet and was started again. |
+| Quit through the window with two instances open, restart, "Resume all". | Both came back, and closing them removed the worktree. For this run the app's native "still running" box was answered through the main process's debugger. |
+| The default prompt in Settings with an unknown name, a block, an unclosed brace. | Each refused in the dialog with the reason, the text still there. A valid one was saved; clearing it brought the built-in one back. |
+| Dispatch of a closed issue of the throwaway private repository, with a prompt asking for one line back. | Claude Code received the line with number, title and address filled in. An unknown name in the dialog started nothing. |
+| The `.claude` tab against a stand-in home folder, set with `CLAUDE_CONFIG_DIR`. | Listing, editing and saving worked, and broken JSON was questioned. Credentials, conversations, history and a path with `..` were refused, for reading and for writing. |
+| `node cpu-check.js stop` | A process and a detached child of it, both in the job, both ended. |
+
+Not exercised:
+
+- Any of this on macOS or Linux.
+- A real power cut. The processes were killed instead.
+- The native box that questions broken JSON. The test answered in its place.
+- The owner's real home folder, on purpose: the test pokes at paths the editor must refuse.
+
+### What went wrong
+
+| Symptom | Cause | What changed |
+|---|---|---|
+| A worktree whose folder could not be deleted left its branch behind. | The branch was deleted last, after the step that failed. | The branch goes before the failure is reported. |
+| The `.claude` tree showed `[object HTMLDetailsElement]`. | A list of elements was handed over where the elements themselves were expected. | Fixed after the first run of the tab. |
+| The Remove buttons could swallow a click. | The table was rebuilt with every state update, every two or three seconds. | It is rebuilt only when something in it changed. |
+| A test run created a worktree in this project's own checkout. | The test app had been started with one of Electron's flags before the `.`, and the app then takes `.` for the folder to open. | The worktree and its branch were removed again. Flags go after the `.`, and a test checks which folder is open before it starts anything. |
+| A command typed into an instance from a test stayed in the input box. | Not established. It happened when the command and the Enter were written in one piece. | Tests write `!`, the command and Enter one after another with a pause in between, which has worked every time since. |
+
+## 8. Still open
+
+- The app itself has never been run on macOS or Linux. That includes everything in section 7.
 - The effect of App Nap on the app's timers was not measured. The design avoids depending on it.
 - There are no installers. A packaged build must keep Electron's `RunAsNode` fuse on, or the helper process
   needs another way to start.
 - The Windows behaviour beside a saturating outside program, described above.
 - Sessions started outside the app are shown but not limited, and a terminal cannot be attached to them.
 - Closing an instance stops Claude Code but not the processes it left running; those are no longer limited.
+  Only on Windows, and only when the worktree goes too, are they ended.
+- Two copies of the app share one state file, and the last one to save wins.
+- Issues still queued for dispatch are not remembered across a restart.
+- The home folder: skills linked in through a symlink are not listed, and new files cannot be created there
+  from the app.
+- A flag placed before the `.` on the command line makes the app open its own source folder (see the table
+  above). The app could find the folder argument more carefully.
 
-## 8. Continuing the work
+## 9. Continuing the work
 
 - **Windows** is the development machine. `npm run check:cpu` runs the job-object mechanism directly.
 - **Linux** was a WSL distribution (Ubuntu 24.04, systemd 255). The default mechanism there is the kernel one;
@@ -319,18 +455,37 @@ before the last change. That change does not touch the kernel mechanism.
 - **Test launches** of the app start real Claude Code sessions. They use the subscription, and with Remote
   Control on they appear on the owner's other devices.
 - `cpu-check.js` prints every sample with `CPU_CHECK_VERBOSE=1`. The traces, not the verdicts, are what found
-  the problems in section 6.
+  the problems in section 6. `node cpu-check.js stop` runs a single scenario, here the one that ends an
+  instance's processes.
+- **Before a test starts an instance**, it checks which folder the app has open. Electron's own flags, such as
+  `--remote-debugging-port` and `--inspect`, go after the `.`.
+- **The home folder is tested against a stand-in**: the app is started with `CLAUDE_CONFIG_DIR` pointing at a
+  scratch folder. Instances started in that run are not logged in, which does not matter for the editor.
+- **The main process can be reached** with `--inspect=<port>`, for instance to answer a native dialog that a
+  test cannot press.
 - This repository has no `docs/PROCESS.md` on purpose. The app, like the owner's helper, tells an agent to
   follow that file when it exists, and this record is a history, not a process to follow.
 
-## 9. Sources
+## 10. Sources
 
 The owner's rule for the session was to name the documentation before building on it. These are the pages the
 work relied on.
 
 **Claude Code** (`https://code.claude.com/docs/en/…`): `hooks`, `statusline`, `settings`, `cli-reference`,
-`worktrees`, `sub-agents`, `skills`, `authentication`, `env-vars`, `model-config`, `permission-modes`,
-`claude-directory`.
+`worktrees`, `sessions`, `sub-agents`, `skills`, `authentication`, `env-vars`, `model-config`,
+`permission-modes`, `claude-directory`.
+
+**git**
+
+- <https://git-scm.com/docs/git-worktree>
+- <https://git-scm.com/docs/git-rev-list>
+- <https://git-scm.com/docs/git-branch>
+
+**Templates, versions, files**
+
+- <https://jinja.palletsprojects.com/en/stable/templates/>
+- <https://docs.npmjs.com/cli/v11/commands/npm-version>
+- <https://nodejs.org/api/fs.html>
 
 **GitHub**
 
@@ -347,6 +502,7 @@ work relied on.
 - <https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_accounting_information>
 - <https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/nf-jobapi2-assignprocesstojobobject>
 - <https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/nf-jobapi2-setinformationjobobject>
+- <https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/nf-jobapi2-terminatejobobject>
 
 **Linux control groups and systemd**
 
