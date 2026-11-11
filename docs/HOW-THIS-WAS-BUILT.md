@@ -73,6 +73,7 @@ Requests that followed, in order:
 7. A second round, the day it was published: ask before closing a running instance, clean up its worktree, a
    Worktrees section, the home folder's configuration in the editor, a default prompt in Jinja2 syntax, saved
    state for resuming after a power cut, and a version number. Section 7 covers it.
+8. Installers for Windows, macOS and Linux. Section 8 covers it.
 
 ## 2. Four questions, four answers
 
@@ -165,7 +166,8 @@ What was not exercised:
 - "New skill". It shares its code path with "New agent", which was.
 - Semi-auto autonomy.
 - A queued issue waiting out the 5-minute recheck on an open blocker. The hand-over itself was seen working.
-- The app as a whole on macOS or Linux. Only the CPU limits were run there (section 6).
+- The app as a whole on macOS or Linux. Only the CPU limits were run there (section 6). (Since the third
+  round a check starts the packaged app there; see section 8.)
 
 ## 5. What went wrong on the way
 
@@ -426,12 +428,99 @@ Not exercised:
 | A test run created a worktree in this project's own checkout. | The test app had been started with one of Electron's flags before the `.`, and the app then takes `.` for the folder to open. | The worktree and its branch were removed again. Flags go after the `.`, and a test checks which folder is open before it starts anything. |
 | A command typed into an instance from a test stayed in the input box. | Not established. It happened when the command and the Enter were written in one piece. | Tests write `!`, the command and Enter one after another with a pause in between, which has worked every time since. |
 
-## 8. Still open
+## 8. The third round: installers
 
-- The app itself has never been run on macOS or Linux. That includes everything in section 7.
+The same day the owner asked how to run the app on Windows, macOS and Linux, having found no `.exe`. Until then
+it ran from source only. Asked which systems should get an installer, the owner answered: all three.
+
+### What was decided, and why
+
+The installers are made by [electron-builder](https://www.electron.build) 26, a development dependency. Its
+settings are under `build` in `package.json`, where no comment can stand, so the reasons are here.
+
+| Setting | Why |
+|---|---|
+| `files` | Only what the app loads: its four scripts and `renderer/`. Left to the default, the README, this record and the checks would be packed too. The last pattern drops the debug symbols `node-pty` ships for Windows, 53 MB the app never reads. |
+| `asar: false` | The app's files stay plain files instead of going into one archive. `node-pty` ships helper programs and a worker script that have to exist as real files, and the app sets the mode of one of them at its start. In an archive each of those would have to be unpacked again, and a mistake there shows only on the system it concerns. electron-builder warns about this setting at every build. `ponytail:` if the loose files ever matter, turn the archive on and list `node-pty` and `koffi` under `asarUnpack`; `pack-check.js` will say whether the terminals survived. |
+| `npmRebuild: false` | `node-pty` and `koffi` are N-API modules. The binaries npm installs load in Electron as they are, which is how `npm start` has always run them. Rebuilding them would need a compiler on the Windows and macOS build machines. |
+| `artifactName` | One pattern for every installer, with the system and the processor in the name. By default both Mac images would get the same name. |
+| `toolsets.appimage: "1.0.3"` | The AppImage runtime that does not need FUSE 2, which current Ubuntu no longer installs. electron-builder recommends it and makes it the default in its next major version. The runtime that is the default in 26 also starts every app without Chromium's sandbox; this one does so only where the sandbox cannot work. |
+| `mac.identity: "-"`, `mac.hardenedRuntime: false` | An ad-hoc signature: valid, but naming nobody. electron-builder applies none by itself. With no signature at all, a downloaded app can be reported as damaged, with nothing offered to open it; with an ad-hoc one macOS refuses the first start and offers "Open Anyway". The hardened runtime belongs to notarised apps, and without an extra entitlement it would keep this one from loading its own native modules. |
+| `appId` | A name of its own instead of the default `com.electron.claudinho`. Windows and macOS know the installed app by it, so it should never have to change. |
+| `predist` (a script, not a setting) | `node-pty` publishes its macOS helper without the executable bit. The app repairs that at its start (see `main.js`), which cannot work on a read-only disk image. So before every build the bit is set in `node_modules`, and the packaged file has it. |
+
+**Not signed.** Signing needs a certificate for Windows and a paid developer account for macOS, and neither was
+asked for. The README says what a user sees instead. One case has no way around it: with Smart App Control on,
+Windows blocks an unsigned installer and offers no exception for a single app.
+
+**A release comes from a tag, whole or not at all.** `.github/workflows/installers.yml` runs when a `v*` tag is
+pushed. Each of three machines builds its system's installer, then installs it (Windows, silently), mounts it
+(macOS, read-only) or runs it (the AppImage), and runs `pack-check.js` against that. Only when all three pass
+does a fourth job create the release with every installer attached. electron-builder would publish by itself
+when it sees a tag and a token; `--publish never` is what stops it. Started by hand, the workflow builds and
+checks without publishing. The repository is public, so GitHub's standard machines cost nothing.
+
+**The first installers are 0.1.1.** The tag `v0.1.0` points at a commit that cannot build them, and a published
+tag is not moved.
+
+**Ubuntu is named by its version** in the workflow, not as `ubuntu-latest`. `node-pty` is compiled on the build
+machine, and what is compiled on a newer release does not load on an older one. The workflow prints what the
+compiled file asks for.
+
+### The check
+
+`pack-check.js` takes the path of a packaged executable and has four steps:
+
+1. The binary, started with `ELECTRON_RUN_AS_NODE`, opens a terminal through the packaged `node-pty` and reads
+   it back. This fails if the `RunAsNode` fuse is off, if the native module does not load, or if one of its
+   helper programs cannot be started.
+2. The app starts, with its own data folder, and shows its version.
+3. It opens the folder it was given.
+4. On macOS and Linux it starts an instance and waits for that instance's output in its terminal.
+
+Step 4 uses a stand-in for Claude Code, a four-line shell script, so that the check never uses the
+subscription. The app takes its `PATH` from the login shell, so the check hands it a stand-in for the shell
+too, one that prints a `PATH` with the stand-in first. On Windows `node-pty` can only start a real `.exe`, so
+there is no step 4 there; the packaged app is tried with the real Claude Code by hand.
+
+### How it was verified
+
+| What was done | What happened |
+|---|---|
+| On the Windows PC: `npm run dist`, then the packaged app on the scratch repository with the real Claude Code. An instance in a worktree under a 50% ceiling, closed again with its worktree. | Claude Code came up in the terminal with its status line, the instance reported its limit of 0.5, and closing removed the folder and the branch. |
+| Windows Server 2025, hosted: the installer run silently, then the check against the installed `claudinho.exe`. | Installed for the user without a prompt. Steps 1 to 3 passed. |
+| macOS 26 on Apple silicon, hosted: each disk image mounted read-only, `codesign --verify --deep --strict`, then the check against the app inside it. | Both signatures valid and ad-hoc. The Apple silicon image passed all four steps, from the read-only image. The Intel image, run through Rosetta, passed steps 2 to 4 at once, and step 1 once the check allowed for the translation: it took 70 seconds (see below). |
+| Ubuntu 24.04, hosted: the check against the AppImage file itself. | All four steps passed. The launcher had added `--no-sandbox`: Ubuntu 24.04 does not let a program without an AppArmor profile create user namespaces. The compiled `node-pty` asks for glibc 2.34 and libstdc++ 3.4.22, so the AppImage also loads on Ubuntu 22.04 and Debian 12. |
+
+Step 4 was the first time an instance ran inside the app on macOS and on Linux.
+
+Not exercised:
+
+- What Windows and macOS say about a downloaded installer. A file built on the machine that runs it is not
+  questioned. The README's steps for macOS follow Apple's documentation. Those for Windows describe the
+  SmartScreen dialog as it is known; Microsoft's pages describe the check, not the dialog.
+- The real Claude Code in the app on macOS or Linux, and a person using the app there.
+- An Intel Mac. The Intel image ran on Apple silicon through Rosetta.
+- Installing over an older version, and uninstalling.
+
+### What went wrong
+
+| Symptom | Cause | What changed |
+|---|---|---|
+| On the hosted machines the check failed with "Cannot read properties of null". | It asked the window for the version before the page had loaded. On the PC the page had always been faster. | The check waits for the element. |
+| On Linux step 1 failed with "bad option: --no-sandbox". | The AppImage's launcher puts that flag in front of the arguments, and Node refuses it. | The check passes the flag itself, behind `--`, where it is only an argument. The app's own helper process is not affected: it starts the binary inside the image, not the launcher. |
+| Step 1 timed out on the Intel image. | An Intel program on Apple silicon is translated before its first start, and for a binary of this size that took more than the minute the check allowed. | Three minutes. |
+
+## 9. Still open
+
+- A person has only used the app on Windows. On macOS and Linux it has been started by `pack-check.js`, with a
+  stand-in for Claude Code; everything in section 7 is untried there.
 - The effect of App Nap on the app's timers was not measured. The design avoids depending on it.
-- There are no installers. A packaged build must keep Electron's `RunAsNode` fuse on, or the helper process
-  needs another way to start.
+- The installers are not signed, the app has Electron's default icon, and it does not update itself.
+- A packaged build must keep Electron's `RunAsNode` fuse on, or the helper process needs another way to start.
+  `pack-check.js` fails when it is off.
+- On Ubuntu 24.04 and later the AppImage runs without Chromium's sandbox. A `.deb` with an AppArmor profile
+  would keep it.
 - The Windows behaviour beside a saturating outside program, described above.
 - Sessions started outside the app are shown but not limited, and a terminal cannot be attached to them.
 - Closing an instance stops Claude Code but not the processes it left running; those are no longer limited.
@@ -443,7 +532,7 @@ Not exercised:
 - A flag placed before the `.` on the command line makes the app open its own source folder (see the table
   above). The app could find the folder argument more carefully.
 
-## 9. Continuing the work
+## 10. Continuing the work
 
 - **Windows** is the development machine. `npm run check:cpu` runs the job-object mechanism directly.
 - **Linux** was a WSL distribution (Ubuntu 24.04, systemd 255). The default mechanism there is the kernel one;
@@ -463,10 +552,16 @@ Not exercised:
   scratch folder. Instances started in that run are not logged in, which does not matter for the editor.
 - **The main process can be reached** with `--inspect=<port>`, for instance to answer a native dialog that a
   test cannot press.
+- **A packaged copy** is in `dist/` after `npm run dist`: on Windows `dist/win-unpacked/claudinho.exe`, the
+  same files the installer puts on the disk. It takes the folder and the test flags like the app from source
+  does, in any order. `pack-check.js` is the check for it.
+- **The other two systems' installers** can only be built on those systems. The `installers` workflow does it;
+  started by hand from the Actions tab it builds and checks without publishing, and the installers can be
+  downloaded from the run for a week.
 - This repository has no `docs/PROCESS.md` on purpose. The app, like the owner's helper, tells an agent to
   follow that file when it exists, and this record is a history, not a process to follow.
 
-## 10. Sources
+## 11. Sources
 
 The owner's rule for the session was to name the documentation before building on it. These are the pages the
 work relied on.
@@ -522,3 +617,19 @@ work relied on.
 - <https://www.electronjs.org/docs/latest/>
 - <https://github.com/microsoft/node-pty>
 - <https://xtermjs.org/docs/>
+
+**Installers**
+
+- electron-builder 26 (`https://www.electron.build/v26/docs/…`): `configuration`, `contents`, `cli`, `publish`,
+  `architecture`, `nsis`, `mac`, `dmg`, `appimage`, `linux`, `features/github-actions`,
+  `features/code-signing/code-signing-mac`
+- <https://www.electronjs.org/docs/latest/tutorial/fuses>,
+  <https://www.electronjs.org/docs/latest/tutorial/asar-archives> and
+  <https://www.electronjs.org/docs/latest/tutorial/application-distribution>
+- <https://docs.github.com/en/billing/concepts/product-billing/github-actions>,
+  <https://docs.github.com/en/actions/reference/workflows-and-actions/contexts> and
+  <https://cli.github.com/manual/gh_release_create>
+- <https://support.apple.com/en-us/102445> (opening an app that is not notarised)
+- <https://support.microsoft.com/en-us/topic/what-is-smart-app-control-285ea03d-fa88-4d56-882e-6698afdb7003>
+- <https://docs.appimage.org/user-guide/troubleshooting/electron-sandboxing.html> and
+  <https://discourse.ubuntu.com/t/ubuntu-24-04-lts-noble-numbat-release-notes/39890> (user namespaces)

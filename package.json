@@ -8,7 +8,20 @@
   "scripts": {
     "start": "electron .",
     "test": "node test.js",
-    "check:cpu": "node cpu-check.js"
+    "check:cpu": "node cpu-check.js",
+    "predist": "node -e \"for (const a of ['arm64', 'x64']) try { fs.chmodSync('node_modules/node-pty/prebuilds/darwin-' + a + '/spawn-helper', 0o755) } catch {}\"",
+    "dist": "electron-builder --publish never",
+    "check:pack": "node pack-check.js"
+  },
+  "build": {
+    "appId": "io.github.wacioc.claudinho",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "files": ["main.js", "preload.js", "lib.js", "cpu.js", "renderer/**", "!**/*.pdb"],
+    "asar": false,
+    "npmRebuild": false,
+    "toolsets": { "appimage": "1.0.3" },
+    "mac": { "target": { "target": "dmg", "arch": ["arm64", "x64"] }, "identity": "-", "hardenedRuntime": false },
+    "linux": { "target": "AppImage" }
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -17,7 +30,8 @@
     "node-pty": "^1.1.0"
   },
   "devDependencies": {
-    "electron": "^45.3.0"
+    "electron": "^45.3.0",
+    "electron-builder": "^26.18.0"
   },
   "allowScripts": {
     "node-pty@1.1.0": true

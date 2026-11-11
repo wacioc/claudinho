@@ -1,0 +1,79 @@
+name: installers
+# Builds the installer of each system on a machine of that system, installs or mounts it there, and starts the
+# packaged app once (pack-check.js). Started by a version tag (`npm version patch`, then
+# `git push --follow-tags`) it then publishes the installers as that version's release. Started by hand from
+# the Actions tab it only builds and checks; the installers stay with the run for a week.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Ubuntu by its version, not ubuntu-latest: node-pty is compiled on this machine, and what is compiled
+        # on a newer release does not load on an older one.
+        os: [windows-latest, macos-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm test
+      - run: npm run dist
+      - name: Install it and start the installed app (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Start-Process -Wait (Get-Item dist\*.exe).FullName -ArgumentList '/S'
+          node pack-check.js "$env:LOCALAPPDATA\Programs\claudinho\claudinho.exe"
+      - name: Start the app from each disk image (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          for arch in arm64 x64; do
+            hdiutil attach dist/*-mac-$arch.dmg -nobrowse -readonly -mountpoint /tmp/claudinho-$arch
+            codesign --verify --deep --strict /tmp/claudinho-$arch/claudinho.app
+            codesign -dv /tmp/claudinho-$arch/claudinho.app 2>&1 | grep -E '^(Identifier|Format|Signature|CodeDirectory)'
+            node pack-check.js /tmp/claudinho-$arch/claudinho.app/Contents/MacOS/claudinho
+          done
+      - name: Start the AppImage (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          # For the log: the newest glibc and libstdc++ the terminal library compiled here asks for. A system
+          # with older ones cannot load it; the README names the minimum under "Install".
+          for lib in GLIBC GLIBCXX; do
+            objdump -T dist/linux-unpacked/resources/app/node_modules/node-pty/build/Release/pty.node | grep -oE "${lib}_[0-9.]+" | sort -uV | tail -n 1
+          done
+          chmod +x dist/*.AppImage
+          xvfb-run -a node pack-check.js dist/*.AppImage
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer-${{ runner.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write   # to create the release
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: installers
+          merge-multiple: true
+      - run: >
+          gh release create "$GITHUB_REF_NAME" installers/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME"
+          --notes "Installers for Windows, macOS and Linux. They are not signed, so each system asks once before the first start: see [Install](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/README.md#install). What changed is in the [changelog](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/CHANGELOG.md)."
+        env:
+          GH_TOKEN: ${{ github.token }}

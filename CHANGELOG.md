@@ -1,7 +1,14 @@
 # Changelog
 
 What each version of claudinho holds. Versions follow [semantic versioning](https://semver.org), every release
-is tagged `vX.Y.Z`, and the app shows its version in the header.
+is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
+the [releases page](https://github.com/wacioc/claudinho/releases).
+
+## 0.1.1 (2026-11-11)
+
+- Installers for Windows (`.exe`), macOS (`.dmg`, one for Apple silicon and one for Intel) and Linux (AppImage),
+  attached to each release from this one on. They are not signed.
+- Nothing changed in what the app does.
 
 ## 0.1.0 (2026-11-11)
 

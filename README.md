@@ -9,14 +9,33 @@ API billing.
 
 ## Requirements
 
+The app drives programs that have to be installed already, whichever way you run it:
+
 - Claude Code CLI on `PATH`, logged in (`claude`, then `/login`). On Windows it must be the native install (`claude.exe`).
 - `git`, and the GitHub CLI `gh` (logged in) for issues, clone and PR merging.
-- Node.js 20+ and npm.
 - Windows: Git for Windows. Claude Code runs status lines through Git Bash, which is how cost, context and usage reach the app.
-- Linux: `python3`, `make` and `g++`, because the terminal library (`node-pty`) compiles on install there. Kernel CPU
-  limits need systemd 252 or later (Ubuntu 24.04, Debian 12, Fedora 40); older systems fall back to pausing and resuming.
+- Linux: kernel CPU limits need systemd 252 or later (Ubuntu 24.04, Debian 12, Fedora 40); older systems fall
+  back to pausing and resuming.
 
-## Run
+## Install
+
+Every version's installers are on the [releases page](https://github.com/wacioc/claudinho/releases/latest).
+They are not signed, so Windows and macOS ask once before the first start.
+
+| System | File | Installing, and the first start |
+|---|---|---|
+| Windows, 64-bit | `claudinho-<version>-win-x64.exe` | Run it. Windows says it protected your PC: choose **More info**, then **Run anyway**. It installs for your user, without admin rights, adds claudinho to the Start menu and the desktop, and starts it. |
+| macOS, Apple silicon | `claudinho-<version>-mac-arm64.dmg` | Open it and drag claudinho to Applications. macOS refuses the first start. Then open System Settings, go to Privacy & Security, and choose **Open Anyway** there; the button stays for about an hour. |
+| macOS, Intel | `claudinho-<version>-mac-x64.dmg` | The same. |
+| Linux, x86-64 | `claudinho-<version>-linux-x86_64.AppImage` | Make it executable (`chmod +x`) and run it. It needs glibc 2.34 or later, which Ubuntu 22.04 and Debian 12 have. |
+
+The app does not update itself: for a newer version, install that version's file the same way. Settings and
+saved sessions are kept in your user folder, apart from the app.
+
+## Run from source
+
+This needs Node.js 20 or later with npm, and on Linux also `python3`, `make` and `g++`, because the terminal
+library (`node-pty`) compiles on install there.
 
 ```bash
 git clone https://github.com/wacioc/claudinho.git && cd claudinho
@@ -27,7 +46,7 @@ npm test                       # self-check for the logic in lib.js
 npm run check:cpu              # real-load check of the CPU limits; keeps every core busy for three to four minutes
 ```
 
-The first start downloads the Electron binary. There are no installers yet; add `electron-builder` when you want them.
+The first `npm install` downloads the Electron binary.
 
 ## What you get
 
@@ -168,7 +187,13 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   source folder.
 - The version is the one in `package.json`. `npm version patch` (or `minor`, `major`) raises it there and in
   the lock file, commits, and tags the commit `vX.Y.Z`; [CHANGELOG.md](CHANGELOG.md) says what each version
-  holds.
+  holds. `git push --follow-tags` then publishes it: the tag starts the `installers` workflow, which builds
+  the installer of each system on a machine of that system, starts every packaged app once, and attaches the
+  installers to the version's release.
+- `npm run dist` builds the installer of the system it runs on into `dist/`, with
+  [electron-builder](https://www.electron.build); the settings are under `build` in `package.json`.
+  `npm run check:pack -- <packaged executable>` starts a packaged copy and checks what packaging can break
+  (see the top of `pack-check.js`).
 - Instances started while testing are real Claude Code sessions: they use your subscription and, with Remote
   Control on, show up on your other devices.
 - `CLAUDINHO_CPU=throttle` forces the pause-and-resume CPU mechanism on Linux. It is the one macOS uses, so it
@@ -218,10 +243,20 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   all of its threads.
 - Closing an instance stops Claude Code but not the processes it left running; those are no longer limited.
   The exception is the Windows case above, where the worktree goes too.
-- What has been run where: the whole app on Windows only. The CPU limits also on Linux (Ubuntu 24.04 under WSL,
-  both mechanisms) and, with `npm run check:cpu`, on a Mac (macOS 26, Apple silicon, 5 cores, a GitHub Actions
-  runner). The app itself has not been run on macOS or Linux yet, and that includes worktree removal and
-  resuming.
+- The installers are not signed, which is why Windows and macOS ask before the first start. A Windows PC with
+  Smart App Control turned on blocks the installer and offers no way to allow one app: run from source there,
+  or turn Smart App Control off.
+- On Ubuntu 24.04 and later the AppImage runs without Chromium's sandbox. Ubuntu lets only programs with an
+  AppArmor profile create user namespaces, which that sandbox is built on. The AppImage's launcher tests for
+  this and then starts the app without the sandbox instead of failing. The window only ever loads the app's
+  own files. Where user namespaces are open to every program, the sandbox stays on.
+- The app carries Electron's default icon.
+- What has been run where: a person has used the whole app on Windows only, from source and as the packaged
+  app. On macOS and Linux the packaged app of each release is started once on a hosted machine
+  (`pack-check.js`): it comes up, opens a folder and runs an instance in a terminal, with a stand-in for Claude
+  Code. The real Claude Code has not been run in the app there, and neither have worktree removal and
+  resuming. The CPU limits were checked on Linux (Ubuntu 24.04 under WSL, both mechanisms) and, with
+  `npm run check:cpu`, on a Mac (macOS 26, Apple silicon, 5 cores, a GitHub Actions runner).
 
 ## License
 
