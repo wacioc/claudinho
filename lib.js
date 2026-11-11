@@ -84,6 +84,37 @@ function mapIssue(n) {
   };
 }
 
+// ---------- pull requests ----------
+
+const PR_FIELDS = 'number,title,url,isDraft,headRefName,baseRefName,author,updatedAt,reviewDecision,statusCheckRollup';
+
+// A pull request's checks in one word, from `statusCheckRollup`: check runs (status, conclusion) and commit
+// statuses (state). Whatever has ended and is not a success, neutral or skipped counts as failing, so a
+// conclusion this code has never heard of is not shown as fine.
+function checksOf(rollup) {
+  const kinds = (rollup || []).map(c => {
+    if (c.status ? c.status !== 'COMPLETED' : /^(PENDING|EXPECTED)$/.test(c.state)) return 'running';
+    return /^(SUCCESS|NEUTRAL|SKIPPED)$/.test(c.conclusion || c.state) ? 'passing' : 'failing';
+  });
+  const failing = kinds.filter(k => k === 'failing').length;
+  return { state: failing ? 'failing' : kinds.includes('running') ? 'running' : kinds.length ? 'passing' : 'none', failing, total: kinds.length };
+}
+
+// p: one row of `gh pr list --json` with PR_FIELDS.
+function mapPr(p) {
+  return {
+    number: p.number, title: p.title, url: p.url, draft: !!p.isDraft, branch: p.headRefName, base: p.baseRefName,
+    author: p.author ? p.author.login : '', updatedAt: p.updatedAt, review: p.reviewDecision || '', checks: checksOf(p.statusCheckRollup),
+  };
+}
+
+// ---------- groups ----------
+
+// A group is a name that sessions share. Nothing, or only spaces, means "in no group".
+function groupName(text) {
+  return String(text == null ? '' : text).replace(/\s+/g, ' ').trim().slice(0, 40).trim() || null;
+}
+
 function parseGitHub(remoteUrl) {
   // ponytail: github.com only; loosen the host match when GitHub Enterprise matters.
   const m = /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\s*$/.exec(remoteUrl || '');
@@ -144,6 +175,10 @@ function instanceSettings({ statusFile, hookUrl, userStatusLine }) {
       PreToolUse: [{ matcher: 'AskUserQuestion', hooks: hook }],
       PermissionRequest: [{ hooks: hook }],
       Stop: [{ hooks: hook }],
+      // The first prompt going in is the one sign that the session's SessionStart hooks are done: Claude Code
+      // holds a prompt back until they have finished, and reports nothing else when they do. (An http hook
+      // cannot be put on SessionStart itself, and hooks of one event run side by side in no set order.)
+      UserPromptSubmit: [{ hooks: [{ type: 'http', url: hookUrl }] }],
     },
   };
 }
@@ -483,6 +518,7 @@ function homePath(home, rel) {
 
 module.exports = {
   worktreeName, openBlockers, defaultTemplate, renderTemplate, issuePrompt, prAction, issuesQuery, mapIssue, parseGitHub,
+  PR_FIELDS, checksOf, mapPr, groupName,
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,
   childEnv, isInside, realPath, samePath, parseWorktrees, labelFor, scanConfig, configPath, ROOT_FILES, scanHome, homePath,
   SAMPLE_SECONDS, samplerCommand, cpuSeconds, parseProcs, treeOf, treeUsage, byName,

@@ -1,8 +1,8 @@
 # claudinho
 
-A desktop monitor (Electron) for the Claude Code instances running in a repo: live terminals, their worktrees,
-GitHub issues with dispatch into worktrees, an editor for the `.claude` setup, per-instance CPU limits, and
-resuming every session after the app stops.
+A desktop monitor (Electron) for the Claude Code instances running in a repo: live terminals in groups, their
+worktrees, GitHub issues with dispatch into worktrees, the open pull requests, an editor for the `.claude`
+setup, per-instance CPU limits, and resuming every session after the app stops.
 
 - [README.md](README.md): what it does, how to run it, and its limits.
 - [docs/HOW-THIS-WAS-BUILT.md](docs/HOW-THIS-WAS-BUILT.md): the brief, the decisions and their reasons, the
@@ -65,6 +65,12 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
   `.github/workflows/cpu-check.yml`, started by hand from the Actions tab.
 - Other load on the machine moves the `check:cpu` numbers. Read the figures, and with `CPU_CHECK_VERBOSE=1` the
   per-sample trace, not only the verdicts.
+- The start order of a batch is tested in a scratch repository whose `.claude/settings.json` has a slow
+  `SessionStart` command hook that writes down when it begins and ends, in which folder. Two set-ups must
+  never overlap. Issues can be handed to `dispatch` directly; with `GH_REPO` set, `gh` finds a repository for
+  the blocker lookup although the scratch folder has no GitHub remote.
+- The Pull requests tab is tested read-only in an empty folder whose `origin` is a public repository with
+  many open pull requests. Nothing is started there.
 - `pack-check.js` starts no real Claude Code session. On macOS and Linux a stand-in plays Claude Code; on
   Windows it starts no instance. The packaged app with the real Claude Code is tried by hand: after
   `npm run dist`, start `dist/win-unpacked/claudinho.exe` like any other test copy.
@@ -83,4 +89,4 @@ A version whose tag is not on GitHub has no release.
   machines by `pack-check.js`, with a stand-in for Claude Code, and the CPU limits were checked.
 - The installers are not signed and carry Electron's default icon. A packaged build must keep Electron's
   `RunAsNode` fuse on (see `cpu.js`); `pack-check.js` fails when it is off.
-- The open points are listed in the README under "Limits" and in section 9 of the build history.
+- The open points are listed in the README under "Limits" and in section 10 of the build history.

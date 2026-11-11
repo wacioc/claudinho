@@ -23,6 +23,7 @@
   <button class="tab active" data-view="instances">Instances <span id="n-instances"></span></button>
   <button class="tab" data-view="worktrees">Worktrees <span id="n-worktrees"></span></button>
   <button class="tab" data-view="issues">Issues <span id="n-issues"></span></button>
+  <button class="tab" data-view="prs">Pull requests <span id="n-prs"></span></button>
   <button class="tab" data-view="config">.claude</button>
   <span id="setup" class="chips"></span>
 </nav>
@@ -32,6 +33,8 @@
       <button id="btn-new">+ New instance</button>
       <button id="btn-worktree">+ New worktree…</button>
       <button id="btn-resume-all" class="primary" hidden>Resume all interrupted</button>
+      <label title="Sessions that were started in a terminal or another app show up as status-only cards. This takes them out of the view."><input type="checkbox" id="hide-outside"> Hide sessions started outside claudinho</label>
+      <span id="n-outside" class="hint"></span>
       <span id="queue" class="chips"></span>
     </div>
     <div id="scroll">
@@ -61,6 +64,13 @@
     </div>
     <div id="issues"></div>
   </section>
+  <section id="view-prs" hidden>
+    <div class="toolbar">
+      <button id="btn-refresh-prs">↻ Refresh</button>
+      <span class="hint">The open pull requests of this repository, drafts and those ready for review. A click on a title opens it on GitHub.</span>
+    </div>
+    <div id="prs"></div>
+  </section>
   <section id="view-config" hidden>
     <aside id="tree"></aside>
     <div id="editor"><div class="empty">Pick a file on the left to view or edit it.</div></div>
@@ -71,6 +81,7 @@
 <div id="toast" hidden></div>
 <datalist id="models"><option value="fable"><option value="opus"><option value="sonnet"><option value="haiku"></datalist>
 <datalist id="worktrees"></datalist>
+<datalist id="groups"></datalist>
 <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
 <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
 <script src="app.js"></script>

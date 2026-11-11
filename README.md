@@ -52,9 +52,10 @@ The first `npm install` downloads the Electron binary.
 
 | Tab | What it shows |
 |---|---|
-| **Instances** | Every Claude Code instance as a live terminal, titled with its worktree (or the folder name), with model, context window, API-equivalent cost, uptime, and the CPU and memory used by it and everything it started. Click one for the full terminal, a per-process breakdown, its environment variables, the auto-merge checkbox and the input level. Sessions started outside the app appear as status-only cards, and sessions that were open when the app last stopped appear as cards with a Resume button. |
+| **Instances** | Every Claude Code instance as a live terminal, titled with its worktree (or the folder name), with model, context window, API-equivalent cost, uptime, and the CPU and memory used by it and everything it started. Click one for the full terminal, a per-process breakdown, its environment variables, the auto-merge checkbox and the input level. Sessions that belong to a group carry its name and colour. Sessions started outside the app appear as status-only cards, which a filter can hide, and sessions that were open when the app last stopped appear as cards with a Resume button. |
 | **Worktrees** | Every worktree under `.claude/worktrees`: its branch, whether it holds uncommitted changes or commits that exist nowhere else, its last commit, and the session at work in it. Each can be removed from here. |
 | **Issues** | Open issues by default, with the issues blocking each one. Select one or many, right-click, "Tackle with Claude Code". |
+| **Pull requests** | The repository's open pull requests, drafts and those ready for review: branch, checks, review state, and the session at work on each. A click on a title opens it on GitHub. |
 | **.claude** | Everything under `.claude` and `.github` of the open folder, and your own configuration from the home folder (`~/.claude`): `CLAUDE.md`, `settings.json`, agents, skills, commands, rules. All of it is editable inline. Saving a file of the open folder offers to commit and push. "New skill" and "New agent" generate one from a prompt in a terminal, where Claude can ask follow-up questions. |
 
 The header shows the app's version, the logged-in account, and the 5-hour and 7-day usage as last reported by
@@ -86,6 +87,24 @@ The next time the app starts, whatever was open is back on the Instances tab as 
 the app was quit, crashed, or lost power. **Resume** continues that conversation in its worktree with its
 settings; **Forget** drops the card and leaves the conversation to `claude --resume`. An instance that had not
 exchanged a message yet has no conversation to continue and is started again the way it was started.
+
+### Groups
+
+A group is a name that sessions share. On the Instances tab every card of a group carries the group's name and
+a stripe in the group's colour, and the cards of one group sit next to each other.
+
+- Several issues started together are a group from the start. The start dialog proposes a name made of their
+  numbers; type another one, or an existing group's name to add them to that group.
+- Any instance can be put into a group, moved to another or taken out: the **Group** field in its detail view.
+  Clearing the field takes it out.
+- The group is saved with the session, so it is still there after a restart, on the interrupted card and on
+  the resumed instance.
+
+### Sessions started outside the app
+
+Claude Code sessions that run in the folder but were started elsewhere (a terminal, the desktop app) show up
+as status-only cards. **Hide sessions started outside claudinho** on the Instances tab takes them out of the
+view, and says how many it hides. The choice is remembered.
 
 ### Input levels (per instance)
 
@@ -119,7 +138,14 @@ for that start only. Only placeholders are supported: a template with `{% … %}
 filters or an unknown name is refused when you save or start, with the reason, so that nothing half-filled
 reaches Claude.
 
-With several issues selected you also choose how many agents run at once (max 4) and the autonomy:
+Worktrees are created one at a time. A repository can set a fresh worktree up in a `SessionStart` hook (install
+dependencies, copy files), and two of those running side by side get in each other's way. So the next issue's
+worktree is created only when the session in the previous one has finished its `SessionStart` hooks. Until
+then that card says "starting", and the queued issues say which one they are waiting for. How many agents then
+work at once is still the number you choose.
+
+With several issues selected you also choose how many agents run at once (max 4), the group's name (see
+[Groups](#groups)) and the autonomy:
 
 | Autonomy | Behaviour |
 |---|---|
@@ -170,7 +196,11 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   Claude Code plus everything it started. CPU is a share of the whole machine, as Task Manager shows it.
 - CPU limits live in `cpu.js`: one mechanism per operating system behind the same calls, and one sharing policy
   (`shareCpu` in `lib.js`) for the systems whose kernel cannot share by weight.
-- Issues come from `gh api graphql`; blockers are GitHub's native issue dependencies.
+- Issues come from `gh api graphql`; blockers are GitHub's native issue dependencies. Pull requests come from
+  `gh pr list`.
+- "Finished its `SessionStart` hooks" is read from a fourth hook, `UserPromptSubmit`: Claude Code holds the
+  first prompt back until those hooks are done, and gives no other sign of it. The status line and
+  `claude agents` both react while the hooks are still running.
 - Worktrees come from `git worktree list`. Before one is removed, `git status` and `git rev-list` say what would
   be lost with it; then it goes with `git worktree remove` and `git branch -D`.
 - What a restart needs is in `state.json` in the app's data folder, next to the settings: per open instance its
@@ -210,7 +240,14 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   and issues that were still queued for dispatch are not remembered.
 - Run one copy of the app per data folder. Two copies write the same state file, and the last one to save
   wins; give a second copy its own `--user-data-dir`.
-- Sessions started elsewhere are status-only: a terminal cannot be attached to them.
+- Sessions started elsewhere are status-only: a terminal cannot be attached to them, and they cannot be put
+  into a group.
+- One worktree at a time holds for issues sent from the Issues tab, which always start with a prompt. A
+  session started without a prompt gives no sign that its `SessionStart` hooks are done, so "Resume all
+  interrupted" and worktrees started by hand are not held back. A session that stops at a dialog before its
+  first prompt (a folder to trust, a login) keeps the queue waiting until the dialog is answered or the
+  instance is closed.
+- The Pull requests tab lists the first 200 open pull requests.
 - With Remote Control on, a permission prompt can also be answered from your other devices, whichever comes first.
 - From the home folder, the editor lists what you write yourself: `CLAUDE.md`, `settings.json`,
   `keybindings.json`, and what is under `agents`, `commands`, `output-styles`, `rules` and `skills/<name>`.

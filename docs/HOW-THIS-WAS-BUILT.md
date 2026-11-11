@@ -74,6 +74,8 @@ Requests that followed, in order:
    Worktrees section, the home folder's configuration in the editor, a default prompt in Jinja2 syntax, saved
    state for resuming after a power cut, and a version number. Section 7 covers it.
 8. Installers for Windows, macOS and Linux. Section 8 covers it.
+9. A fourth round: the open pull requests, groups of sessions, a filter for sessions started elsewhere, and
+   batch worktrees that start one after another. Section 9 covers it.
 
 ## 2. Four questions, four answers
 
@@ -511,8 +513,104 @@ Not exercised:
 | On Linux step 1 failed with "bad option: --no-sandbox". | The AppImage's launcher puts that flag in front of the arguments, and Node refuses it. | The check passes the flag itself, behind `--`, where it is only an argument. The app's own helper process is not affected: it starts the binary inside the image, not the launcher. |
 | Step 1 timed out on the Intel image. | An Intel program on Apple silicon is translated before its first start, and for a binary of this size that took more than the minute the check allowed. | Three minutes. |
 
-## 9. Still open
+## 9. The fourth round: pull requests, groups, one worktree at a time
 
+Still the same day, the owner asked for four things, and for a fifth while the work was under way:
+
+1. A section that shows the open pull requests, draft or ready for review.
+2. Groups of Claude Code sessions. Issues started as a batch are in a group from the start.
+3. Grouped sessions marked in the viewer, so that it is obvious.
+4. A filter that takes the sessions not started from claudinho out of the view.
+5. When several worktrees are spawned at the same time, do not start them in parallel: wait for the
+   `SessionStart` hook to finish, so that whatever a worktree configures is done before the next one is created.
+
+### How each was read, and why
+
+**Pull requests** come from `gh pr list --json`, which lists open ones by default, drafts included. The tab only
+shows them; a click on a title opens the pull request on GitHub. Two things were added to what was asked,
+because the data was already there: the checks in one word, and the session at work on the pull request (the
+one that reported it, or the one on its branch). For the checks, whatever has ended and is not a success,
+neutral or skipped counts as failing, so that a conclusion this code has never heard of is not shown as fine.
+
+**A group is a name, and nothing else.** There is no list of groups to keep in step: a group exists as long as
+a session carries its name. Its colour is worked out from the name, so it is the same on every card and after
+a restart without being stored anywhere.
+
+- A batch gets its name in the start dialog, which proposes the issues' numbers. The main process refuses a
+  batch without a name, so "a batch is a group" does not depend on the dialog.
+- The name can be changed, or cleared, in the instance's detail view. That covers single instances too.
+- It is written into the session's record, so the interrupted card and the resumed instance still have it.
+- The cards of a group are brought together with the CSS `order` property. The terminals are not moved in the
+  page for it.
+
+Not built, because not asked: actions on a whole group (rename, close), a group field when a single instance
+is started, and groups for sessions started outside the app.
+
+**The filter** is a checkbox on the Instances tab. It hides the outside sessions' cards, takes them out of the
+number on the tab, and says how many it hides. It is remembered where the start dialog's defaults already
+were, in the window's own storage.
+
+**One worktree at a time** needed an answer first: how does the app know that a session's `SessionStart` hooks
+are done? The hooks page says three things that matter here.
+
+- `SessionStart` accepts only command and MCP-tool hooks. The app's hooks are HTTP hooks, so it cannot put one
+  on that event.
+- The hooks of one event run side by side, in no set order. A hook of the app's own could not tell when the
+  repository's had finished.
+- "A prompt you send while SessionStart hooks are still running doesn't reach Claude until they finish."
+
+Nothing is documented as the sign that they have finished, so it was measured. A session was started the way
+the app starts one, with a slow `SessionStart` hook standing in for a repository's set-up, on Claude Code
+2.1.322:
+
+| Seconds after the start | With a first prompt, hook of 12 s | Without a prompt, hook of 8 s |
+|---|---|---|
+| The slow hook begins, inside the new worktree | 1.8 | 1.4 |
+| The status line runs | 1.9 | 1.7 |
+| `claude agents --json` reports the session | 2.3, as busy | 2.3, as idle |
+| The slow hook ends | 13.9 | 9.4 |
+| `UserPromptSubmit` for the first prompt | 13.9 | never |
+
+The status line and `claude agents` react while the hook is still running, so neither can be used. The first
+prompt going in is the sign, and it comes at the moment the hook ends. So every instance's settings now carry
+a fourth hook, `UserPromptSubmit`. A new worktree with a first prompt counts as "starting" until that hook
+arrives, and while one is starting the pool creates no other. This holds for every issue sent from the Issues
+tab, a batch or two single ones in a row.
+
+There is no time limit on the wait. Claude Code itself gives up on a hook after ten minutes by default, and a
+queue that is waiting says so: the card reads "starting", the queued issues name the one they wait for. A
+limit of the app's own would start the next worktree in exactly the case the owner wanted to rule out.
+
+### How it was verified
+
+On Windows, with the window driven as before, on the smallest model and a prompt that asks for one word back.
+
+| What was done | What happened |
+|---|---|
+| Three issues as one batch, three agents at once, in a scratch repository whose `SessionStart` hook takes ten seconds and writes down when it begins and ends. | The set-ups ran from 2.2 to 12.2 s, 14.4 to 24.4 s and 27.1 to 37.1 s: never two at once. Each next worktree was created about a second after the prompt before it had gone in. The cards read "starting", the chips "queued #2, after #1 has started". |
+| The same batch sent to the main process without a group name; then the dialog. | Refused with the reason. The dialog proposed "#1 #2 #6" and would not start with the name emptied. |
+| The three sessions on the Instances tab, beside one started by hand. | All three with the stripe and the name, in one colour, next to each other; the fourth without. |
+| The fourth put into a group in its detail view, moved to the batch's group, taken out again. | Each change showed at once on the card and in the field. |
+| Every process of the app killed with the batch open; restart; one session resumed. | The records had the group, the interrupted cards showed it, and the resumed instance kept it. |
+| A session started outside the app, then the filter. | Its card went, "1 session hidden" appeared, the number on the tab went from 5 to 4, and the choice was still set after the window was reloaded. |
+| The Pull requests tab in an empty folder whose remote is a public repository. | 59 rows, 34 of them drafts, the same as GitHub answered when asked directly. Checks read passing, "1 of 25 failing" or nothing; reviews read required, approved or changes requested. |
+| A made-up instance on the first pull request's branch. | The Session cell linked to it and showed its group. |
+| The tab in a folder without a GitHub remote. | It said so. |
+
+Not exercised:
+
+- A pull request opened by a session of the app, in the Session column. The instance above was made up.
+- A `SessionStart` hook that fails, or one that runs into its time limit.
+- A repository with more than 200 open pull requests.
+- Any of this on macOS or Linux.
+
+## 10. Still open
+
+- "Resume all interrupted", and worktrees started by hand, are not held back one after another. A session
+  that starts without a prompt gives no sign that its `SessionStart` hooks are done (see the table in
+  section 9).
+- A group cannot be renamed or closed as a whole, and sessions started outside the app cannot be put into one.
+- The Pull requests tab shows and links; it does not merge, and it stops at 200.
 - A person has only used the app on Windows. On macOS and Linux it has been started by `pack-check.js`, with a
   stand-in for Claude Code; everything in section 7 is untried there.
 - The effect of App Nap on the app's timers was not measured. The design avoids depending on it.
@@ -532,7 +630,7 @@ Not exercised:
 - A flag placed before the `.` on the command line makes the app open its own source folder (see the table
   above). The app could find the folder argument more carefully.
 
-## 10. Continuing the work
+## 11. Continuing the work
 
 - **Windows** is the development machine. `npm run check:cpu` runs the job-object mechanism directly.
 - **Linux** was a WSL distribution (Ubuntu 24.04, systemd 255). The default mechanism there is the kernel one;
@@ -558,17 +656,23 @@ Not exercised:
 - **The other two systems' installers** can only be built on those systems. The `installers` workflow does it;
   started by hand from the Actions tab it builds and checks without publishing, and the installers can be
   downloaded from the run for a week.
+- **The start order of a batch** is tested in a scratch repository whose `.claude/settings.json` has a slow
+  `SessionStart` command hook that appends a line when it begins and when it ends, each with the time and its
+  folder. Issues can be handed to the `dispatch` call directly; with `GH_REPO` set, `gh` has a repository for
+  the blocker lookup although the folder has no GitHub remote.
+- **The Pull requests tab** is tested read-only: an empty folder with `git init` and an `origin` that points at
+  a public repository with many open pull requests.
 - This repository has no `docs/PROCESS.md` on purpose. The app, like the owner's helper, tells an agent to
   follow that file when it exists, and this record is a history, not a process to follow.
 
-## 11. Sources
+## 12. Sources
 
 The owner's rule for the session was to name the documentation before building on it. These are the pages the
 work relied on.
 
 **Claude Code** (`https://code.claude.com/docs/en/…`): `hooks`, `statusline`, `settings`, `cli-reference`,
 `worktrees`, `sessions`, `sub-agents`, `skills`, `authentication`, `env-vars`, `model-config`,
-`permission-modes`, `claude-directory`.
+`permission-modes`, `claude-directory`, `agent-view`.
 
 **git**
 
@@ -586,7 +690,8 @@ work relied on.
 
 - <https://docs.github.com/en/rest/issues/issue-dependencies>
 - <https://docs.github.com/en/graphql/reference/objects>
-- <https://cli.github.com/manual/gh_api> and <https://cli.github.com/manual/gh_pr_merge>
+- <https://cli.github.com/manual/gh_api>, <https://cli.github.com/manual/gh_pr_merge> and
+  <https://cli.github.com/manual/gh_pr_list>
 - <https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax>
 - <https://docs.github.com/en/actions/reference/runners/github-hosted-runners>
 

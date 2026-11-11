@@ -4,6 +4,26 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.2.0 (2026-11-11)
+
+**Instances**
+
+- Groups: a name that sessions share. The cards of a group carry its name and a stripe in its colour, and sit
+  next to each other. Any instance can be put into a group, or taken out, in its detail view, and the group is
+  still there after a restart.
+- A filter on the Instances tab hides the sessions that were started outside the app.
+
+**Issues**
+
+- Several issues started together are a group from the start.
+- Worktrees are created one at a time: the next one waits until the session in the previous one has finished
+  its `SessionStart` hooks, so two worktrees are never being set up side by side.
+
+**Pull requests**
+
+- A new tab with the repository's open pull requests, drafts and those ready for review, with their checks,
+  review state and the session at work on each.
+
 ## 0.1.1 (2026-11-11)
 
 - Installers for Windows (`.exe`), macOS (`.dmg`, one for Apple silicon and one for Intel) and Linux (AppImage),

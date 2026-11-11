@@ -1,5 +1,6 @@
 /* global api, Terminal, FitAddon */
-// Renderer: four views (instances, worktrees, issues, .claude) drawn from the state the main process pushes.
+// Renderer: five views (instances, worktrees, issues, pull requests, .claude) drawn from the state the main
+// process pushes.
 
 const $ = s => document.querySelector(s);
 
@@ -26,7 +27,7 @@ let detailId = null, openWhenReady = null, shownRepo;
 let issues = [], issuesFor = null, lastIdx = null;
 const selected = new Set();
 let configFiles = [], openFile = null, dirty = false, declined = '';
-const prefs = { model: 'opus', effort: 'xhigh', level: 'manual' };   // claude_worktree's defaults
+const prefs = { model: 'opus', effort: 'xhigh', level: 'manual', hideOutside: false };   // claude_worktree's defaults; the Instances filter
 try { Object.assign(prefs, JSON.parse(localStorage.getItem('prefs') || '{}')); } catch { /* keep defaults */ }
 
 function toast(msg) {
@@ -125,9 +126,26 @@ const launchFields = () => [
   { key: 'effort', label: 'Effort', type: 'select', value: prefs.effort, options: EFFORTS },
   { key: 'level', label: 'When input is needed', type: 'select', value: prefs.level, options: LEVELS, hint: `Covers Claude's questions and tool-permission prompts. Timed waits ${state.settings.timedMinutes} min.` },
 ];
+// v: what a start dialog returned; without it, `prefs` is stored as it is.
 function savePrefs(v) {
-  Object.assign(prefs, { model: v.model, effort: v.effort, level: v.level });
+  Object.assign(prefs, v && { model: v.model, effort: v.effort, level: v.level });
   try { localStorage.setItem('prefs', JSON.stringify(prefs)); } catch { /* not persisted this time */ }
+}
+
+// ---------- groups ----------
+
+// A group is a name that sessions share. Its colour is worked out from the name, so it is the same after a
+// restart and on every card.
+function groupColor(name) {
+  let hue = 0;
+  for (const ch of name) hue = (hue * 31 + ch.codePointAt(0)) % 360;
+  return `hsl(${hue} 70% 68%)`;
+}
+const groupChip = name => h('span.group', { title: `Group: ${name}`, style: `--group:${groupColor(name)}` }, name);
+// The stripe in the group's colour down the side of a card.
+function stripe(card, group) {
+  card.classList.toggle('grouped', !!group);
+  card.style.setProperty('--group', group ? groupColor(group) : '');
 }
 
 // ---------- top bar ----------
@@ -174,6 +192,7 @@ const IS_MAC = navigator.platform.startsWith('Mac');
 function statusOf(i) {
   if (i.exited) return { text: `exited${i.exitCode ? ` (${i.exitCode})` : ''}`, cls: 'off' };
   if (i.pending.length) return { text: 'needs input', cls: 'wait' };
+  if (i.starting) return { text: 'starting', cls: 'busy' };   // a new worktree, still running its SessionStart hooks
   const s = i.session.status;
   if (s === 'waiting') return { text: `needs input${i.session.waitingFor ? `: ${i.session.waitingFor}` : ''}`, cls: 'wait' };
   if (s === 'busy') return { text: 'working', cls: 'busy' };
@@ -210,8 +229,10 @@ function createCard(inst) {
   term.loadAddon(fit);
   const host = h('div.term-host'), wrap = h('div.term-wrap', host);
   const p = {
-    title: h('span.title'), badge: h('span.badge'), meta: h('div.meta'), up: h('span.chip'), pending: h('div.pending'),
+    title: h('span.title'), group: h('span.group'), badge: h('span.badge'), meta: h('div.meta'), up: h('span.chip'), pending: h('div.pending'),
     info: h('dl'), env: h('div.env'), procs: h('div.procs'),
+    groupIn: h('input', { type: 'text', list: 'groups', maxLength: 40, placeholder: 'none', title: 'Sessions with the same group name are marked as belonging together. Clear the name to take this one out of its group.',
+      onchange: e => call('setInstance', inst.id, { group: e.target.value }) }),
     merge: h('input', { type: 'checkbox', onchange: e => call('setInstance', inst.id, { autoMerge: e.target.checked }) }),
     level: h('select', { onchange: e => call('setInstance', inst.id, { level: e.target.value }) }, LEVELS.map(([v, text]) => h('option', { value: v }, text))),
     filter: h('input', { type: 'search', placeholder: 'filter by name…', oninput: () => renderEnv(t) }),
@@ -219,12 +240,13 @@ function createCard(inst) {
       [['low', 'Low: half a share'], ['normal', 'Normal'], ['high', 'High: a double share']].map(([v, text]) => h('option', { value: v }, text))),
   };
   const card = h('article.card', { onclick: e => { if (detailId !== inst.id && !e.target.closest('button, .pending-box')) openDetail(inst.id); } },
-    h('div.head', p.title, p.badge, h('span.spacer'),
+    h('div.head', p.title, p.group, p.badge, h('span.spacer'),
       h('button.back', { onclick: e => { e.stopPropagation(); closeDetail(); } }, '← All instances'),
       h('button.x', { title: 'Stop and remove', onclick: e => { e.stopPropagation(); closeInstance(inst.id); } }, '✕')),
     p.meta, p.pending,
     h('div.body', wrap, h('aside.side',
       h('h3', 'Session'), p.info,
+      h('label', 'Group ', p.groupIn),
       h('h3', 'CPU and memory'), p.procs,
       h('label', 'CPU weight ', p.weight),
       h('h3', 'Automation'),
@@ -286,13 +308,21 @@ function renderPending(t, inst) {
     h('span.countdown', { 'data-deadline': p.deadline })));
 }
 
-function updateCard(t, inst) {
+// order: where the card sits in the grid. A group's cards share one, so they sit next to each other.
+function updateCard(t, inst, order) {
   t.inst = inst;
   const st = statusOf(inst), s = inst.status || {};
   t.p.title.textContent = `${inst.worktree ? '🌳' : '📁'} ${inst.label}`;
   t.p.title.title = inst.cwd;
+  t.p.group.textContent = inst.group || '';
+  t.p.group.hidden = !inst.group;
+  t.p.group.title = `Group: ${inst.group}`;
+  stripe(t.card, inst.group);
+  t.card.style.order = order;
+  if (document.activeElement !== t.p.groupIn) t.p.groupIn.value = inst.group || '';
   t.p.badge.textContent = st.text;
   t.p.badge.className = `badge ${st.cls}`;
+  t.p.badge.title = inst.starting ? 'Its first prompt has not gone in yet: Claude Code is still running the SessionStart hooks of this new worktree. Issues that are queued wait for it.' : '';
   t.card.classList.toggle('attention', st.cls === 'wait');
   t.p.meta.replaceChildren(...[
     [s.model || inst.model || 'default model', s.effort || inst.effort].filter(Boolean).join(' · '),
@@ -386,18 +416,23 @@ function renderResumable() {
   $('#btn-resume-all').hidden = list.length < 2;
   if (key === shownResumable) return;   // unchanged: leave the buttons alone, a click may be under way
   shownResumable = key;
-  $('#resumable').replaceChildren(...list.map(r => h('article.card.ext',
-    h('div.head', h('span.title', { title: r.dir }, `${r.worktree ? '🌳' : '📁'} ${r.label}`), h('span.badge.off', 'interrupted'), h('span.spacer'),
-      h('button.primary', { onclick: () => call('resume', r.id) }, 'Resume'),
-      h('button', { title: 'Take it off this list. Its conversation stays available to `claude --resume`.', onclick: () => call('forget', r.id) }, 'Forget')),
-    h('div.meta', [
-      [r.model || 'default model', r.effort].filter(Boolean).join(' · '), r.issue && `issue #${r.issue}`, r.autoMerge && 'auto-merge',
-      r.level !== 'manual' && `input: ${r.level}`, `open until ${new Date(r.savedAt).toLocaleString()}`,
-    ].filter(Boolean).map(c => h('span.chip', c))),
-    h('div.note', r.conversation ? 'Was open when the app last stopped. Resume continues its conversation where it left off.'
-      : 'Was open when the app last stopped, before Claude Code had saved a conversation for it. Resume starts it again.'))));
+  $('#resumable').replaceChildren(...list.map(r => {
+    const card = h('article.card.ext',
+      h('div.head', h('span.title', { title: r.dir }, `${r.worktree ? '🌳' : '📁'} ${r.label}`), r.group && groupChip(r.group), h('span.badge.off', 'interrupted'), h('span.spacer'),
+        h('button.primary', { onclick: () => call('resume', r.id) }, 'Resume'),
+        h('button', { title: 'Take it off this list. Its conversation stays available to `claude --resume`.', onclick: () => call('forget', r.id) }, 'Forget')),
+      h('div.meta', [
+        [r.model || 'default model', r.effort].filter(Boolean).join(' · '), r.issue && `issue #${r.issue}`, r.autoMerge && 'auto-merge',
+        r.level !== 'manual' && `input: ${r.level}`, `open until ${new Date(r.savedAt).toLocaleString()}`,
+      ].filter(Boolean).map(c => h('span.chip', c))),
+      h('div.note', r.conversation ? 'Was open when the app last stopped. Resume continues its conversation where it left off.'
+        : 'Was open when the app last stopped, before Claude Code had saved a conversation for it. Resume starts it again.'));
+    stripe(card, r.group);
+    return card;
+  }));
 }
 
+let shownGroups = '';
 function renderInstances() {
   const live = new Set(state.instances.map(i => i.id));
   for (const [id, t] of terms) {
@@ -405,22 +440,32 @@ function renderInstances() {
     if (detailId === id) closeDetail();
     t.observer.disconnect(); t.term.dispose(); t.card.remove(); terms.delete(id);
   }
-  for (const inst of state.instances) updateCard(terms.get(inst.id) || createCard(inst), inst);
+  // Cards in no group come first, then group after group by name.
+  const groups = [...new Set(state.instances.map(i => i.group).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  for (const inst of state.instances) updateCard(terms.get(inst.id) || createCard(inst), inst, inst.group ? groups.indexOf(inst.group) + 1 : 0);
+  // The names offered where a group is typed. Rebuilt only when they change: the list may be open under the cursor.
+  const names = [...new Set([...state.instances, ...(state.resumable || []), ...state.queue].map(x => x.group).filter(Boolean))].sort();
+  if (names.join('\n') !== shownGroups) { shownGroups = names.join('\n'); $('#groups').replaceChildren(...names.map(n => h('option', { value: n }))); }
   if (openWhenReady && terms.has(openWhenReady)) { openDetail(openWhenReady); openWhenReady = null; }
   renderResumable();
 
-  $('#external').replaceChildren(...state.external.map(e => {
+  // Sessions started outside the app, unless the filter hides them.
+  const outside = prefs.hideOutside ? [] : state.external;
+  $('#n-outside').textContent = prefs.hideOutside && state.external.length ? `${plural(state.external.length, 'session')} hidden` : '';
+  $('#external').replaceChildren(...outside.map(e => {
     const st = statusOf({ pending: [], session: e });
     return h('article.card.ext', { className: `card ext${st.cls === 'wait' ? ' attention' : ''}` },
       h('div.head', h('span.title', { title: e.cwd }, `${e.worktree ? '🌳' : '📁'} ${e.label}`), h('span', { className: `badge ${st.cls}` }, st.text)),
       h('div.meta', [e.name, e.kind, e.startedAt && `up ${fmtDur(Date.now() - e.startedAt)}`].filter(Boolean).map(c => h('span.chip', c)), procChips(e.procs, 1)),
       h('div.note', 'Started outside claudinho: status only, no terminal.'));
   }));
-  $('#queue').replaceChildren(...state.queue.map(j => h('span.chip.warn', { title: j.title },
-    `queued #${j.number}${j.waitingOn.length ? `, waiting on ${j.waitingOn.map(n => (n === '?' ? 'GitHub' : `#${n}`)).join(' ')}` : ''}`,
+  // Worktrees are made one at a time: while a new one is still starting, the queue waits for it.
+  const first = state.instances.find(i => i.starting), after = first && `, after ${first.issue ? `#${first.issue}` : first.label} has started`;
+  $('#queue').replaceChildren(...state.queue.map(j => h('span.chip.warn', { title: `${j.title}${j.group ? `\nGroup: ${j.group}` : ''}` },
+    `queued #${j.number}${j.waitingOn.length ? `, waiting on ${j.waitingOn.map(n => (n === '?' ? 'GitHub' : `#${n}`)).join(' ')}` : after || ''}`,
     h('button', { title: 'Remove from the queue', onclick: () => call('unqueue', j.number) }, '✕'))));
-  const total = state.instances.length + state.external.length;
-  const waiting = [...state.instances, ...state.external.map(e => ({ pending: [], session: e }))].filter(i => statusOf(i).cls === 'wait').length;
+  const total = state.instances.length + outside.length;
+  const waiting = [...state.instances, ...outside.map(e => ({ pending: [], session: e }))].filter(i => statusOf(i).cls === 'wait').length;
   $('#n-instances').textContent = `${total || ''}${waiting ? ` ⚠${waiting}` : ''}`;
   $('#empty').textContent = total || (state.resumable || []).length ? '' : !state.repo ? 'Open a folder or clone a GitHub repo to get started.'
     : 'No Claude Code instance is running in this folder. Start one above, or send one after an issue from the Issues tab.';
@@ -551,6 +596,8 @@ function showMenu(x, y, items) {
 document.addEventListener('click', () => { $('#ctx').hidden = true; });
 
 const PROMPT_HINT = 'A Jinja2 template: {{ issue_id }}, {{ issue_title }} and {{ issue_url }} are filled in for the issue.';
+// What a batch is called unless another name is typed: its issues, or the first three and how many more.
+const batchName = picked => { const n = picked.map(i => `#${i.number}`); return (n.length > 4 ? [...n.slice(0, 3), `+${n.length - 3}`] : n).join(' '); };
 async function tackle(picked) {
   const multi = picked.length > 1;
   const v = await formDialog(multi ? `Tackle ${picked.length} issues` : `Tackle #${picked[0].number}`, [
@@ -562,11 +609,52 @@ async function tackle(picked) {
     !multi && { key: 'autoMerge', label: 'Auto-merge the PR when finished', type: 'checkbox' },
     multi && { key: 'parallel', label: 'Agents running at once', type: 'number', min: 1, max: 4, value: Math.min(4, picked.length), hint: 'One instance and worktree per issue; the rest queue (max 4).' },
     multi && { key: 'autonomy', label: 'Autonomy', type: 'select', value: 'manual', options: [['manual', 'Manual: nothing gets merged automatically'], ['semi', 'Semi-auto: the agent merges if it judges it safe'], ['full', 'Full-auto: every PR is merged when its agent finishes']] },
+    multi && { key: 'group', label: 'Group', type: 'text', list: 'groups', maxLength: 40, required: true, value: batchName(picked),
+      hint: 'Issues started together are a group: their cards carry this name and its colour. An existing name adds them to that group.' },
     { key: 'template', label: 'Prompt', type: 'textarea', rows: 3, value: state.repo.template, required: true, hint: PROMPT_HINT + ' This is the default prompt, changed under ⚙; an edit here counts for this start only.' },
   ], 'Start', v => api.call('dispatch', { ...v, issues: picked.map(i => ({ number: i.number, title: i.title, url: i.url })) }));
   if (!v) return;
   savePrefs(v);
   show('instances');
+}
+
+// ---------- pull requests ----------
+
+let prs = null;   // rows from the main process; which session works on each one comes from the live state
+const REVIEWS = { APPROVED: 'approved', CHANGES_REQUESTED: 'changes requested', REVIEW_REQUIRED: 'review required' };
+
+async function loadPrs() {
+  const box = $('#prs');
+  if (!state.repo || !state.repo.github) { prs = null; $('#n-prs').textContent = ''; return box.replaceChildren(h('div.empty', 'This folder has no GitHub remote, so there are no pull requests to show.')); }
+  if (!prs) box.replaceChildren(h('div.empty', 'Loading pull requests…'));
+  try { prs = await call('prs'); } catch { prs = null; return box.replaceChildren(h('div.empty', 'Could not load the pull requests. Check that `gh` is installed and logged in.')); }
+  renderPrs();
+}
+
+let shownPrs = '';
+function renderPrs() {
+  if (!prs || $('#view-prs').hidden) return;
+  $('#n-prs').textContent = prs.length || '';
+  if (!prs.length) return $('#prs').replaceChildren(h('div.empty', 'No open pull requests.'));
+  // The session at work on a pull request: the one that reported it, or the one on its branch.
+  const rows = prs.map(pr => ({ pr, inst: state.instances.find(i => (i.pr && i.pr.number === pr.number) || (i.status && i.status.branch === pr.branch)) }));
+  const key = JSON.stringify(rows.map(r => [r.pr, r.inst && [r.inst.id, statusOf(r.inst).text, r.inst.group]]));
+  if (key === shownPrs && $('#prs table')) return;   // unchanged: leave the links alone, a click may be under way
+  shownPrs = key;
+  $('#prs').replaceChildren(h('table',
+    h('thead', h('tr', ['#', 'Title', 'State', 'Branch', 'Checks', 'Review', 'Session', 'Updated'].map(c => h('th', c)))),
+    h('tbody', rows.map(({ pr, inst }) => {
+      const c = pr.checks;
+      return h('tr',
+        h('td.num', `#${pr.number}`),
+        h('td', h('a', { title: 'Open on GitHub', onclick: () => call('openUrl', pr.url) }, pr.title), pr.author && h('span.hint', ` · ${pr.author}`)),
+        h('td', pr.draft ? h('span.hint', 'draft') : h('span.good', 'ready for review')),
+        h('td', pr.branch, h('span.hint', ` → ${pr.base}`)),
+        h('td', { className: c.state === 'failing' ? 'loss' : c.state === 'passing' ? 'good' : '' }, c.state === 'failing' ? `${c.failing} of ${c.total} failing` : c.state === 'none' ? '–' : c.state),
+        h('td', { className: pr.review === 'CHANGES_REQUESTED' ? 'loss' : pr.review === 'APPROVED' ? 'good' : '' }, REVIEWS[pr.review] || '–'),
+        h('td', inst ? [h('a', { title: 'Show this instance', onclick: () => { show('instances'); openDetail(inst.id); } }, statusOf(inst).text), inst.group && [' ', groupChip(inst.group)]] : '–'),
+        h('td.when', new Date(pr.updatedAt).toLocaleDateString()));
+    }))));
 }
 
 // ---------- .claude panel ----------
@@ -659,11 +747,12 @@ async function generate(prompt) {
 // ---------- wiring ----------
 
 function show(view) {
-  for (const v of ['instances', 'worktrees', 'issues', 'config']) $(`#view-${v}`).hidden = v !== view;
+  for (const v of ['instances', 'worktrees', 'issues', 'prs', 'config']) $(`#view-${v}`).hidden = v !== view;
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   if (view === 'instances') terms.forEach(layoutSoon);
   if (view === 'worktrees') loadWorktrees();
   if (view === 'issues' && issuesFor !== (state.repo && state.repo.path)) loadIssues();
+  if (view === 'prs') loadPrs();
   if (view === 'config') loadConfig();
 }
 
@@ -671,11 +760,12 @@ function render() {
   renderTop();
   renderInstances();
   renderWorktrees();                                // who is at work in each one may have changed
+  renderPrs();                                      // and on each pull request
   const p = state.repo && state.repo.path;
   if (p === shownRepo) return;
   shownRepo = p;                                    // another folder was opened: drop what belonged to the old one
-  issues = []; issuesFor = null; selected.clear(); openFile = null; dirty = false; declined = ''; worktrees = null;
-  $('#n-worktrees').textContent = '';
+  issues = []; issuesFor = null; selected.clear(); openFile = null; dirty = false; declined = ''; worktrees = null; prs = null;
+  $('#n-worktrees').textContent = ''; $('#n-prs').textContent = '';
   $('#editor').replaceChildren(h('div.empty', 'Pick a file on the left to view or edit it.'));
   show(document.querySelector('.tab.active').dataset.view);
 }
@@ -685,6 +775,9 @@ $('#btn-new').onclick = () => newInstance(false);
 $('#btn-worktree').onclick = () => newInstance(true);
 $('#btn-resume-all').onclick = async () => { for (const r of state.resumable.slice()) await call('resume', r.id); };
 $('#btn-refresh-worktrees').onclick = loadWorktrees;
+$('#btn-refresh-prs').onclick = loadPrs;
+$('#hide-outside').checked = !!prefs.hideOutside;
+$('#hide-outside').onchange = e => { prefs.hideOutside = e.target.checked; savePrefs(); renderInstances(); };
 $('#btn-refresh-issues').onclick = loadIssues;
 $('#issue-state').onchange = loadIssues;
 $('#issue-blocked').onchange = renderIssues;

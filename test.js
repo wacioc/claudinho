@@ -45,6 +45,27 @@ assert.strictEqual(issue.blocked, true);
 assert.deepStrictEqual(issue.blockedBy.map(b => [b.number, b.done]), [[4, true], [5, false]]);
 assert.strictEqual(lib.mapIssue({ ...issue, labels: { nodes: [{ name: 'Blocked' }] }, assignees: { nodes: [] }, blockedBy: { nodes: [] } }).blocked, true);
 assert.ok(lib.issuesQuery('OPEN').includes('states: [OPEN]') && !lib.issuesQuery('ALL').includes('states'));
+// pull requests: a draft with one failing and one running check; a ready one with nothing but successes
+const pr = lib.mapPr({
+  number: 7, title: 't', url: 'u', isDraft: true, headRefName: 'worktree-7-x', baseRefName: 'main', author: { login: 'a' }, updatedAt: 'd', reviewDecision: '',
+  statusCheckRollup: [{ __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'FAILURE' }, { __typename: 'CheckRun', status: 'IN_PROGRESS', conclusion: '' }, { __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'SKIPPED' }],
+});
+assert.deepStrictEqual(pr, { number: 7, title: 't', url: 'u', draft: true, branch: 'worktree-7-x', base: 'main', author: 'a', updatedAt: 'd', review: '', checks: { state: 'failing', failing: 1, total: 3 } });
+assert.strictEqual(lib.checksOf([{ status: 'COMPLETED', conclusion: 'SUCCESS' }, { state: 'SUCCESS' }, { status: 'COMPLETED', conclusion: 'NEUTRAL' }]).state, 'passing');
+assert.strictEqual(lib.checksOf([{ status: 'COMPLETED', conclusion: 'SUCCESS' }, { status: 'QUEUED' }]).state, 'running');
+assert.strictEqual(lib.checksOf([{ state: 'PENDING' }]).state, 'running');
+assert.strictEqual(lib.checksOf([{ state: 'ERROR' }]).state, 'failing');
+assert.strictEqual(lib.checksOf([{ status: 'COMPLETED', conclusion: 'SOMETHING_NEW' }]).state, 'failing');   // unknown is not shown as fine
+assert.deepStrictEqual(lib.checksOf(null), { state: 'none', failing: 0, total: 0 });
+assert.strictEqual(lib.mapPr({ number: 1, author: null, isDraft: false, reviewDecision: 'APPROVED' }).review, 'APPROVED');
+
+// groups: a name, tidied; nothing left means no group
+assert.strictEqual(lib.groupName('  payments   batch \n'), 'payments batch');
+assert.strictEqual(lib.groupName(''), null);
+assert.strictEqual(lib.groupName('   '), null);
+assert.strictEqual(lib.groupName(undefined), null);
+assert.strictEqual(lib.groupName('x'.repeat(39) + ' y'), 'x'.repeat(39));   // cut at 40, and no space left at the end
+
 assert.deepStrictEqual(lib.parseGitHub('git@github.com:acme/widgets.git'), { owner: 'acme', name: 'widgets' });
 assert.deepStrictEqual(lib.parseGitHub('https://github.com/acme/widgets\n'), { owner: 'acme', name: 'widgets' });
 assert.strictEqual(lib.parseGitHub('https://gitlab.com/a/b.git'), null);
@@ -76,6 +97,8 @@ assert.deepStrictEqual(lib.claudeArgs({ settingsFile: 's', model: 'opus', worktr
 const settings = lib.instanceSettings({ statusFile: '/tmp/s.json', hookUrl: 'http://127.0.0.1:1/t/i', userStatusLine: { type: 'command', command: 'mine', padding: 2 } });
 assert.strictEqual(settings.statusLine.padding, 2);
 assert.strictEqual(settings.hooks.PreToolUse[0].matcher, 'AskUserQuestion');
+// the prompt hook answers at once, so it keeps Claude Code's own short timeout instead of the hour of the others
+assert.deepStrictEqual(settings.hooks.UserPromptSubmit, [{ hooks: [{ type: 'http', url: 'http://127.0.0.1:1/t/i' }] }]);
 // normal launch: only API credentials are removed
 assert.deepStrictEqual(lib.childEnv({ PATH: 'p', Anthropic_Api_Key: 'k', ANTHROPIC_AUTH_TOKEN: 't', CLAUDE_CODE_GIT_BASH_PATH: 'b', CLAUDE_CONFIG_DIR: 'd' }),
   { PATH: 'p', CLAUDE_CODE_GIT_BASH_PATH: 'b', CLAUDE_CONFIG_DIR: 'd', COLORTERM: 'truecolor' });

@@ -96,7 +96,7 @@ function snapshot() {
     // Not the ones whose conversation is live again somewhere (resumed by hand in a terminal, say).
     resumable: interrupted.filter(r => !sessions.some(s => s.sessionId && s.sessionId === r.sessionId)).map(r => ({
       id: r.id, label: r.worktree || path.basename(r.root), worktree: r.worktree, dir: r.worktree ? path.join(r.root, '.claude', 'worktrees', r.worktree) : r.root,
-      issue: r.issue, model: r.model, effort: r.effort, level: r.level, autoMerge: r.autoMerge, savedAt: r.savedAt,
+      issue: r.issue, model: r.model, effort: r.effort, level: r.level, autoMerge: r.autoMerge, group: r.group || null, savedAt: r.savedAt,
       conversation: !!r.transcript && fs.existsSync(r.transcript),
     })),
     instances: [...instances.values()].map(i => {
@@ -106,14 +106,14 @@ function snapshot() {
         startedAt: i.startedAt, exited: i.exited, exitCode: i.exitCode, cwd: i.cwd, ...lib.labelFor(i.root, i.cwd, worktrees),
         status: i.status, session: { status: s.status || s.state, waitingFor: s.waitingFor, name: s.name },
         pending: i.pending.map(p => p.view), pr: i.pr, merge: i.merge, procs: i.exited ? undefined : procUsage.get(i.pid),
-        weight: i.weight, limit: i.limited && !i.exited ? cpu.limit(i.id) : 1,
+        weight: i.weight, limit: i.limited && !i.exited ? cpu.limit(i.id) : 1, group: i.group, starting: i.starting && !i.exited,
       };
     }),
     external: externalSessions().map(s => ({
       id: s.id || String(s.pid), name: s.name, kind: s.kind, cwd: s.cwd, startedAt: s.startedAt, status: s.status || s.state,
       waitingFor: s.waitingFor, procs: procUsage.get(s.pid), ...lib.labelFor(repo.path, s.cwd, worktrees),
     })),
-    queue: queue.map(j => ({ number: j.number, title: j.title, waitingOn: j.waitingOn })),
+    queue: queue.map(j => ({ number: j.number, title: j.title, waitingOn: j.waitingOn, group: j.group })),
   };
 }
 
@@ -122,7 +122,8 @@ function snapshot() {
 function userStatusLine() { return readJson(path.join(configDir(), 'settings.json')).statusLine; }
 
 // resume + transcript: continue that conversation instead of starting one (see "sessions on disk").
-function spawnInstance({ cwd, worktree, resume, transcript, model, effort, prompt, level = 'manual', autoMerge = false, kind = 'instance', issue = null, pooled = false, weight = 'normal' }) {
+// group: the name of the group it belongs to, if any (see lib.groupName).
+function spawnInstance({ cwd, worktree, resume, transcript, model, effort, prompt, level = 'manual', autoMerge = false, kind = 'instance', issue = null, pooled = false, weight = 'normal', group = null }) {
   if (!claudeBin) throw new Error('Claude Code CLI (claude) was not found on PATH.');
   const root = cwd || repo.path;
   const id = crypto.randomBytes(4).toString('hex');
@@ -143,7 +144,10 @@ function spawnInstance({ cwd, worktree, resume, transcript, model, effort, promp
   const limited = cpu.attach(id, proc.pid, limits);
   const inst = {
     id, kind, issue, pooled, model, effort, level, autoMerge, root, wt, prompt, proc, env, dir, statusFile, pid: proc.pid, startedAt: Date.now(),
-    cwd: wt || root, sessionId: resume || null, transcript: transcript || null,
+    cwd: wt || root, sessionId: resume || null, transcript: transcript || null, group: lib.groupName(group),
+    // A new worktree with a first prompt: until that prompt has gone in, the session is still running its
+    // SessionStart hooks, where a repository sets a fresh worktree up (see onHook and pump).
+    starting: !!(wt && prompt && !resume),
     status: null, pending: [], pr: null, merge: null, finished: false, exited: false, weight, limited,
   };
   instances.set(id, inst);
@@ -224,7 +228,7 @@ async function tick() {
 // seconds, and whenever an instance comes or goes.
 const sessionRecord = i => ({
   id: i.id, root: i.root, worktree: i.wt && path.basename(i.wt), kind: i.kind, issue: i.issue, pooled: i.pooled, model: i.model, effort: i.effort,
-  level: i.level, autoMerge: i.autoMerge, weight: i.weight, prompt: i.prompt, sessionId: i.sessionId, transcript: i.transcript, savedAt: Date.now(),
+  level: i.level, autoMerge: i.autoMerge, weight: i.weight, group: i.group, prompt: i.prompt, sessionId: i.sessionId, transcript: i.transcript, savedAt: Date.now(),
 });
 function saveSessions() {
   // An instance that ended stays on record for a moment longer: when the machine shuts down, Claude Code may
@@ -375,6 +379,11 @@ function onHook(inst, ev, res) {
   };
   if (ev.cwd) inst.cwd = ev.cwd;
   if (ev.hook_event_name === 'Stop') { reply(); onStop(inst); return; }
+  if (ev.hook_event_name === 'UserPromptSubmit') {
+    reply();
+    if (inst.starting) { inst.starting = false; push(); pump(); }   // its start hooks are done: the next worktree may come
+    return;
+  }
   const kind = lib.inputKind(ev);
   if (!kind || inst.level === 'manual') return reply();
   if (inst.level === 'auto') return reply(lib.hookReply(ev, 'recommended'));
@@ -436,6 +445,9 @@ async function pump() {
   pumping = true;
   try {
     for (const job of [...queue]) {
+      // One worktree at a time. The next is created only when the session in the one before has finished its
+      // SessionStart hooks, so two worktrees are never being set up side by side.
+      if ([...instances.values()].some(i => i.starting && !i.exited)) break;
       const active = [...instances.values()].filter(i => i.pooled && !i.exited && !i.finished).length;
       if (job.pooled && active >= poolLimit) continue;
       try {
@@ -445,7 +457,7 @@ async function pump() {
       queue.splice(queue.indexOf(job), 1);
       spawnInstance({
         cwd: job.root, worktree: lib.worktreeName(job.number, job.title), model: job.model, effort: job.effort, level: job.level,
-        autoMerge: job.autoMerge, issue: job.number, pooled: job.pooled,
+        autoMerge: job.autoMerge, issue: job.number, pooled: job.pooled, group: job.group,
         prompt: lib.issuePrompt(job.template, job, job.autonomy, saved.settings.mergeMethod),
       });
     }
@@ -526,6 +538,7 @@ const rpc = {
     if (!inst) return;
     if (['manual', 'timed', 'auto'].includes(patch.level)) inst.level = patch.level;
     if (Object.hasOwn(lib.WEIGHTS, patch.weight)) inst.weight = patch.weight;
+    if (typeof patch.group === 'string') inst.group = lib.groupName(patch.group);   // '' takes it out of its group
     if (typeof patch.autoMerge === 'boolean') {
       inst.autoMerge = patch.autoMerge;
       // Ticked after the agent already went idle: its work is finished, so merge now.
@@ -561,19 +574,26 @@ const rpc = {
     }
     return out;
   },
-  dispatch({ issues, model, effort, level, autoMerge, parallel, autonomy, template }) {
+  dispatch({ issues, model, effort, level, autoMerge, parallel, autonomy, template, group }) {
     if (!claudeBin) throw new Error('Claude Code CLI (claude) was not found on PATH.');
     lib.issuePrompt(template, issues[0]);   // a prompt that cannot be filled in is refused here, before anything is queued
     const pooled = issues.length > 1;
+    group = lib.groupName(group);
+    if (pooled && !group) throw new Error('Issues started together are a group: give it a name.');
     if (pooled) poolLimit = Math.min(4, Math.max(1, Number(parallel) || 1));
     else autonomy = autoMerge ? 'full' : undefined;
     for (const is of issues) {
       if (queue.some(j => j.number === is.number)) continue;
-      queue.push({ number: is.number, title: is.title, url: is.url, root: repo.path, model, effort, level, autonomy, template, pooled, autoMerge: autonomy === 'full', waitingOn: [] });
+      queue.push({ number: is.number, title: is.title, url: is.url, root: repo.path, model, effort, level, autonomy, template, pooled, group, autoMerge: autonomy === 'full', waitingOn: [] });
     }
     pump();
   },
   unqueue(number) { const i = queue.findIndex(j => j.number === number); if (i >= 0) queue.splice(i, 1); push(); },
+  // The open pull requests of the folder's repository, drafts included.
+  // ponytail: the first 200. Page through them with `gh api graphql`, as `issues` does, if a repo outgrows that.
+  async prs() {
+    return JSON.parse(await run('gh', ['pr', 'list', '--state', 'open', '--limit', '200', '--json', lib.PR_FIELDS], repo.path)).map(lib.mapPr);
+  },
 
   // Paths starting with "~/" are in the home config folder, the rest in the open folder.
   configList: () => ({ ...lib.scanConfig(repo.path), home: { dir: configDir(), files: lib.scanHome(configDir()).map(f => `~/${f}`) } }),
