@@ -2,6 +2,7 @@
   "name": "claudinho",
   "version": "0.1.0",
   "description": "Desktop monitor for the Claude Code instances running in a repo",
+  "license": "MIT",
   "private": true,
   "main": "main.js",
   "scripts": {

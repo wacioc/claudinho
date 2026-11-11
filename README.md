@@ -152,3 +152,7 @@ runs on with real load and prints what it measured.
 - What has been run where: the whole app on Windows only. The CPU limits also on Linux (Ubuntu 24.04 under WSL,
   both mechanisms) and, with `npm run check:cpu`, on a Mac (macOS 26, Apple silicon, 5 cores, a GitHub Actions
   runner). The app itself has not been run on macOS or Linux yet.
+
+## License
+
+[MIT](LICENSE)
