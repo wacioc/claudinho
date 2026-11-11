@@ -4,7 +4,7 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
-## 0.4.0 (not released yet)
+## 0.4.0 (2026-11-11)
 
 **Auto-merge**
 
