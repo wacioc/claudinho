@@ -450,12 +450,13 @@ settings are under `build` in `package.json`, where no comment can stand, so the
 | `npmRebuild: false` | `node-pty` and `koffi` are N-API modules. The binaries npm installs load in Electron as they are, which is how `npm start` has always run them. Rebuilding them would need a compiler on the Windows and macOS build machines. |
 | `artifactName` | One pattern for every installer, with the system and the processor in the name. By default both Mac images would get the same name. |
 | `toolsets.appimage: "1.0.3"` | The AppImage runtime that does not need FUSE 2, which current Ubuntu no longer installs. electron-builder recommends it and makes it the default in its next major version. The runtime that is the default in 26 also starts every app without Chromium's sandbox; this one does so only where the sandbox cannot work. |
-| `mac.identity: "-"`, `mac.hardenedRuntime: false` | An ad-hoc signature: valid, but naming nobody. electron-builder applies none by itself. With no signature at all, a downloaded app can be reported as damaged, with nothing offered to open it; with an ad-hoc one macOS refuses the first start and offers "Open Anyway". The hardened runtime belongs to notarised apps, and without an extra entitlement it would keep this one from loading its own native modules. |
+| `mac.identity` and `mac.hardenedRuntime` left at their defaults | electron-builder signs with the Developer ID Application certificate it finds in the keychain, or in `CSC_LINK` on the build machine, turns the hardened runtime on, and has Apple notarise the app when the `APPLE_*` variables are set (see the `installers` workflow and `CLAUDE.md`). Notarisation requires the hardened runtime. With no `build/entitlements.mac.plist` here, electron-builder's own entitlements apply: JIT, unsigned executable memory, and `disable-library-validation`, which keeps `node-pty` and `koffi` loading. Without a certificate electron-builder 26 signs nothing, not even ad hoc, and a downloaded app is reported as damaged; the workflow checks Gatekeeper's verdict and fails instead of publishing it. Up to 0.3.0 the settings were `identity: "-"` and `hardenedRuntime: false`: an ad-hoc signature that names nobody, which macOS refuses at the first start while offering "Open Anyway". |
 | `appId` | A name of its own instead of the default `com.electron.claudinho`. Windows and macOS know the installed app by it, so it should never have to change. |
 | `predist` (a script, not a setting) | `node-pty` publishes its macOS helper without the executable bit. The app repairs that at its start (see `main.js`), which cannot work on a read-only disk image. So before every build the bit is set in `node_modules`, and the packaged file has it. |
 
 **Not signed.** Signing needs a certificate for Windows and a paid developer account for macOS, and neither was
-asked for. The README says what a user sees instead. One case has no way around it: with Smart App Control on,
+asked for. The README says what a user sees instead. After 0.3.0 the owner asked for the Mac apps to be signed
+with their Developer ID; Windows still is not. One case has no way around it: with Smart App Control on,
 Windows blocks an unsigned installer and offers no exception for a single app.
 
 **A release comes from a tag, whole or not at all.** `.github/workflows/installers.yml` runs when a `v*` tag is
@@ -718,7 +719,11 @@ Not exercised:
 - A person has only used the app on Windows. On macOS and Linux it has been started by `pack-check.js`, with a
   stand-in for Claude Code; everything in section 7 is untried there.
 - The effect of App Nap on the app's timers was not measured. The design avoids depending on it.
-- The installers are not signed, the app has Electron's default icon, and it does not update itself.
+- The Windows installer is not signed, the app has Electron's default icon, and it does not update itself.
+- The signed and notarised Mac build has run on the owner's Mac only: Apple accepted both apps, Gatekeeper
+  reports them as notarised from the disk images, a copy marked as downloaded starts, and `pack-check.js`
+  passed on the Apple silicon app with the hardened runtime. The `installers` workflow has not signed yet; it
+  waits for the repository secrets.
 - A packaged build must keep Electron's `RunAsNode` fuse on, or the helper process needs another way to start.
   `pack-check.js` fails when it is off.
 - On Ubuntu 24.04 and later the AppImage runs without Chromium's sandbox. A `.deb` with an AppArmor profile
@@ -847,6 +852,10 @@ work relied on.
   <https://docs.github.com/en/actions/reference/workflows-and-actions/contexts> and
   <https://cli.github.com/manual/gh_release_create>
 - <https://support.apple.com/en-us/102445> (opening an app that is not notarised)
+- <https://developer.apple.com/help/account/certificates/create-developer-id-certificates/>
+- electron-builder 26.18.0's own code: `out/options/macOptions.d.ts` (the option docs for `identity`,
+  `hardenedRuntime`, `notarize`), `out/mac/MacTargetHelper.js` (which `APPLE_*` variables start notarisation),
+  `out/codeSign/codesign.js` (`CSC_LINK` as base64) and `templates/entitlements.mac.plist`
 - <https://support.microsoft.com/en-us/topic/what-is-smart-app-control-285ea03d-fa88-4d56-882e-6698afdb7003>
 - <https://docs.appimage.org/user-guide/troubleshooting/electron-sandboxing.html> and
   <https://discourse.ubuntu.com/t/ubuntu-24-04-lts-noble-numbat-release-notes/39890> (user namespaces)

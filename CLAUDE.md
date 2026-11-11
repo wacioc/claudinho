@@ -92,10 +92,17 @@ both package files, commits, and tags the commit `vX.Y.Z`. Then `git push --foll
 `installers` workflow, which builds and checks the installers and publishes them as that version's release.
 A version whose tag is not on GitHub has no release.
 
+The Mac apps are signed with the owner's Developer ID and notarised. The `installers` workflow takes the
+repository secrets `CSC_LINK` (the Developer ID Application certificate with its key, as base64 of a `.p12`),
+`CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`, and fails when Gatekeeper
+does not report the app as notarised. On a Mac, `npm run dist` signs with the certificate in the keychain and
+notarises when `APPLE_KEYCHAIN_PROFILE` names a profile saved with `xcrun notarytool store-credentials`.
+
 ## Not done yet
 
 - A person has only used the app on Windows. On macOS and Linux the packaged app has been started on hosted
   machines by `pack-check.js`, with a stand-in for Claude Code, and the CPU limits were checked.
-- The installers are not signed and carry Electron's default icon. A packaged build must keep Electron's
+- The Windows installer is not signed, and the installers carry Electron's default icon. The signed Mac build
+  has run on the owner's Mac, not yet in the workflow (section 11 of the build history). A packaged build must keep Electron's
   `RunAsNode` fuse on (see `cpu.js`); `pack-check.js` fails when it is off.
 - The open points are listed in the README under "Limits" and in section 11 of the build history.

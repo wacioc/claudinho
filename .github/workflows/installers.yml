@@ -18,7 +18,8 @@ jobs:
         # on a newer release does not load on an older one.
         os: [windows-latest, macos-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # The Mac build waits for Apple to notarise each of its two apps.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -27,6 +28,19 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run dist
+        if: runner.os != 'macOS'
+      # Only the Mac build gets the secrets: electron-builder reads CSC_LINK on Windows too, and would try to sign
+      # the installer there with the Mac certificate. CSC_LINK is the Developer ID Application certificate with
+      # its private key, exported as .p12 and base64-encoded; CSC_KEY_PASSWORD is the export password.
+      - name: Build, sign and notarise (macOS)
+        if: runner.os == 'macOS'
+        run: npm run dist
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       - name: Install it and start the installed app (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -39,6 +53,9 @@ jobs:
             hdiutil attach dist/*-mac-$arch.dmg -nobrowse -readonly -mountpoint /tmp/claudinho-$arch
             codesign --verify --deep --strict /tmp/claudinho-$arch/claudinho.app
             codesign -dv /tmp/claudinho-$arch/claudinho.app 2>&1 | grep -E '^(Identifier|Format|Signature|CodeDirectory)'
+            # Gatekeeper's verdict on the app. Without the secrets electron-builder signs nothing, and a downloaded
+            # app that is unsigned or not notarised is refused, so the release must not go out.
+            spctl -a -vv /tmp/claudinho-$arch/claudinho.app 2>&1 | grep 'source=Notarized Developer ID'
             node pack-check.js /tmp/claudinho-$arch/claudinho.app/Contents/MacOS/claudinho
           done
       - name: Start the AppImage (Linux)
@@ -74,6 +91,6 @@ jobs:
           merge-multiple: true
       - run: >
           gh release create "$GITHUB_REF_NAME" installers/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME"
-          --notes "Installers for Windows, macOS and Linux. They are not signed, so each system asks once before the first start: see [Install](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/README.md#install). What changed is in the [changelog](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/CHANGELOG.md)."
+          --notes "Installers for Windows, macOS and Linux. The Windows installer is not signed, so Windows asks once before the first start: see [Install](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/README.md#install). What changed is in the [changelog](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/CHANGELOG.md)."
         env:
           GH_TOKEN: ${{ github.token }}

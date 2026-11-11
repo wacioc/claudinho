@@ -20,12 +20,13 @@ The app drives programs that have to be installed already, whichever way you run
 ## Install
 
 Every version's installers are on the [releases page](https://github.com/wacioc/claudinho/releases/latest).
-They are not signed, so Windows and macOS ask once before the first start.
+The macOS apps are signed with a Developer ID and notarised by Apple. The Windows installer is not signed, so
+Windows asks once before the first start.
 
 | System | File | Installing, and the first start |
 |---|---|---|
 | Windows, 64-bit | `claudinho-<version>-win-x64.exe` | Run it. Windows says it protected your PC: choose **More info**, then **Run anyway**. It installs for your user, without admin rights, adds claudinho to the Start menu and the desktop, and starts it. |
-| macOS, Apple silicon | `claudinho-<version>-mac-arm64.dmg` | Open it and drag claudinho to Applications. macOS refuses the first start. Then open System Settings, go to Privacy & Security, and choose **Open Anyway** there; the button stays for about an hour. |
+| macOS, Apple silicon | `claudinho-<version>-mac-arm64.dmg` | Open it and drag claudinho to Applications. At the first start macOS asks whether to open an app downloaded from the internet. Versions up to 0.3.0 are not signed: macOS refuses their first start, and System Settings, Privacy & Security, offers **Open Anyway** for about an hour. |
 | macOS, Intel | `claudinho-<version>-mac-x64.dmg` | The same. |
 | Linux, x86-64 | `claudinho-<version>-linux-x86_64.AppImage` | Make it executable (`chmod +x`) and run it. It needs glibc 2.34 or later, which Ubuntu 22.04 and Debian 12 have. |
 
@@ -333,7 +334,7 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   all of its threads.
 - Closing an instance stops Claude Code but not the processes it left running; those are no longer limited.
   The exception is the Windows case above, where the worktree goes too.
-- The installers are not signed, which is why Windows and macOS ask before the first start. A Windows PC with
+- The Windows installer is not signed, which is why Windows asks before the first start. A Windows PC with
   Smart App Control turned on blocks the installer and offers no way to allow one app: run from source there,
   or turn Smart App Control off.
 - On Ubuntu 24.04 and later the AppImage runs without Chromium's sandbox. Ubuntu lets only programs with an

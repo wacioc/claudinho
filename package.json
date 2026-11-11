@@ -36,9 +36,7 @@
           "arm64",
           "x64"
         ]
-      },
-      "identity": "-",
-      "hardenedRuntime": false
+      }
     },
     "linux": {
       "target": "AppImage"
