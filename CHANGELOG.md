@@ -4,6 +4,27 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.4.0 (not released yet)
+
+**Auto-merge**
+
+- Merging is the app's job now, and it waits for the session's word. With auto-merge on, the app reads what a
+  session wrote at the end of a turn and merges its pull request once the session says it is ready: a draft
+  is marked ready, the checks are waited for, then it is merged.
+- What a session raises for debate is settled first. The app tells the session what to do about each point, up
+  to three times in a row, and merges when nothing is open. What only you can decide holds the pull request,
+  with the reason on the card.
+- A failed check or a merge conflict goes back to the session to be repaired.
+- Before, a pull request was merged as soon as a turn ended, whatever the session had written, and a draft was
+  never merged.
+
+**The app's own version**
+
+- The app looks for newer releases of itself. A button and a notification announce one, and pressing either
+  installs it and restarts the app, after asking if sessions are running. This works on Windows and Linux; on
+  macOS the button opens the release page, until the installers are signed.
+- A release holds more files from now on: beside the installers, what the update reads.
+
 ## 0.3.1 (2026-11-11)
 
 - The macOS apps are signed with a Developer ID and notarised by Apple. A downloaded copy now opens after one

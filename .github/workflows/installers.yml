@@ -46,6 +46,14 @@ jobs:
         run: |
           Start-Process -Wait (Get-Item dist\*.exe).FullName -ArgumentList '/S'
           node pack-check.js "$env:LOCALAPPDATA\Programs\claudinho\claudinho.exe"
+      - name: Let the installed app update itself to a second build (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        # A second build that claims version 99.0.0 goes into a folder of its own, which is not uploaded. The
+        # installed app is pointed at it and has to come back as that version (see pack-check.js).
+        run: |
+          npx electron-builder --publish never --config.extraMetadata.version=99.0.0 --config.directories.output=dist-next
+          node pack-check.js "$LOCALAPPDATA/Programs/claudinho/claudinho.exe" --update dist-next
       - name: Start the app from each disk image (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -58,6 +66,18 @@ jobs:
             spctl -a -vv /tmp/claudinho-$arch/claudinho.app 2>&1 | grep 'source=Notarized Developer ID'
             node pack-check.js /tmp/claudinho-$arch/claudinho.app/Contents/MacOS/claudinho
           done
+      - name: Let the app update itself to a second build (macOS)
+        if: runner.os == 'macOS'
+        # As on Windows. macOS takes an update only from the developer who signed the running app, so the second
+        # build gets the certificate too. It is not notarised: that is not asked of an update, and takes minutes.
+        # One processor type is enough here, the machine's own. The app is copied off its read-only disk image.
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          npx electron-builder --mac zip --arm64 --publish never --config.extraMetadata.version=99.0.0 --config.directories.output=dist-next --config.mac.notarize=false
+          mkdir update-try && cp -R /tmp/claudinho-arm64/claudinho.app update-try/
+          node pack-check.js update-try/claudinho.app/Contents/MacOS/claudinho --update dist-next
       - name: Start the AppImage (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -68,13 +88,22 @@ jobs:
           done
           chmod +x dist/*.AppImage
           xvfb-run -a node pack-check.js dist/*.AppImage
+          # Then the update, as on Windows. An AppImage that updates is replaced by the new file, so this runs on
+          # a copy: what is in dist/ is what gets published.
+          npx electron-builder --publish never --config.extraMetadata.version=99.0.0 --config.directories.output=dist-next
+          mkdir update-try && cp dist/*.AppImage update-try/
+          xvfb-run -a node pack-check.js update-try/*.AppImage --update dist-next
       - uses: actions/upload-artifact@v7
         with:
           name: installer-${{ runner.os }}
+          # Beside the installers: what the app's own update reads from a release (see "the app itself" in main.js).
           path: |
             dist/*.exe
             dist/*.dmg
             dist/*.AppImage
+            dist/*.zip
+            dist/*.blockmap
+            dist/latest*.yml
           if-no-files-found: error
           retention-days: 7
   release:

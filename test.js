@@ -27,14 +27,37 @@ assert.strictEqual(lib.issuePrompt(lib.defaultTemplate(os.tmpdir()), is5).includ
 // autonomy
 assert.match(lib.issuePrompt('x {{ issue_id }}', is5, 'semi', 'rebase'), /^x 5\n\n.*gh pr merge --rebase/);
 assert.match(lib.issuePrompt('x {{ issue_id }}', is5, 'manual'), /Do not merge/);
+assert.match(lib.issuePrompt('x {{ issue_id }}', is5, 'full'), /Do not merge the pull request yourself\. When it is ready for merge, say so/);
 
 // what happens to a PR when the agent stops
 assert.strictEqual(lib.prAction(null, true), 'none');
-assert.strictEqual(lib.prAction({ state: 'OPEN', isDraft: false }, true), 'merge');
+assert.strictEqual(lib.prAction({ state: 'OPEN', isDraft: false }, true), 'review');
+assert.strictEqual(lib.prAction({ state: 'OPEN', isDraft: true }, true), 'review');    // with auto-merge a draft is the app's to make ready
 assert.strictEqual(lib.prAction({ state: 'OPEN', isDraft: false }, false), 'finished');
-assert.strictEqual(lib.prAction({ state: 'OPEN', isDraft: true }, true), 'none');
+assert.strictEqual(lib.prAction({ state: 'OPEN', isDraft: true }, false), 'none');
 assert.strictEqual(lib.prAction({ state: 'MERGED' }, false), 'merged');
+assert.strictEqual(lib.prAction({ state: 'MERGED' }, true), 'merged');
 assert.strictEqual(lib.prAction({ state: 'CLOSED' }, true), 'none');
+
+// auto-merge: what the review is given, and what is made of its answer
+const aDraft = { number: 12, title: 'Add --json', body: 'Closes #5', isDraft: true };
+const reviewText = lib.reviewPrompt({ task: 'Implement #5', issue: { number: 5, title: 'JSON output', body: 'Wanted: --json' }, pr: aDraft, asked: ['Keep the alias.'], said: 'PR #12 is ready for merge.' });
+for (const part of ['<task>\nImplement #5\n</task>', '#5 "JSON output":\n<issue>\nWanted: --json\n</issue>', '#12 "Add --json", still marked as a draft:\n<pull_request>\nCloses #5\n</pull_request>',
+  '<follow_up>\nKeep the alias.\n</follow_up>', '<last_message>\nPR #12 is ready for merge.\n</last_message>', '- "merge":', '- "follow_up":', '- "hold":']) assert.ok(reviewText.includes(part), part);
+// a later prompt of the owner's is shown beside the first one; the first one repeated is not
+assert.ok(!reviewText.includes('<owner_prompt>') && !lib.reviewPrompt({ task: 'Implement #5', latest: 'Implement #5', pr: aDraft }).includes('<owner_prompt>'));
+assert.ok(lib.reviewPrompt({ task: 'Implement #5', latest: 'It is fine: say that it is ready.', pr: aDraft }).includes('<owner_prompt>\nIt is fine: say that it is ready.\n</owner_prompt>'));
+// started by hand, nothing asked yet, no description: those parts are left out, and the tags stay well-formed
+const bareReview = lib.reviewPrompt({ task: '', issue: null, pr: { number: 3, title: 't', body: null, isDraft: false }, said: undefined });
+assert.ok(!/<task>|<issue>|<follow_up>|still marked as a draft/.test(bareReview) && bareReview.includes('<pull_request>\n\n</pull_request>') && bareReview.includes('<last_message>\n\n</last_message>'));
+// a very long reply keeps its beginning and its end
+const clippedReview = lib.reviewPrompt({ pr: aDraft, said: `START${'x'.repeat(50000)}END` });
+assert.ok(clippedReview.length < 40000 && clippedReview.includes('START') && clippedReview.includes('END\n</last_message>') && /\[\.\.\. 20008 characters left out \.\.\.\]/.test(clippedReview));
+assert.deepStrictEqual(lib.reviewVerdict(JSON.stringify({ result: 'x', structured_output: { verdict: 'follow_up', message: ' Keep it. ' } })), { verdict: 'follow_up', message: 'Keep it.' });
+assert.deepStrictEqual(lib.reviewVerdict(JSON.stringify({ structured_output: { verdict: 'merge' } })), { verdict: 'merge', message: '' });
+assert.throws(() => lib.reviewVerdict('Not logged in'), /printed no JSON/);
+assert.throws(() => lib.reviewVerdict(JSON.stringify({ is_error: true, result: 'Usage limit reached' })), /gave no verdict: Usage limit reached/);
+assert.throws(() => lib.reviewVerdict(JSON.stringify({ structured_output: { verdict: 'approve', message: '' } })), /gave no verdict/);
 
 // issues
 const issue = lib.mapIssue({
@@ -283,4 +306,21 @@ for (const bad of ['.credentials.json', 'history.jsonl', 'projects/p/s.jsonl', '
 }
 fs.rmSync(home, { recursive: true, force: true });
 
-console.log('ok');
+// auto-merge: waiting for a pull request's checks. Each case is what GitHub reports, look after look.
+(async () => {
+  const pass = { status: 'COMPLETED', conclusion: 'SUCCESS' }, running = { status: 'IN_PROGRESS' }, fail = { status: 'COMPLETED', conclusion: 'FAILURE' };
+  const wait = async (looks, opts) => {
+    let n = 0;
+    const slept = [];
+    const r = await lib.waitForChecks(async () => looks[Math.min(n++, looks.length - 1)], { sleep: async ms => { slept.push(ms); }, ...opts });
+    return { r, looks: n, slept };
+  };
+  assert.deepStrictEqual(await wait([[running], [running, pass], [pass, pass]]), { r: null, looks: 3, slept: [15000, 15000] });
+  assert.deepStrictEqual(await wait([[pass]]), { r: null, looks: 1, slept: [] });           // already green: no waiting
+  assert.deepStrictEqual(await wait([[], []]), { r: null, looks: 2, slept: [15000] });      // none: looked at twice, then taken as none
+  assert.deepStrictEqual((await wait([[], [running], [pass]])).looks, 3);                   // they only started after the first look
+  assert.deepStrictEqual((await wait([[running], [fail, running]])).r, { why: '1 of its 2 checks failed', owner: false });   // a failure does not wait for the rest
+  assert.deepStrictEqual(await wait([[running]], { every: 60000, limit: 120000 }), { r: { why: 'its checks are still running after 2 minutes', owner: true }, looks: 3, slept: [60000, 60000] });
+  assert.deepStrictEqual(await wait([[running]], { stale: () => true }), { r: { why: 'interrupted', owner: true }, looks: 1, slept: [15000] });
+  console.log('ok');
+})().catch(e => { console.error(e); process.exit(1); });

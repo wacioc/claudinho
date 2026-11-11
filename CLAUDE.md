@@ -1,9 +1,10 @@
 # claudinho
 
 A desktop monitor (Electron) for the Claude Code instances running in a repo: live terminals in groups, their
-worktrees, GitHub issues with dispatch into worktrees, the open pull requests, notifications with a record of
-every input request, an editor for the `.claude` setup, per-instance CPU limits, and resuming every session
-after the app stops.
+worktrees, GitHub issues with dispatch into worktrees, the open pull requests, merging a session's pull request
+once the session says it is ready, notifications with a record of every input request, an editor for the
+`.claude` setup, per-instance CPU limits, resuming every session after the app stops, and updating itself from
+its GitHub releases.
 
 - [README.md](README.md): what it does, how to run it, and its limits.
 - [docs/HOW-THIS-WAS-BUILT.md](docs/HOW-THIS-WAS-BUILT.md): the brief, the decisions and their reasons, the
@@ -33,7 +34,7 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
 | `test.js` | Plain asserts for `lib.js`. No test framework. |
 | `cpu.js` | CPU limits: one mechanism per operating system behind the same calls. No Electron. |
 | `cpu-check.js` | Runs the machine's real mechanism under real load and checks the numbers. |
-| `pack-check.js` | Starts a packaged copy of the app and checks what packaging can break. No Electron. |
+| `pack-check.js` | Starts a packaged copy of the app and checks what packaging can break. With `--update` it has an installed copy replace itself with a second build, which is for hosted machines only. No Electron. |
 | `package.json`, under `build` | The packaging settings for electron-builder. JSON takes no comments, so their reasons are in section 8 of the build history. |
 | `.github/workflows/installers.yml` | On a version tag: builds the installer of each system, runs `pack-check.js` on it, publishes the release. |
 
@@ -78,6 +79,17 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
 - `CLAUDINHO_RELEASES=<address>` makes the app read Claude Code's newest version from there, so a test can
   serve a higher one and see the update button. Pressing it runs the real `claude update`: check first that
   the installed version is the newest, or the test updates Claude Code.
+- Auto-merge is tested live in a clone of a GitHub repository made for it: sessions open real pull requests
+  there and the app merges them. A fresh clone needs its workspace trust dialog answered once before
+  `claude -w` works in it. The verdicts come from a real Claude run, so a test records what happened and
+  tells each session what to write at the end of its turn.
+- `CLAUDINHO_UPDATES=<address>` makes the app look for its own releases there, also when run from source.
+  Serve only a `latest.yml` that names a higher version, with no installer behind it: then the button and the
+  notification can be looked at and nothing can be installed. A real installer served to a copy on a machine
+  in use installs over the app that is installed there. The install is checked by `pack-check.js --update`
+  in the `installers` workflow.
+- In a check, replace a command that must not run with a shell function. A stand-in folder on the `PATH` is
+  not enough in Git Bash: a Windows path in `PATH` is split at its colon.
 - The tray icon cannot be seen through the DevTools protocol. Its pictures can: `trayImages(n)` in the window
   draws them.
 - `pack-check.js` starts no real Claude Code session. On macOS and Linux a stand-in plays Claude Code; on
@@ -102,7 +114,7 @@ notarises when `APPLE_KEYCHAIN_PROFILE` names a profile saved with `xcrun notary
 
 - A person has only used the app on Windows. On macOS and Linux the packaged app has been started on hosted
   machines by `pack-check.js`, with a stand-in for Claude Code, and the CPU limits were checked.
-- The Windows installer is not signed, and the installers carry Electron's default icon. No signed Mac
-  release has gone out yet (section 11 of the build history). A packaged build must keep Electron's
-  `RunAsNode` fuse on (see `cpu.js`); `pack-check.js` fails when it is off.
-- The open points are listed in the README under "Limits" and in section 11 of the build history.
+- The Windows installer is not signed, by the owner's decision (section 11 of the build history), and the
+  installers carry Electron's default icon. A packaged build must keep Electron's `RunAsNode` fuse on (see
+  `cpu.js`); `pack-check.js` fails when it is off.
+- The open points are listed in the README under "Limits" and in section 12 of the build history.

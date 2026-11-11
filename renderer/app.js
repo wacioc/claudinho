@@ -171,7 +171,7 @@ function trayImages(count) {
   });
 }
 
-const NOTE_MARKS = { input: '?', auto: '»', done: '✓', update: '⬆' };
+const NOTE_MARKS = { input: '?', auto: '»', done: '✓', update: '⬆', app: '⬆', merge: '↩' };
 let shownFresh = -1;
 function renderBell() {
   const fresh = (state.notifications || []).filter(n => !n.seen).length;
@@ -188,10 +188,11 @@ function openNotes() {
   const list = (state.notifications || []).slice().reverse();
   $('#notes').replaceChildren(h('div.notes-head', 'Notifications'), ...(list.length ? list.map(n => h('div', {
     className: `note ${n.kind}${n.seen ? '' : ' fresh'}`,
-    title: n.kind === 'update' ? 'Run `claude update`' : terms.has(n.inst) ? 'Show this instance' : '',
+    title: n.kind === 'update' ? 'Run `claude update`' : n.kind === 'app' ? 'Install it and restart' : terms.has(n.inst) ? 'Show this instance' : '',
     onclick: () => {
       $('#notes').hidden = true;
       if (n.kind === 'update') updateClaude();
+      else if (n.kind === 'app') updateApp();
       else if (terms.has(n.inst)) { show('instances'); openDetail(n.inst); }
     },
   }, h('span.mark', NOTE_MARKS[n.kind]), h('div', n.label && h('b', `${n.label} `), n.text, h('div.hint', new Date(n.at).toLocaleTimeString()))))
@@ -204,6 +205,26 @@ async function updateClaude() {
   toast('Running `claude update`…');
   const line = await call('updateClaude');
   if (line) toast(line);
+}
+
+// The button on a card whose session is done and whose pull request is open: a draft is marked ready for
+// review, anything else is merged, after a question, since a merge cannot be taken back.
+async function prAct(id) {
+  const inst = state.instances.find(i => i.id === id);
+  if (!inst || !inst.pr) return;
+  const { number, draft } = inst.pr;
+  if (!draft && !confirm(`Merge pull request #${number} of ${inst.label}?`)) return;
+  await call('prAct', id, draft ? 'ready' : 'merge');
+  toast(draft ? `Pull request #${number} is ready for review` : `Pull request #${number} is merged`);
+}
+
+// The app replaces itself with the newer release and starts again, which stops whatever runs in it.
+function updateApp() {
+  const up = state.update;
+  if (!up || /^downloading/.test(up.state || '')) return;
+  const live = state.instances.filter(i => !i.exited).length;
+  if (live && !confirm(`Installing claudinho ${up.latest} restarts the app and stops ${plural(live, 'running Claude Code instance')}.\n\nAfter the restart each one can be resumed where it left off. Install now?`)) return;
+  call('updateApp');
 }
 
 // ---------- top bar ----------
@@ -220,6 +241,15 @@ function usageWin(label, w, at) {
 function renderTop() {
   const r = state.repo, a = state.account, u = state.usage;
   $('#version').textContent = state.version ? `v${state.version}` : '';
+  // The app itself: a button when a newer release is out, which says how the download is going once pressed.
+  const up = state.update;
+  $('#btn-update-app').hidden = !up;
+  if (up) {
+    const failed = /^failed/.test(up.state || '');
+    $('#btn-update-app').disabled = !!up.state && !failed;
+    $('#btn-update-app').textContent = up.state && !failed ? `⬆ ${up.state}…` : `⬆ v${up.latest}`;
+    $('#btn-update-app').title = failed ? `The update ${up.state}. Press to try again.` : `claudinho ${up.latest} is out. Press to install it: the app restarts, and sessions that are running are stopped and can be resumed.`;
+  }
   $('#repo-name').replaceChildren(...(r ? [h('b', `📁 ${r.name}`), `  ${r.path}`] : ['No folder open']));
   $('#repo-name').title = r ? r.path : '';
   $('#account').textContent = !state.claudeFound ? 'Claude Code CLI not found on PATH'
@@ -288,6 +318,7 @@ function createCard(inst) {
   const p = {
     title: h('span.title'), group: h('span.group'), badge: h('span.badge'), meta: h('div.meta'), up: h('span.chip'), pending: h('div.pending'),
     done: h('span.tick', { title: 'Done: its last turn has ended, and nothing has been asked of it since.' }, '✓'),
+    prBtn: h('button.pr-act', { hidden: true, onclick: e => { e.stopPropagation(); prAct(inst.id); } }),
     info: h('dl'), env: h('div.env'), procs: h('div.procs'), audit: h('div.audit'),
     groupIn: h('input', { type: 'text', list: 'groups', maxLength: 40, placeholder: 'none', title: 'Sessions with the same group name are marked as belonging together. Clear the name to take this one out of its group.',
       onchange: e => call('setInstance', inst.id, { group: e.target.value }) }),
@@ -298,7 +329,7 @@ function createCard(inst) {
       [['low', 'Low: half a share'], ['normal', 'Normal'], ['high', 'High: a double share']].map(([v, text]) => h('option', { value: v }, text))),
   };
   const card = h('article.card', { onclick: e => { if (detailId !== inst.id && !e.target.closest('button, .pending-box')) openDetail(inst.id); } },
-    h('div.head', p.done, p.title, p.group, p.badge, h('span.spacer'),
+    h('div.head', p.done, p.title, p.group, p.badge, h('span.spacer'), p.prBtn,
       h('button.back', { onclick: e => { e.stopPropagation(); closeDetail(); } }, '← All instances'),
       h('button.x', { title: 'Stop and remove', onclick: e => { e.stopPropagation(); closeInstance(inst.id); } }, '✕')),
     p.meta, p.pending,
@@ -309,7 +340,7 @@ function createCard(inst) {
       h('h3', 'CPU and memory'), p.procs,
       h('label', 'CPU weight ', p.weight),
       h('h3', 'Automation'),
-      h('label', p.merge, ' Merge the PR automatically when finished'),
+      h('label', p.merge, ' Merge the PR once the session says it is ready'),
       h('label', 'When input is needed ', p.level),
       h('h3', 'Environment variables'), p.filter, p.env)));
   $('#grid').append(card);
@@ -386,15 +417,24 @@ function updateCard(t, inst, order) {
   t.p.badge.className = `badge ${st.cls}`;
   t.p.badge.title = inst.starting ? 'Its first prompt has not gone in yet: Claude Code is still running the SessionStart hooks of this new worktree. Issues that are queued wait for it.' : '';
   t.card.classList.toggle('attention', st.cls === 'wait');
+  // Its work is done and its pull request is still open: the owner can mark a draft ready, or merge, from here.
+  const pr = inst.pr && inst.pr.state === 'OPEN' && (inst.done || inst.exited) ? inst.pr : null;
+  t.p.prBtn.hidden = !pr;
+  if (pr) {
+    t.p.prBtn.textContent = pr.draft ? 'Mark ready for review' : 'Merge PR';
+    t.p.prBtn.title = pr.draft ? `Pull request #${pr.number} is a draft: mark it as ready for review` : `Merge pull request #${pr.number} (${state.settings.mergeMethod})`;
+  }
   t.p.meta.replaceChildren(...[
     [s.model || inst.model || 'default model', s.effort || inst.effort].filter(Boolean).join(' · '),
     s.ctxPct != null ? `ctx ${Math.round(s.ctxPct)}% of ${fmtTokens(s.ctxSize)}` : 'ctx –',
     s.cost != null ? `$${s.cost.toFixed(2)}` : '$ –',
     inst.issue && `issue #${inst.issue}`,
-    inst.pr && `PR #${inst.pr.number}${inst.merge ? ` ${inst.merge}` : ''}`,
+    // The merge state in a word or two ("merged", "not merged", "follow-up 1 of 3"). What follows its colon is
+    // the reason: the tooltip here, and in full in the detail view's PR row.
+    inst.pr && h('span.chip', { title: inst.merge || '' }, `PR #${inst.pr.number}${inst.merge ? ` ${inst.merge.split(':')[0]}` : inst.pr.state === 'CLOSED' ? ' closed' : inst.pr.draft ? ' draft' : ''}`),
     inst.autoMerge && 'auto-merge',
     inst.level !== 'manual' && `input: ${inst.level}`,
-  ].filter(Boolean).map(c => h('span.chip', c)), ...procChips(inst.procs, inst.limit), t.p.up);
+  ].filter(Boolean).map(c => (typeof c === 'string' ? h('span.chip', c) : c)), ...procChips(inst.procs, inst.limit), t.p.up);
   renderProcs(t.p.procs, inst.procs, inst.limit);
   if (document.activeElement !== t.p.weight) t.p.weight.value = inst.weight;
   renderPending(t, inst);
@@ -551,7 +591,7 @@ async function newInstance(worktree) {
   const v = await formDialog(worktree ? 'New worktree' : `New instance in ${state.repo.name}`, [
     worktree && { key: 'worktree', label: 'Worktree name', type: 'text', list: 'worktrees', placeholder: 'blank = generated', pattern: '[A-Za-z0-9._\\-]{1,64}', hint: 'Created with `claude -w` under .claude/worktrees. An existing name reopens that worktree.' },
     ...launchFields(),
-    { key: 'autoMerge', label: 'Auto-merge the PR when finished', type: 'checkbox' },
+    { key: 'autoMerge', label: 'Auto-merge the PR once the session says it is ready', type: 'checkbox' },
     { key: 'prompt', label: 'First prompt (optional)', type: 'textarea', rows: 3 },
   ], 'Start');
   if (!v) return;
@@ -682,9 +722,9 @@ async function tackle(picked) {
       return `#${i.number} ${i.title}${open.length ? `  [starts once ${open.join(' ')} is completed]` : i.blocked ? '  [labelled blocked]' : ''}`;
     }) },
     ...launchFields(),
-    !multi && { key: 'autoMerge', label: 'Auto-merge the PR when finished', type: 'checkbox' },
+    !multi && { key: 'autoMerge', label: 'Auto-merge the PR once the session says it is ready', type: 'checkbox' },
     multi && { key: 'parallel', label: 'Agents running at once', type: 'number', min: 1, max: 4, value: Math.min(4, picked.length), hint: 'One instance and worktree per issue; the rest queue (max 4).' },
-    multi && { key: 'autonomy', label: 'Autonomy', type: 'select', value: 'manual', options: [['manual', 'Manual: nothing gets merged automatically'], ['semi', 'Semi-auto: the agent merges if it judges it safe'], ['full', 'Full-auto: every PR is merged when its agent finishes']] },
+    multi && { key: 'autonomy', label: 'Autonomy', type: 'select', value: 'manual', options: [['manual', 'Manual: nothing gets merged automatically'], ['semi', 'Semi-auto: the agent merges if it judges it safe'], ['full', 'Full-auto: the app merges each PR once its agent says it is ready']] },
     multi && { key: 'group', label: 'Group', type: 'text', list: 'groups', maxLength: 40, required: true, value: batchName(picked),
       hint: 'Issues started together are a group: their cards carry this name and its colour. An existing name adds them to that group.' },
     { key: 'template', label: 'Prompt', type: 'textarea', rows: 3, value: state.repo.template, required: true, hint: PROMPT_HINT + ' This is the default prompt, changed under ⚙; an edit here counts for this start only.' },
@@ -854,6 +894,7 @@ $('#btn-refresh-worktrees').onclick = loadWorktrees;
 $('#btn-refresh-prs').onclick = loadPrs;
 $('#btn-bell').onclick = e => { e.stopPropagation(); if ($('#notes').hidden) openNotes(); else $('#notes').hidden = true; };
 $('#btn-update').onclick = updateClaude;
+$('#btn-update-app').onclick = updateApp;
 $('#hide-outside').checked = !!prefs.hideOutside;
 $('#hide-outside').onchange = e => { prefs.hideOutside = e.target.checked; savePrefs(); renderInstances(); };
 $('#btn-refresh-issues').onclick = loadIssues;

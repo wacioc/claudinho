@@ -7,6 +7,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const pty = require('node-pty');
+const { autoUpdater } = require('electron-updater');
 const lib = require('./lib');
 const cpu = require('./cpu');
 
@@ -25,9 +26,16 @@ if (process.platform === 'darwin') {
   try { fs.chmodSync(path.join(path.dirname(require.resolve('node-pty')), '..', 'prebuilds', `darwin-${process.arch}`, 'spawn-helper'), 0o755); } catch { /* built from source: no prebuild to fix */ }
 }
 
-const run = (cmd, args, cwd) => new Promise((resolve, reject) =>
-  execFile(cmd, args, { cwd, maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) =>
+const run = (cmd, args, cwd, timeout) => new Promise((resolve, reject) =>
+  execFile(cmd, args, { cwd, timeout, maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) =>
     err ? reject(new Error((stderr || err.message).trim())) : resolve(stdout)));
+// The same for a command that reads what it works on from its input.
+const runInput = (cmd, args, input, opts) => new Promise((resolve, reject) => {
+  const child = execFile(cmd, args, { maxBuffer: 64 * 1024 * 1024, windowsHide: true, ...opts }, (err, stdout, stderr) =>
+    err ? reject(new Error((stderr || err.message).trim())) : resolve(stdout));
+  child.stdin.on('error', () => { /* it ended before reading: execFile reports why */ });
+  child.stdin.end(input);
+});
 
 function findClaude() {
   try {
@@ -99,6 +107,7 @@ function snapshot() {
     notifications: notifications.slice(-100),
     // latest: only when it is newer than what is installed
     claude: { version: claudeCode.version, latest: lib.newerVersion(claudeCode.latest, claudeCode.version) ? claudeCode.latest : null, updating: claudeCode.updating },
+    update: selfUpdate.latest ? { ...selfUpdate } : null,   // a newer release of the app itself
     // Not the ones whose conversation is live again somewhere (resumed by hand in a terminal, say).
     resumable: interrupted.filter(r => !sessions.some(s => s.sessionId && s.sessionId === r.sessionId)).map(r => ({
       id: r.id, label: r.worktree || path.basename(r.root), worktree: r.worktree, dir: r.worktree ? path.join(r.root, '.claude', 'worktrees', r.worktree) : r.root,
@@ -159,6 +168,9 @@ function spawnInstance({ cwd, worktree, resume, transcript, model, effort, promp
     // done: its last turn has ended and no prompt has gone in since. audit: every input request (see onHook).
     done: false, audit: Array.isArray(audit) ? audit : [], auditRev: 0,
     status: null, pending: [], pr: null, merge: null, finished: false, exited: false, weight, limited,
+    // Auto-merge (see mergeWhenReady): what the session wrote last, the follow-ups it got since the last prompt
+    // of the owner's, that prompt, and the review that is under way.
+    said: null, asked: [], lastPrompt: null, reviewing: null,
   };
   instances.set(id, inst);
   proc.onData(d => send('pty-data', id, d));
@@ -392,10 +404,19 @@ function onHook(inst, ev, res) {
     res.end(out ? JSON.stringify(out) : '');
   };
   if (ev.cwd) inst.cwd = ev.cwd;
-  if (ev.hook_event_name === 'Stop') { reply(); onStop(inst); return; }
+  if (ev.hook_event_name === 'Stop') {
+    // With auto-merge on, the hook is answered only when the app knows what the end of this turn means. That
+    // takes a review, and can take as long as the pull request's checks; the answer may be a follow-up, which
+    // keeps the session going (see mergeWhenReady). Dropped unanswered, the owner has interrupted in the terminal.
+    if (!inst.autoMerge) reply();
+    onStop(inst, ev, () => res.destroyed && !res.writableEnded).then(reply, () => reply());
+    return;
+  }
   if (ev.hook_event_name === 'UserPromptSubmit') {
     reply();
     inst.done = false;      // a new turn begins
+    inst.asked = []; inst.reviewing = null;   // with a prompt of the owner's: what the app was settling starts over
+    inst.lastPrompt = ev.prompt || null;      // the review is told what the owner asked for last
     // A request still open when a prompt goes into an idle session was dismissed with Escape, which ends a turn
     // without a Stop. In a busy session the prompt is a message sent along the way, and an approved tool may
     // still be running: that one is left open until its turn ends.
@@ -488,35 +509,103 @@ function notify(kind, text, inst) {
   push();
 }
 
-async function onStop(inst) {
+// The turn has ended. Resolves to what the Stop hook answers: nothing, or a follow-up for the session.
+async function onStop(inst, ev, gone) {
   inst.pending.slice().forEach(p => p.settle('terminal'));   // the turn is over: nothing can still be waiting
   closeAudit(inst);
   if (inst.kind === 'generator') send('config-changed');
-  await checkPr(inst);
+  inst.said = ev.last_assistant_message || '';
+  const followUp = await checkPr(inst, gone);
+  // Handed to the session as feedback from the hook: it carries on, and its next Stop comes back here.
+  if (followUp) return { hookSpecificOutput: { hookEventName: 'Stop', additionalContext: followUp } };
   inst.done = true;
   notify('done', inst.pr ? `is done: pull request #${inst.pr.number}${inst.merge ? ` (${inst.merge})` : ''}` : 'is done', inst);
   push(); pump();
 }
 
-// "Finished" = the agent ended its turn and its branch has an open PR. That frees its pool slot and,
-// with auto-merge on, merges the PR.
-async function checkPr(inst) {
-  if (inst.merge === 'merged') return;
-  let pr = null;
-  try { pr = JSON.parse(await run('gh', ['pr', 'view', '--json', 'number,state,url,isDraft'], inst.cwd)); } catch { /* no PR on this branch */ }
+// "Finished" = the agent ended its turn and its branch has an open PR. That frees its pool slot. With
+// auto-merge on, what the session wrote decides what happens to the PR; a follow-up for it is returned.
+async function checkPr(inst, gone, canAsk) {
+  const pr = await readPr(inst);
   const action = lib.prAction(pr, inst.autoMerge);
-  if (action === 'none') return;
-  inst.pr = { number: pr.number, url: pr.url };
-  inst.finished = true;
-  if (action === 'merged') inst.merge = 'merged';
-  if (action === 'merge' && inst.merge !== 'queued') {   // queued: GitHub already holds the auto-merge
-    try {
-      // --auto: merge now when GitHub allows it, otherwise as soon as the required checks pass.
-      await run('gh', ['pr', 'merge', String(pr.number), `--${saved.settings.mergeMethod}`, '--auto'], inst.cwd);
-      const after = JSON.parse(await run('gh', ['pr', 'view', String(pr.number), '--json', 'state'], inst.cwd));
-      inst.merge = after.state === 'MERGED' ? 'merged' : 'queued';
-    } catch (e) { inst.merge = `failed: ${e.message}`; }
+  if (action === 'review') return mergeWhenReady(inst, pr, gone, canAsk);
+  if (action !== 'none') inst.finished = true;
+}
+
+// The pull request of the instance's branch as GitHub has it now, kept for the card: its number, whether it is
+// still a draft, and whether it is open, merged or closed. Null when the branch has none.
+async function readPr(inst) {
+  let pr = null;
+  try { pr = JSON.parse(await run('gh', ['pr', 'view', '--json', 'number,state,url,isDraft,title,body'], inst.cwd, GH_WAIT)); } catch { /* no PR on this branch */ }
+  if (!pr) return null;
+  inst.pr = { number: pr.number, url: pr.url, draft: !!pr.isDraft, state: pr.state };
+  if (pr.state === 'MERGED' && !/^merged/.test(inst.merge || '')) inst.merge = 'merged';
+  return pr;
+}
+
+const REVIEW_MODEL = 'sonnet';
+const MAX_FOLLOW_UPS = 3;   // per prompt of the owner's; after that the pull request waits for the owner
+// A session with auto-merge on waits in its Stop hook for these calls, so none of them may hang for good.
+const GH_WAIT = 60000;
+
+// Auto-merge: merging is the app's job, once the session says its pull request is ready. A review reads what
+// the session wrote (lib.reviewPrompt) and gives a verdict.
+//   merge      the app marks a draft as ready, waits for the checks and merges
+//   follow_up  the session raised something to settle first: the returned text goes back to it as the Stop
+//              hook's answer, it carries on, and its next Stop is reviewed again
+//   hold       left to the owner, with the reason on the card
+// What GitHub then refuses (a failed check, a conflict) also goes back to the session, to be repaired.
+// gone(): the hook was dropped unanswered. canAsk: a hook is open to answer; without one a follow-up cannot be sent.
+async function mergeWhenReady(inst, pr, gone = () => false, canAsk = true) {
+  const mine = inst.reviewing = {};
+  // The owner has taken over (a new prompt, an interrupt, the box unticked) or the session is gone.
+  const stale = () => inst.reviewing !== mine || inst.exited || !inst.autoMerge || gone();
+  const state = text => { inst.merge = text; push(); };
+  const ask = text => {
+    inst.asked.push(text);
+    state(`follow-up ${inst.asked.length} of ${MAX_FOLLOW_UPS}`);
+    notify('merge', `was told: ${text}`, inst);
+    return text;
+  };
+  state('reviewing');
+  let v;
+  try { v = await review(inst, pr); } catch (e) { v = { verdict: 'hold', message: `the review failed: ${e.message}` }; }
+  if (stale()) return state(null);
+  if (v.verdict === 'follow_up') {
+    if (canAsk && inst.asked.length < MAX_FOLLOW_UPS) return ask(v.message);
+    v = { verdict: 'hold', message: canAsk ? `not settled after ${MAX_FOLLOW_UPS} follow-ups` : `to settle first: ${v.message}` };
   }
+  inst.finished = true; pump();   // from here on it only waits, so its place in the pool is free
+  if (v.verdict === 'hold') return state(`not merged: ${v.message}`);
+  const n = String(pr.number);
+  let problem;
+  try {
+    if (pr.isDraft) await run('gh', ['pr', 'ready', n], inst.cwd, GH_WAIT);
+    state('waiting for checks');
+    problem = await lib.waitForChecks(async () => JSON.parse(await run('gh', ['pr', 'view', n, '--json', 'statusCheckRollup'], inst.cwd, GH_WAIT)).statusCheckRollup, { stale });
+    if (!problem) await run('gh', ['pr', 'merge', n, `--${saved.settings.mergeMethod}`], inst.cwd, GH_WAIT);
+  } catch (e) { problem = { why: e.message, owner: false }; }
+  await readPr(inst);   // what the card says of the pull request: no longer a draft, and merged or not
+  if (!problem) return state(v.message ? `merged: ${v.message}` : 'merged');
+  if (inst.reviewing !== mine) return;   // a newer turn is under review: that one speaks for the card
+  if (!problem.owner && canAsk && !stale() && inst.asked.length < MAX_FOLLOW_UPS) {
+    inst.finished = false;
+    return ask(`The pull request could not be merged: ${problem.why}.\nRepair that, push, and say when the pull request is ready for merge.`);
+  }
+  state(`not merged: ${problem.why}`);
+}
+
+// One Claude run without tools: it reads and judges, nothing else. It runs on the subscription like the
+// instances do, and in the app's own folder, so that no project's settings, hooks or CLAUDE.md come into it.
+async function review(inst, pr) {
+  let issue = null;
+  if (inst.issue) { try { issue = JSON.parse(await run('gh', ['issue', 'view', String(inst.issue), '--json', 'number,title,body'], inst.cwd, GH_WAIT)); } catch { /* judged without it */ } }
+  const out = await runInput(claudeBin, [
+    '-p', '--model', REVIEW_MODEL, '--output-format', 'json', '--json-schema', JSON.stringify(lib.REVIEW_SCHEMA), '--tools', '',
+    '--system-prompt', lib.REVIEW_SYSTEM, '--no-session-persistence', '--strict-mcp-config', '--disable-slash-commands',
+    '--settings', '{"disableAllHooks":true}',
+  ], lib.reviewPrompt({ task: inst.prompt, latest: inst.lastPrompt, issue, pr, asked: inst.asked, said: inst.said }), { cwd: dataDir, env: lib.childEnv(process.env), timeout: 5 * 60000 });
+  return lib.reviewVerdict(out);
 }
 
 // ---------- Claude Code itself: the version installed, and whether a newer one is out ----------
@@ -538,6 +627,30 @@ async function checkClaude() {
   push();
 }
 setInterval(checkClaude, 6 * 3600 * 1000);
+
+// ---------- the app itself: a newer release ----------
+
+// electron-updater reads the newest release of the repository named under `build.publish` in package.json and
+// puts it in this copy's place: on Windows it runs the new installer silently, on Linux it replaces the
+// AppImage, on macOS it goes through Squirrel, which takes only an app signed like this one. Nothing is
+// downloaded until the owner asks for it: installing restarts the app, and that stops every session.
+const selfUpdate = { latest: null, state: null };   // state: null, 'downloading …', or 'failed: …'
+let installing = false;                             // the app is closing to be replaced: the window does not ask
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = false;
+// CLAUDINHO_UPDATES points a test at a folder of release files served over HTTP, also for a copy run from source.
+if (process.env.CLAUDINHO_UPDATES) { autoUpdater.setFeedURL({ provider: 'generic', url: process.env.CLAUDINHO_UPDATES }); autoUpdater.forceDevUpdateConfig = true; }
+autoUpdater.on('update-available', info => {
+  // One notification per version, not one per check.
+  if (info.version !== selfUpdate.latest) notify('app', `claudinho ${info.version} is out; this is ${app.getVersion()}. Press to install it and restart.`);
+  selfUpdate.latest = info.version; push();
+});
+autoUpdater.on('download-progress', p => { selfUpdate.state = `downloading ${Math.round(p.percent)}%`; push(); });
+autoUpdater.on('update-downloaded', () => { installing = true; autoUpdater.quitAndInstall(true, true); });   // silently, and start again afterwards
+// A check that fails (offline, no release yet) says nothing; a download the owner asked for says why it failed.
+autoUpdater.on('error', e => { if (selfUpdate.state) { selfUpdate.state = `failed: ${String(e && e.message).split('\n')[0]}`; push(); } });
+const checkSelf = () => { if (app.isPackaged || process.env.CLAUDINHO_UPDATES) autoUpdater.checkForUpdates().catch(() => {}); };
+setInterval(checkSelf, 6 * 3600 * 1000);
 
 // ---------- issue dispatch pool ----------
 
@@ -642,10 +755,20 @@ const rpc = {
     if (typeof patch.group === 'string') inst.group = lib.groupName(patch.group);   // '' takes it out of its group
     if (typeof patch.autoMerge === 'boolean') {
       inst.autoMerge = patch.autoMerge;
-      // Ticked after the agent already went idle: its work is finished, so merge now.
-      if (inst.autoMerge && (sessionOf(inst) || {}).status === 'idle') checkPr(inst).then(push);
+      // Ticked after the session already went idle: judged by what it wrote last. No hook is open then, so a
+      // follow-up cannot be sent and shows on the card as the reason instead.
+      if (inst.autoMerge && (sessionOf(inst) || {}).status === 'idle') checkPr(inst, undefined, false).then(push);
     }
     push();
+  },
+  // The owner's own word on a session's pull request, from its card: mark a draft as ready for review, or merge
+  // it. GitHub's refusal (a conflict, a rule of the branch) comes back as the error.
+  async prAct(id, action) {
+    const inst = instances.get(id);
+    if (!inst || !inst.pr) return;
+    const n = String(inst.pr.number);
+    try { await run('gh', action === 'ready' ? ['pr', 'ready', n] : ['pr', 'merge', n, `--${saved.settings.mergeMethod}`], inst.cwd, GH_WAIT); }
+    finally { await readPr(inst); push(); }
   },
   answer(id, requestId, choice) {
     const inst = instances.get(id);
@@ -683,6 +806,12 @@ const rpc = {
     claudeCode.updating = true; push();
     try { return (await run(claudeBin, ['update'])).trim().split(/\r?\n/).pop(); }
     finally { claudeCode.updating = false; await checkClaude(); }
+  },
+  // Downloads the newer release of the app and installs it. The app then closes and starts again by itself.
+  updateApp() {
+    if (!selfUpdate.latest || /^downloading/.test(selfUpdate.state || '')) return;
+    selfUpdate.state = 'downloading'; push();
+    autoUpdater.downloadUpdate().catch(() => { /* reported through the 'error' event */ });
   },
   env(id) {
     const inst = instances.get(id);
@@ -787,7 +916,7 @@ function createWindow() {
   win.webContents.on('will-navigate', e => e.preventDefault());
   win.on('close', e => {
     const live = [...instances.values()].filter(i => !i.exited).length;
-    if (!live) return;
+    if (!live || installing) return;   // installing: the owner was asked before the update was downloaded
     const choice = dialog.showMessageBoxSync(win, {
       type: 'warning', buttons: ['Stop them and quit', 'Cancel'], defaultId: 1, cancelId: 1,
       message: `${live} Claude Code instance${live > 1 ? 's are' : ' is'} still running.`,
@@ -803,6 +932,7 @@ app.whenReady().then(async () => {
   createWindow();
   if (claudeBin) run(claudeBin, ['auth', 'status']).then(out => { account = JSON.parse(out); push(); }, () => {});
   checkClaude();
+  checkSelf();
   const arg = process.argv.slice(app.isPackaged ? 1 : 2).find(a => !a.startsWith('-'));
   const start = arg && fs.existsSync(arg) ? path.resolve(arg) : saved.repoPath;
   if (start && fs.existsSync(start)) await openRepo(start);

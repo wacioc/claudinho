@@ -30,8 +30,10 @@ Windows asks once before the first start.
 | macOS, Intel | `claudinho-<version>-mac-x64.dmg` | The same. |
 | Linux, x86-64 | `claudinho-<version>-linux-x86_64.AppImage` | Make it executable (`chmod +x`) and run it. It needs glibc 2.34 or later, which Ubuntu 22.04 and Debian 12 have. |
 
-The app does not update itself: for a newer version, install that version's file the same way. Settings and
-saved sessions are kept in your user folder, apart from the app.
+From 0.4.0 on the app updates itself (see [The app's own version](#the-apps-own-version)). An older version is
+brought up to date by installing the newer file the same way. Settings and saved sessions are kept in your user
+folder, apart from the app. A release also holds `.zip`, `.yml` and `.blockmap` files: those are what the
+update reads, not something to download.
 
 ## Run from source
 
@@ -60,7 +62,8 @@ The first `npm install` downloads the Electron binary.
 | **.claude** | Everything under `.claude` and `.github` of the open folder, and your own configuration from the home folder (`~/.claude`): `CLAUDE.md`, `settings.json`, agents, skills, commands, rules. All of it is editable inline. Saving a file of the open folder offers to commit and push. "New skill" and "New agent" generate one from a prompt in a terminal, where Claude can ask follow-up questions. |
 
 The header shows the app's version, the logged-in account, the 5-hour and 7-day usage as last reported by
-Claude Code, the version of Claude Code that is installed, and the bell.
+Claude Code, the version of Claude Code that is installed, and the bell. When a newer version of the app or of
+Claude Code is out, a button to install it appears beside the version it replaces.
 
 ### Notifications
 
@@ -72,8 +75,10 @@ an entry opens the instance it is about.
 |---|---|
 | needs input | A session asks a question or for a permission, at the Manual and at the Timed level. |
 | answered for itself | The same at the Auto level, with what was asked and what was picked. |
-| is done | A session's turn has ended. |
-| Claude Code … is out | A newer version than the installed one has been released. |
+| is done | A session's turn has ended. With auto-merge on, it also says what became of the pull request. |
+| was told | With auto-merge on, the app sent the session a follow-up before merging (see [Auto-merge](#auto-merge)). |
+| Claude Code … is out | A newer version than the installed one has been released. Pressing it runs `claude update`. |
+| claudinho … is out | A newer release of the app has been published. Pressing it installs that release. |
 
 A session whose turn has ended is also marked on its card, with a green outline and a green checkmark, until the
 next prompt goes in.
@@ -98,6 +103,23 @@ still there after a restart.
 The header shows which version of Claude Code is installed. When a newer one has been released, a button with
 that version appears beside it, and a notification with it. Pressing either runs `claude update`. Sessions that
 are running keep the version they started with; what is started afterwards gets the new one.
+
+### The app's own version
+
+At its start and every six hours the installed app looks at the
+[releases](https://github.com/wacioc/claudinho/releases) of its repository. When a newer one has been
+published, a button with that version appears beside the app's own, and a notification with it. Nothing is
+downloaded before you press one of them: installing restarts the app, and that stops every session running in
+it. If any is running, the app asks first. It then downloads the release, closes, installs it and starts
+again; the sessions that were open come back as cards with a Resume button.
+
+| System | How the update is installed |
+|---|---|
+| Windows | The new installer is run silently. Windows asks nothing: its question at a first install is about files that came through a browser. |
+| Linux | The AppImage file is replaced by the new one, under the new version's file name. |
+| macOS | Not by the app yet. macOS's own update mechanism accepts only an app signed with a developer certificate, and the installers are not signed. The button opens the release page instead: install the new `.dmg` from there. |
+
+A copy run from source does not look for releases.
 
 ### Closing an instance
 
@@ -189,12 +211,37 @@ With several issues selected you also choose how many agents run at once (max 4)
 |---|---|
 | Manual | Agents are told not to merge. |
 | Semi-auto | The agent is told to merge its PR only if it judges that safe. |
-| Full-auto | The app merges each PR when its agent finishes. |
+| Full-auto | Every agent gets auto-merge: the app merges its PR once the agent says it is ready (next section). |
 
-"Finished" means the agent ended its turn and its branch has an open, non-draft PR. Auto-merge runs
-`gh pr merge --squash --auto` (method configurable under ⚙). The merge waits for checks only when branch
-protection requires them and the repo has "Allow auto-merge" turned on; otherwise the PR merges as soon as the
-agent finishes. Merged branches are left in place unless the repo deletes head branches automatically.
+### Auto-merge
+
+With **Merge the PR once the session says it is ready** ticked for an instance, merging is the app's job, not
+the session's. Every time such a session ends a turn with an open pull request on its branch, the app reads
+what the session wrote and decides between three things.
+
+| The app | When | What happens |
+|---|---|---|
+| merges | The session says its work is done and the pull request is ready for merge, and nothing it raised needs a change. | A draft is marked ready, the app waits for the pull request's checks, then runs `gh pr merge --squash` (method configurable under ⚙). |
+| follows up | The session raised something for debate: an open question, a choice between options, a doubt, work it left out. | The session is told what to do about each point and carries on. Its next reply is read the same way. |
+| holds | The session does not say the pull request is ready, or only you can decide what it raised. | The pull request stays open, and the card says why. |
+
+What GitHub refuses also goes back to the session to be repaired: a failed check, or a conflict with the base
+branch once another pull request has been merged first. After three follow-ups without a prompt of yours in
+between, the pull request waits for you. A prompt you type counts for more than the one the session was started
+with, so "it is fine as it is" is taken at its word.
+
+The card shows where a pull request stands (`reviewing`, `follow-up 1 of 3`, `waiting for checks`, `merged`,
+`not merged`), with the reason as its tooltip and in the detail view; every follow-up is a notification and
+stands in the session's terminal as feedback from the Stop hook. The session counts as working until the app
+has decided, which includes the wait for the checks. Interrupting it in the terminal, typing a new prompt or
+unticking the box calls the merge off. Ticked for a session that is already idle, the box has the app decide
+from the session's last reply; no follow-up can be sent then, so one that would be needed shows as the reason.
+
+The reading is done by a Claude run of its own (Sonnet, no tools, about five seconds and one cent at list
+price per turn that ends), on your subscription like the sessions. It is given the prompt the session was
+started with, your latest prompt, the issue, the pull request's description and the session's last reply. It
+does not read the code. Merged branches are left in place unless the repository deletes head branches
+automatically.
 
 ### CPU limits
 
@@ -228,12 +275,21 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
 - Each instance gets its own `--settings` file. It wraps your status line so the JSON Claude Code feeds it (cost,
   context, rate limits) is also saved for the app, and it adds HTTP hooks pointing at a local server inside the app:
   `PreToolUse` on `AskUserQuestion` and `PermissionRequest` for the input levels, `Stop` to notice a finished turn.
+- With auto-merge on, the `Stop` hook is answered only once the app has decided. The decision comes from
+  `claude -p` with a JSON schema, no tools and its own system prompt, started in the app's data folder so that
+  no project's settings or hooks come into it. A follow-up is the hook's answer (`additionalContext`), which
+  makes Claude Code carry on with it. The wait for checks reads `gh pr view --json statusCheckRollup` every
+  15 seconds, for at most an hour.
+- The app's own update is [electron-updater](https://www.electron.build/v26/docs/features/auto-update)
+  reading the repository's GitHub releases: the `latest*.yml` file of a release names its installer and that
+  file's checksum, which is verified after the download.
 - An input request answered in the terminal is reported by no hook. What was picked is read from what the
   tool call did next, through `PostToolUse` and `PostToolUseFailure`: the result of a question holds the
   answers, and a tool that ran had been approved. One that never ran before its turn ended was refused.
 - The newest Claude Code version is read from the address the official installer reads it from,
   `https://downloads.claude.ai/claude-code-releases/latest` (or `stable`, if that is your release channel), at
-  the start and every six hours. It is the one address the app itself contacts.
+  the start and every six hours. Beside GitHub, for the app's own releases, it is the one address the app
+  itself contacts.
 - The tray icon's picture is drawn by the window, with the number on it, and handed to the main process.
 - Session status comes from `claude agents --json`; the account from `claude auth status`.
 - CPU and memory come from one listing of all processes every 2 seconds (PowerShell and CIM on Windows, `ps`
@@ -301,6 +357,15 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   interrupted" and worktrees started by hand are not held back. A session that stops at a dialog before its
   first prompt (a folder to trust, a login) keeps the queue waiting until the dialog is answered or the
   instance is closed.
+- Auto-merge decides from what a session writes, not from the code: a session that calls unfinished work ready
+  gets it merged, so let the repository's checks be the judge of the code. Checks that only start more than
+  15 seconds after the session's reply, in a repository that does not require them, are not waited for. A turn
+  that ends without a pull request is left to you, whatever the session asks in it. If the review cannot run
+  (no usage left, say), the pull request is held and the card says so.
+- The app's own update is run to the end on Windows and on Linux each time a release is built, on a hosted
+  machine, and a release whose update fails is not published. On a Mac the app only announces a newer release,
+  until the installers are signed. Downloads are checked against the checksum in the release, not against a
+  signature.
 - The Pull requests tab lists the first 200 open pull requests.
 - With Remote Control on, a permission prompt can also be answered from your other devices, whichever comes first.
 - From the home folder, the editor lists what you write yourself: `CLAUDE.md`, `settings.json`,

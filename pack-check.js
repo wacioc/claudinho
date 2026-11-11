@@ -7,13 +7,24 @@
 //     the subscription. On Windows node-pty needs a real .exe, so that part is tried by hand with the real one.
 // The executable is claudinho.exe, claudinho.app/Contents/MacOS/claudinho, or the AppImage file.
 // It needs Node 22 or later (for WebSocket) and, on Linux, a display: `xvfb-run -a node pack-check.js ...`.
+//
+// node pack-check.js <packaged executable> --update <folder>
+// Checks instead that the app can replace itself with a newer release. <folder> holds a second build with a
+// higher version (`npx electron-builder --publish never --config.extraMetadata.version=99.0.0
+// --config.directories.output=<folder>`). It is
+// served over HTTP, the app is pointed at it and told to update, and the check passes when the copy on the
+// disk has become that version and runs again. This REPLACES the app it is given, so it is for a machine that
+// is thrown away afterwards: the hosted ones of the `installers` workflow. On macOS the app must lie in a
+// folder that can be written to (not on the disk image), and both builds must be signed by the same developer.
 const { spawn, spawnSync, execFileSync } = require('child_process');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 
-if (!process.argv[2] || !fs.existsSync(process.argv[2])) { console.error('usage: node pack-check.js <packaged executable>'); process.exit(2); }
+if (!process.argv[2] || !fs.existsSync(process.argv[2])) { console.error('usage: node pack-check.js <packaged executable> [--update <folder>]'); process.exit(2); }
 const exe = path.resolve(process.argv[2]);
+const next = process.argv[3] === '--update' ? path.resolve(process.argv[4] || '') : null;
 const WIN = process.platform === 'win32';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claudinho-pack-'));
@@ -112,9 +123,61 @@ async function asApp() {
   app.kill();
 }
 
+// The app, told that a newer release lies at an address of ours, replaces itself with it and starts again.
+async function asUpdate() {
+  const MAC = process.platform === 'darwin';
+  const yml = WIN ? 'latest.yml' : MAC ? 'latest-mac.yml' : 'latest-linux.yml';
+  const want = /^version: (\S+)/m.exec(fs.readFileSync(path.join(next, yml), 'utf8'))[1];
+  // Whole files only. The updater first tries to fetch just the changed parts, gets no partial answer here,
+  // and falls back to the whole installer.
+  const server = http.createServer((req, res) => {
+    const file = path.join(next, path.basename(decodeURIComponent(req.url.split('?')[0])));
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { 'Content-Length': fs.statSync(file).size });
+    fs.createReadStream(file).pipe(res);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const data = path.join(tmp, 'data');
+  const app = spawn(exe, [`--user-data-dir=${data}`, '--remote-debugging-port=0'], { env: { ...process.env, CLAUDINHO_UPDATES: `http://127.0.0.1:${server.address().port}` }, stdio: 'inherit' });
+  const exited = new Promise(resolve => app.on('exit', resolve));
+  // What the disk holds after the update. On Windows and macOS the app's own package.json, which the build
+  // leaves a plain file, names the new version. On Linux a new AppImage lies where the old one was.
+  const image = WIN || MAC ? null : fs.readdirSync(next).find(f => f.endsWith('.AppImage'));
+  const manifest = path.join(path.dirname(exe), MAC ? '../Resources/app/package.json' : 'resources/app/package.json');
+  const installed = () => {
+    try {
+      if (!image) return JSON.parse(fs.readFileSync(manifest, 'utf8')).version;
+      return fs.statSync(path.join(path.dirname(exe), image)).size === fs.statSync(path.join(next, image)).size ? want : null;
+    } catch { return null; }   // mid-replacement
+  };
+  const running = () => (WIN
+    ? (spawnSync('tasklist', ['/FI', `IMAGENAME eq ${path.basename(exe)}`, '/NH'], { encoding: 'utf8' }).stdout || '').includes(path.basename(exe))
+    : spawnSync('pgrep', ['-f', image || exe]).status === 0);
+  try {
+    const portFile = path.join(data, 'DevToolsActivePort');
+    for (let i = 0; i < 240 && !fs.existsSync(portFile); i++) await sleep(250);
+    if (!fs.existsSync(portFile)) throw new Error('the app did not start within a minute');
+    const { ev, until } = await page(fs.readFileSync(portFile, 'utf8').split('\n')[0]);
+    const was = await until(`(document.querySelector('#version') || {}).textContent`, 'the version in the header');
+    const found = await until(`api.call('state').then(s => s.update && s.update.latest)`, 'the app to find the newer release');
+    report(found === want, 'finds the newer release', `${was} sees ${found}${found === want ? '' : `, expected ${want}`}`);
+    await ev(`api.call('updateApp')`);
+    await Promise.race([exited, sleep(180000)]);   // it downloads, then closes to be replaced
+    let now = null;
+    for (let i = 0; i < 360 && now !== want; i++) { now = installed(); if (now !== want) await sleep(500); }
+    report(now === want, 'replaces itself', now === want ? `the copy on the disk is ${now}` : `the copy on the disk is still ${now || 'the old one'}`);
+    let up = false;
+    for (let i = 0; i < 120 && !up; i++) { up = running(); if (!up) await sleep(500); }
+    report(up, 'starts again', up ? 'a claudinho process is running' : 'no claudinho process came up within a minute');
+  } catch (e) {
+    report(false, 'the update', e.message);
+  }
+  server.close();
+}
+
 (async () => {
-  asNode();
-  await asApp();
+  if (next) await asUpdate();
+  else { asNode(); await asApp(); }
   await sleep(500);
   fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   process.exit(failed ? 1 : 0);

@@ -705,8 +705,130 @@ Not exercised:
 |---|---|---|
 | The tray pictures, put into the page for a look, showed as broken images. | The page's own content rule refuses `data:` pictures. The tray is not affected: it gets them through the main process. | The check puts the canvases themselves into the page. |
 
-## 11. Still open
+## 11. The sixth round: signing, merging when ready, the app's own update
 
+Still the same day. The owner installed 0.3.0 on a Mac, was refused at the first start, and asked how to sign
+the app, on the Mac and on Windows. Then came two requests, in these words:
+
+> For the claude code sessions that have checked the auto-merge checkbox, it's claudinho's job to actually go
+> and merge the PR once the claude code session has mentioned that it's ready for merge. Claudinho can choose
+> to follow-up on anything that the claude code session has raised for debate before merging; after clarifying
+> everything with the claude code session, claudinho should merge the PR.
+
+> I also want the functionality in claudinho to update itself, when a new release is published in github, it
+> should display a notification somewhere that a newer version is available and do the update.
+
+### Signing
+
+**macOS: prepared, not in the tree.** The owner has a developer account. What signing takes was worked out and
+written, then set aside, because it cannot be run without the owner's certificate and would block every release
+until then. It is parked as a git stash (`git stash list` names it). Applied, it does this:
+
+- `package.json` loses `mac.identity: "-"` and `mac.hardenedRuntime: false`. electron-builder then signs with
+  the "Developer ID Application" certificate it finds, turns the hardened runtime on with its own default
+  entitlements, and notarises each app when the notary key is in the environment. It applies no signature at
+  all when it finds no certificate, so the workflow must not build without one.
+- The workflow gives five repository secrets to the macOS build step and to no other: `CSC_LINK` (the
+  certificate as a base64 `.p12`), `CSC_KEY_PASSWORD`, `APPLE_API_KEY` (the text of the notary key's `.p8`
+  file), `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`. The step stops when one is missing, writes the key to a
+  file, and hands electron-builder that file's path: electron-builder's page says `APPLE_API_KEY` holds the
+  key's text, but version 26.18.0 passes it to `notarytool --key`, which takes a path.
+- The check then also runs `xcrun stapler validate` and `spctl --assess` on each app.
+
+The secrets are only given to the macOS step because electron-builder reads `CSC_LINK` on Windows too and
+would try to sign the Windows installer with it. With signing in place, `MANUAL_UPDATE` in `main.js` goes as
+well: the app's own update then works on a Mac (see below). Still to decide then: the default entitlements
+allow more than Electron 45 needs, and programs inside the terminals cannot use the microphone, the camera or
+script other apps under the hardened runtime unless the app is given entitlements for that.
+
+One consequence was put to the owner first: the name the developer account is registered under is written
+into every signed copy and into the public build log.
+
+**Windows: left unsigned, by the owner's decision.** Microsoft's own pages say that a signature does not remove
+the SmartScreen warning for a new program: it shows the publisher's name instead of "unknown publisher", and
+the warning ends only when the file or the certificate has gathered reputation, "several weeks and hundreds of
+clean installs". Extended-validation certificates lost their instant pass in 2024. The routes were laid out
+(Azure Artifact Signing at about 10 dollars a month, open to individuals only in the US and Canada; a
+certificate from a certificate authority; SignPath Foundation for open-source projects; the Microsoft Store,
+the only route without a warning, which means repackaging the app). The app's own update is not affected:
+SmartScreen asks about files that came through a browser, and the update downloads the installer itself.
+
+### Auto-merge: what was there, and what changed
+
+Until this round a ticked box meant: when a turn ends and the branch has an open pull request that is not a
+draft, run `gh pr merge --auto`. What the session had written played no part, a draft was never merged, and a
+merge that GitHub queued or refused was never looked at again.
+
+| Decision | Why |
+|---|---|
+| The session's last reply decides, read by a Claude run of the app's own. | "Has mentioned that it's ready" and "raised for debate" are judgments about prose. The run is `claude -p` with a JSON schema: a verdict (`merge`, `follow_up`, `hold`) and a message. |
+| That run has no tools and its own short system prompt, and starts in the app's data folder. | It only has to read. Measured: 5 seconds and 1 cent at list price, against 6 seconds and 10 cents with the default tools and system prompt. No project's settings, hooks or `CLAUDE.md` reach it, `disableAllHooks` keeps the owner's own hooks out, and with session persistence off it leaves no session behind. `--bare` would be the obvious flag, but it does not use the subscription login. `ponytail:` it judges from the task, the issue, the pull request's description and the reply, not from the code; give it read-only tools when a decision needs the diff. |
+| A follow-up is the Stop hook's answer. | The hook is the one place where the app is asked before a session goes idle. Measured on 2.1.322: answered with `additionalContext`, the session carries on with that text, shown in the terminal as "Stop hook feedback"; `decision: "block"` does the same but is shown as a hook error. The alternative, typing into the terminal, depends on timing and on nothing else being typed. |
+| The hook is held until the app has decided, the wait for checks included. | Whatever goes wrong while merging can then go back to the session through the same answer. While it is held the session reports `busy`, which is true: it is not done. Its place in the dispatch pool is given up as soon as only waiting is left. A session without the box ticked is answered at once, as before. |
+| Before merging: mark a draft ready, wait for the checks, then `gh pr merge` without `--auto`. | "Actually go and merge." `--auto` hands the merge to GitHub, which needs a repository setting and gives no answer. The checks are read from `statusCheckRollup` every 15 seconds for at most an hour; none at the first look is looked at once more, because GitHub starts them a few seconds after a push. |
+| What GitHub refuses goes back to the session with GitHub's own words. | A failed check and a conflict are things a session can repair, and with several issues in flight the second merge into the same lines always conflicts. |
+| Three follow-ups per prompt of the owner's, then hold. | A limit of the app's own, below Claude Code's (eight continuations in a row). A prompt typed by the owner starts the count again. |
+| The owner's latest prompt is given to the review, and counts for more than the first. | Found in the first live run (below). |
+| An interrupt, a new prompt or unticking the box calls the merge off. | The owner has taken over. Without this, a merge still waiting for checks would go through after the owner had asked for one more change. |
+| Turns that end without a pull request are left alone. | Nothing to merge, and the request was about merging. |
+
+### How auto-merge was verified
+
+Pure parts have asserts: what the review is given, what is made of its answer, and the wait for checks
+(running, green at once, none, started late, failed, never ending, called off). The rest ran live, in a clone
+of the private repository made for merge tests, with six Haiku sessions told what to write at the end.
+
+| Case | What happened |
+|---|---|
+| A session opens a draft, says it is ready and asks whether to add a second line, recommending it. | After 6 seconds: follow-up 1 of 3, "Yes, add the second line …". The session added it and said it was ready; the draft was marked ready and merged, 65 seconds after the start. |
+| A session opens a pull request and says it is stopping for now. | Held: "it did not say the PR is ready for merge". |
+| Two sessions change the same line and both say they are ready. | The first was merged after 45 seconds. The second was refused by GitHub ("Pull Request has merge conflicts"), was told so, repaired it, and was merged after 110 seconds. |
+| The held session, after a restart of the app, resumed and told by the owner that the pull request is fine. | Merged 30 seconds after the prompt. |
+| A session without the box says it is ready and goes idle; then the box is ticked. | Reviewed from its last reply and merged. |
+| A session says its pull request is not ready yet. | Held, with the reason on the card and in the notification. |
+
+Each merge took 15 to 20 seconds of waiting: the repository has no checks, and none is looked at twice.
+
+Not exercised live: checks that fail or are still running (the asserts cover the waiting), the limit of three
+follow-ups, an interrupt while the hook is held, a review that cannot run, and dispatch from the Issues tab
+with Full-auto.
+
+### The app's own update
+
+| Decision | Why |
+|---|---|
+| `electron-updater`, a new dependency. | Replacing a running app is different on each system: a silent installer on Windows, a swapped file for an AppImage, Squirrel on macOS. It is the updater that belongs to electron-builder, reads the releases the workflow already makes, and checks the download against the checksum in the release. Writing those three installs by hand would be more code than the rest of the feature, in the one place where a mistake leaves an installed app unable to repair itself. |
+| Nothing is downloaded until the owner presses. | Installing restarts the app, which stops every session. With sessions running the window asks first; the app's own question at quitting is skipped for that one quit, since it was just answered. |
+| On macOS the update is only announced; the button opens the release page. | Squirrel takes only an app signed with a developer certificate. `MANUAL_UPDATE` goes when signing is in place. The Mac build makes a `.zip` beside each `.dmg` from now on, because electron-builder writes `latest-mac.yml`, which the announcement reads, only with that target. |
+| A release holds more files. | `latest.yml`, `latest-mac.yml`, `latest-linux.yml` and the `.blockmap` files are what the update reads. The workflow uploads them with the installers; electron-builder writes them although publishing is off. |
+| `CLAUDINHO_UPDATES` points the app at an address of a test's. | The same way `CLAUDINHO_RELEASES` does for Claude Code's version. |
+| The update is tried on every build, on Windows and on Linux. | The step that matters, a running app replacing itself, exists only in a packaged and installed copy, and on the owner's PC that copy is the owner's own. So the workflow builds a second installer that claims version 99.0.0, serves it to the first one, and `pack-check.js --update` passes when the copy on the disk has become 99.0.0 and runs again. |
+
+Verified on the PC: the build writes `latest.yml`, the block map and `app-update.yml`; a packaged copy pointed
+at a stand-in that names 99.0.0 and has no installer shows the button and the notification, asks before
+stopping a running session and leaves everything alone on "no", and reports the download that fails with its
+reason. The workflow's second-build command produces a 99.0.0 installer.
+
+Not exercised yet: the install itself. It runs for the first time when the workflow does. On macOS nothing but
+the announcement can work.
+
+### What went wrong
+
+| Symptom | Cause | What changed |
+|---|---|---|
+| A check of the signing step started a real build of the app, with an empty environment, and left two folders behind. | The stand-in for `npm` was put on the `PATH` under a Windows path. Git Bash splits `PATH` at colons, so `C:/…` was two entries and the real `npm` ran. | The folders were removed. A command that must not run is now replaced by a shell function, which nothing on the `PATH` can get past. |
+| Four test sessions ended at once: "Workspace trust not yet accepted". | A fresh clone has to have its trust dialog answered once before `claude -w` works in it, and being inside a trusted folder does not count. The dialog opens on "No, exit". | Answered once for the scratch clone, one line down and Enter. The test now stops when a session ends early instead of waiting twenty minutes. |
+| The held session stayed held after the owner had told it the pull request was fine. | The review knew the prompt the session was started with and nothing later, so the session's "ready" contradicted its instructions. | The owner's latest prompt, which the `UserPromptSubmit` hook carries, is given to the review. |
+| A merged pull request carried a note saying the draft was being left as a draft. | The review was commenting on work that is the app's, and without knowing what the app does. | It is told that marking ready, waiting for checks and handing back failures are the app's, and that a merge carries a note only when a point was decided. |
+
+## 12. Still open
+
+- Signing: the macOS change is parked (section 11) and needs the owner's certificate and notary key. Windows
+  stays unsigned by decision.
+- The app's own update has not replaced an installed copy yet; the workflow's check is its first run. On macOS
+  it only announces.
+- Auto-merge reads prose, not code, and leaves turns without a pull request alone. The cases not exercised
+  live are listed in section 11.
 - The tray icon is untried on macOS and Linux, and on Windows 11 it starts among the hidden icons.
 - Approving a plan is not an input request for the app: not for the input levels, and so not for the record or
   the notifications either.
@@ -719,11 +841,11 @@ Not exercised:
 - A person has only used the app on Windows. On macOS and Linux it has been started by `pack-check.js`, with a
   stand-in for Claude Code; everything in section 7 is untried there.
 - The effect of App Nap on the app's timers was not measured. The design avoids depending on it.
-- The Windows installer is not signed, the app has Electron's default icon, and it does not update itself.
+- The Windows installer is not signed, and the app has Electron's default icon.
 - The signed and notarised Mac build has run on the owner's Mac and in the `installers` workflow, started by
   hand on the `mac-signing` branch: Apple accepted both apps, Gatekeeper reports them as notarised from the
   disk images, and `pack-check.js` passed on both with the hardened runtime. On the owner's Mac a copy marked
-  as downloaded starts. No signed release has gone out yet.
+  as downloaded starts.
 - A packaged build must keep Electron's `RunAsNode` fuse on, or the helper process needs another way to start.
   `pack-check.js` fails when it is off.
 - On Ubuntu 24.04 and later the AppImage runs without Chromium's sandbox. A `.deb` with an AppArmor profile
@@ -739,7 +861,7 @@ Not exercised:
 - A flag placed before the `.` on the command line makes the app open its own source folder (see the table
   above). The app could find the folder argument more carefully.
 
-## 12. Continuing the work
+## 13. Continuing the work
 
 - **Windows** is the development machine. `npm run check:cpu` runs the job-object mechanism directly.
 - **Linux** was a WSL distribution (Ubuntu 24.04, systemd 255). The default mechanism there is the kernel one;
@@ -777,15 +899,46 @@ Not exercised:
 - **The update button** is tested with `CLAUDINHO_RELEASES` pointing at a one-line server that names a higher
   version. Pressing the button runs the real `claude update`, so the test first makes sure the installed
   version is the newest.
+- **Auto-merge** is tested live in a clone of a GitHub repository made for it: the sessions open real pull
+  requests there and the app merges them. A fresh clone needs its workspace trust dialog answered once. The
+  verdicts come from a real Claude run, so a test writes down what happened instead of asserting a verdict;
+  the prompts tell each session what to write at the end of its turn.
+- **The app's own update** is looked at with `CLAUDINHO_UPDATES` pointing at a stand-in that serves a
+  `latest.yml` with a higher version and no installer behind it. Never serve a real installer to a copy on a
+  machine in use: the update installs over the app that is installed there. The install itself is what
+  `pack-check.js --update` does on the hosted machines.
+- **A command that must not run in a check** is replaced by a shell function. A stand-in folder on the `PATH`
+  is not enough in Git Bash, where a Windows path in `PATH` is split at its colon.
 - This repository has no `docs/PROCESS.md` on purpose. The app, like the owner's helper, tells an agent to
   follow that file when it exists, and this record is a history, not a process to follow.
 
-## 13. Sources
+## 14. Sources
 
 The owner's rule for the session was to name the documentation before building on it. These are the pages the
 work relied on.
 
-**Claude Code** (`https://code.claude.com/docs/en/…`): `hooks`, `statusline`, `settings`, `cli-reference`,
+**Signing and the app's own update**
+
+- electron-builder 26 (`https://www.electron.build/v26/docs/…`): `features/code-signing/code-signing-mac`,
+  `features/code-signing/notarization`, `features/code-signing/code-signing-win`, `mac`, `win`, `dmg`,
+  `features/auto-update`, `publish`, `api/electron-updater.Class.AppUpdater`. Where a page and the installed
+  version disagreed, the installed code was followed (`app-builder-lib` and `@electron/notarize`, whose README
+  names the role a notary key needs).
+- <https://developer.apple.com/help/account/certificates/create-developer-id-certificates/>
+- <https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution>
+- <https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api>
+- <https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac>
+- <https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions>
+- <https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation>
+- <https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options>
+- <https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart>
+- <https://signpath.org/terms>
+
+**Auto-merge**: the `hooks` and `headless` pages below, `claude --help` of 2.1.322, and
+<https://cli.github.com/manual/gh_pr_merge>, <https://cli.github.com/manual/gh_pr_ready> and
+<https://cli.github.com/manual/gh_pr_checks>.
+
+**Claude Code** (`https://code.claude.com/docs/en/…`): `hooks`, `headless`, `statusline`, `settings`, `cli-reference`,
 `worktrees`, `sessions`, `sub-agents`, `skills`, `authentication`, `env-vars`, `model-config`,
 `permission-modes`, `claude-directory`, `agent-view`, `setup`, `permissions`. The install scripts behind
 <https://claude.ai/install.sh> and <https://claude.ai/install.ps1> show where the newest version is read from.
