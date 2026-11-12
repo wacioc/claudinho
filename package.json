@@ -1,6 +1,6 @@
 {
   "name": "claudinho",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Desktop monitor for the Claude Code instances running in a repo",
   "license": "MIT",
   "private": true,
