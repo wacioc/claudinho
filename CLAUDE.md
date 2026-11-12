@@ -93,6 +93,11 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
   on a branch with one commit that holds every kind of change, which a session pushes and opens as a pull
   request. And by handing a large public pull request's data to `renderDiff` in the window. Its syntax
   colours are checked the same three ways: every line must still read as GitHub gave it.
+- The local diff, which the Diff tab shows while there is no pull request, is tested in scratch repositories
+  that hold every kind of change. A session started in such a folder sits at Claude Code's question whether
+  the folder is trusted, and that is enough: the tab needs its folder alone. The tab must change nothing, so
+  hash `.git/index` before and after a read, with a file that was only touched in the folder, and run no git
+  command of your own in between. `git diff` and `git status` write the index; `git diff-index` does not.
 - The detail view's list of sessions is tested live with three sessions, two of them in a group and one
   waiting for an answer. For a request the app holds on the card, that session needs the "timed" input level:
   at "manual" the session asks in its own terminal and the app holds nothing.

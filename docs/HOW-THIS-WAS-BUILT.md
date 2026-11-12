@@ -1192,7 +1192,49 @@ one with its own address keeps it.
 
 0.6.1 came out on the first attempt. Asked whether the pull requests should follow the issues, the owner
 answered "Yes, PRs too": both lists are highest number first, with one order in `lib.js` for the two. Checked
-read-only: 56 open pull requests and 1000 open issues, each list falling and the same as GitHub's.
+read-only: 56 open pull requests and 1000 open issues, each list falling and the same as GitHub's. That went
+out as 0.6.2, again on the first attempt.
+
+### The local diff, while there is no pull request
+
+> In the diff tab I want while the PR isn't opened yet to display the local Diff and put either Diff (local)
+> or Diff (git) depending on whether a PR exists or not.
+
+| Decision | Why |
+|---|---|
+| The local diff is everything the folder holds beyond the default branch: the commits on its branch, what is not committed, and the files git does not know yet. | A session edits first and commits later, and pushes last. Only what is not committed would be empty after its commit; only the commits would be empty before it. Together they are about what a pull request opened now would show, with the uncommitted work on top. |
+| The default branch is the one `origin`'s HEAD names, else `origin/main`, `origin/master`, `main`, `master`. Where none is found, the diff is against the last commit; in a repository without a commit, against nothing. | That is the branch a pull request would go to, as far as the clone knows without asking GitHub. The local diff must work without a network. |
+| It is read with `git diff-index -p -M` and `git ls-files --others --exclude-standard`, not with `git diff`. | The Diff tab is read-only, by the owner's first request for it. `git diff` brings the index up to date and writes it where a file was only touched (`diff.autoRefreshIndex`, which git's manual says holds for the porcelain command alone). In a scratch repository it did so with `--no-optional-locks` too. A session may be at its own `git add` at that moment. The plumbing command left the index byte for byte as it was. |
+| git's patch text is turned into the rows GitHub's list of files has, and from there it goes the way of a pull request. | One drawing, one set of rules for folding and notes, one colouring. What a file is called is read from the lines that say it unmistakably ("rename to", "+++ b/…", "--- a/…"), and for a file without those from the two equal halves of its first line. |
+| A file git does not know is read from the disk and shown as all added. At most 200 of them, 1 MB each, 8 MB in all. | `git diff-index` knows nothing of them, and new files are much of what a session makes. The limits are for a folder with something large in it that nobody has ignored yet. |
+| The tab is called "Diff (local)" or "Diff (git)", the owner's words, by whether the card knows of a pull request. | Asked for. The card learns of one when a turn ends or when the tab reads the diff, and the name follows at once. |
+| The local diff links nowhere. | There is nothing on GitHub yet. |
+
+`test.js` has asserts for git's patch text with one chunk of every kind, as git 2.49 printed them, and for a
+file that git does not know. Read-only, `lib.patchFiles` was held against git's own machine-readable lists
+(`--name-status -z`, `--numstat -z`) for every pair of commits in this repository's history and for the
+scratch repository: every name, status and count the same.
+
+In a test copy, on three scratch folders whose sessions were asked nothing:
+
+| Folder | What the tab showed |
+|---|---|
+| A repository with a committed change, a new file, an empty one, a deleted one, two renames, a binary file, a change of mode, a staged file, a change that is not staged, four files unknown to git, an ignored file, and one file that was only touched. | "Diff (local)", "No pull request yet, compared with main", and 15 files: the ones git names when it reads the files, in the order of their names. The touched file, which git's quick list calls modified, is not among them; nor is the ignored one. Counts, notes and folding as for a pull request, colours on the new file of code, no link to GitHub. A line added to a file showed after Refresh. |
+| The same, read three times with a file touched just before. | git's index had the same hash and the same time stamp afterwards. |
+| A repository without a commit. | "nothing is committed yet", and its two files, one staged and one unknown, as added. |
+| A folder that is no repository. | "not a git repository", and nothing to compare. |
+
+And live, in the clone of the test repository, on a branch with one commit, one change that was not committed
+and one unknown file: the tab said "Diff (local)", compared with `origin/main`, with those four files. The
+session was then told to push and to open a pull request. Three seconds after its turn ended the same tab said
+"Diff (git)" and showed the pull request with the two files that had been pushed, and the card had its button.
+
+| Symptom | Cause | What changed |
+|---|---|---|
+| `git --no-optional-locks diff` wrote the index of the scratch repository anew. | Found before any code was written, by hashing the index around each command. The option is documented for `git status`. | The plumbing command, which the manual says does not refresh. |
+| At the end of the first run in the scratch repository its index had another hash than at the start. | The check itself had run `git checkout` on a file in between. | A check of its own that runs no git command between the two hashes. The first check puts its file back by hand. |
+| On a second run, the comparison of the file list failed. | The first runs had left a file touched, and the check took its names from git's quick list, which calls such a file modified. The tab was right. | The check takes its names from the list git makes by reading the files, and has the touched file as a case of its own. |
+| A patched copy of that check stopped matching anything. | The patch was written through a shell and lost its backslashes: the script held real tabs and zero bytes. | Written again as a file. |
 
 ## 15. Still open
 
@@ -1347,7 +1389,10 @@ what GitHub's page loads by itself (400 lines and 20 KB of a file, 20,000 lines 
 <https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/about-comparing-branches-in-pull-requests>
 for what "Files changed" compares; `gh api --help` and `gh pr diff --help` of gh 2.72.0. Seen, not documented:
 where the page has a file (`#diff-` and the SHA-256 of its name), and that deleted files start folded there.
-For the colours, highlight.js 11.12.0: <https://highlightjs.readthedocs.io/en/latest/api.html> (`highlight`,
+For the local diff, git 2.49's own manual, as installed with it and as on <https://git-scm.com/docs>:
+`git-diff-index` (what it compares, and that it does not refresh), "Generating patch text with -p" (the lines
+of a patch and how names are quoted), `git-config` (`core.quotePath`, `diff.autoRefreshIndex`), `git-ls-files`
+and `git-merge-base`. For the colours, highlight.js 11.12.0: <https://highlightjs.readthedocs.io/en/latest/api.html> (`highlight`,
 `getLanguage`), <https://github.com/highlightjs/highlight.js/blob/main/README.md> (what `require` loads, the
 licence) and <https://highlightjs.readthedocs.io/en/latest/css-classes-reference.html> (the classes). That its
 answer escapes the code, and which entities it uses, is not on those pages: it was read from an answer.

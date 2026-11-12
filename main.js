@@ -583,6 +583,52 @@ async function readPr(inst) {
   return pr;
 }
 
+// What a session's folder holds beyond the default branch, for a branch that has no pull request yet: the
+// commits on it, what is not committed, and the files git does not know yet. That is about what a pull request
+// opened now would show, with the work that is not committed on top.
+// Read with git's plumbing, which only reads. `git diff` is not used: where a file was only touched it brings
+// the index up to date and writes it (diff.autoRefreshIndex; seen on git 2.49 with --no-optional-locks too),
+// and a session can be in the middle of its own `git add` at that moment.
+// ponytail: the default branch is the one origin's HEAD names, else main or master. Ask GitHub for it where a
+// repository's default is called something else and its clone does not say so.
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';   // git's name for a folder with nothing in it
+const NEW_FILES = 200, NEW_FILE_BYTES = 1024 * 1024, NEW_BYTES = 8 * 1024 * 1024;   // unknown files: how many are listed, how large a one is read, and how much in all
+async function localDiff(dir) {
+  const git = args => run('git', ['-c', 'core.quotePath=false', ...args], dir, 30000);
+  const has = ref => git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).then(() => true, () => false);
+  if (!await git(['rev-parse', '--is-inside-work-tree']).then(s => s.trim() === 'true', () => false)) return { local: true, git: false, additions: 0, deletions: 0, files: [] };
+  // against: what the folder is compared with. A branch's name, 'HEAD' where no default branch was found (then
+  // only what is not committed shows), or '' in a repository without a commit.
+  let against = '', base = EMPTY_TREE;
+  if (await has('HEAD')) {
+    against = base = 'HEAD';
+    for (const ref of ['origin/HEAD', 'origin/main', 'origin/master', 'main', 'master']) {
+      if (!await has(ref)) continue;
+      const common = await git(['merge-base', ref, 'HEAD']).then(s => s.trim(), () => '');
+      if (common) { base = common; against = await git(['rev-parse', '--abbrev-ref', ref]).then(s => s.trim() || ref, () => ref); }
+      break;
+    }
+  }
+  // The prefixes are named so that no setting of the owner's (diff.noprefix, diff.mnemonicPrefix) can take them
+  // away: lib.patchFiles reads the names behind them.
+  const rows = lib.patchFiles(await git(['diff-index', '-p', '-M', '--full-index', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/', base]));
+  const others = (await git(['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(f => f && !f.endsWith('/'));
+  let read = 0;
+  for (const f of others.slice(0, NEW_FILES)) {
+    let buf = null;
+    try {
+      const st = await fs.promises.stat(path.join(dir, f));
+      if (!st.isFile()) continue;
+      if (st.size <= NEW_FILE_BYTES && read + st.size <= NEW_BYTES) { buf = await fs.promises.readFile(path.join(dir, f)); read += buf.length; }
+    } catch { continue; }   // gone since it was listed
+    rows.push(lib.untrackedRow(f, buf));
+  }
+  rows.sort((a, b) => (a.filename < b.filename ? -1 : a.filename > b.filename ? 1 : 0));   // by name, as git and GitHub list them
+  const sum = k => rows.reduce((n, f) => n + f[k], 0);
+  const totals = { additions: sum('additions'), deletions: sum('deletions') };
+  return { local: true, git: true, against, more: Math.max(0, others.length - NEW_FILES), ...totals, ...lib.mapDiff(rows, totals) };
+}
+
 const REVIEW_MODEL = 'sonnet';
 const MAX_FOLLOW_UPS = 3;   // per prompt of the owner's; after that the pull request waits for the owner
 // A session with auto-merge on waits in its Stop hook for these calls, so none of them may hang for good.
@@ -820,15 +866,18 @@ const rpc = {
     try { await run('gh', action === 'ready' ? ['pr', 'ready', n] : ['pr', 'merge', n, `--${saved.settings.mergeMethod}`], inst.cwd, GH_WAIT); }
     finally { await readPr(inst); push(); }
   },
-  // The pull request of the instance's branch with its files and their diffs, as GitHub lists them under
-  // "Files changed": what has been pushed, against the merge base. Null when the branch has none. Read-only.
+  // What the Diff tab shows. Where the instance's branch has a pull request: that pull request with its files
+  // and their diffs, as GitHub lists them under "Files changed" (what has been pushed, against the merge
+  // base). Where it has none yet: the folder's own diff (see localDiff). Null when GitHub does not answer for a
+  // pull request the card knows of. Read-only either way.
   // ponytail: what GitHub's list of files gives, which is less than its page can load: 3000 files at most, and
   // no diff for a file once its own diff or the pull request's is too large. The tab then links to GitHub. For
   // more, diff in the worktree with git, which has the commits.
   async prDiff(id) {
     const inst = instances.get(id);
-    const pr = inst && await readPr(inst);   // the branch may have got its pull request since the last turn ended
-    if (!pr) return null;
+    if (!inst) return null;
+    const pr = await readPr(inst);   // the branch may have got its pull request since the last turn ended
+    if (!pr) return inst.pr ? null : localDiff(inst.cwd);
     push();
     const rows = [];
     for (let page = 1; page <= 30; page++) {

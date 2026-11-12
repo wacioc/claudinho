@@ -4,6 +4,16 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.6.3 (2026-11-13)
+
+**Instances**
+
+- While a session's branch has no pull request, the Diff tab shows the folder's own diff: what it holds beyond
+  the default branch, which is the commits on its branch, what is not committed, and the files git does not
+  know yet. Before, the tab was empty until there was a pull request.
+- The tab is called **Diff (local)** then, and **Diff (git)** once there is a pull request, whose diff it shows
+  as before.
+
 ## 0.6.2 (2026-11-13)
 
 **Pull requests**

@@ -139,6 +139,37 @@ const whole = lib.mapDiff(many, { additions: 60 * 399, deletions: 0 });
 assert.deepStrictEqual([whole.partial, whole.files.filter(f => !f.fold).length, whole.files[49].fold, whole.files[50].fold], [false, 50, '', 'Folded: the files before this one come to 20,000 lines.']);
 // its files add up to less than the pull request's own totals: GitHub has handed over a part of it
 assert.strictEqual(lib.mapDiff(many, { additions: 60 * 399 + 1, deletions: 0 }).partial, true);
+// the local diff: git's patch text as the rows GitHub's list of files has. One chunk of every kind, as git 2.49
+// printed them: a name with a space ends in a tab on the --- and +++ lines, a file that was only touched has a
+// first line and nothing else, and a name with a quote in it comes in quotes with C escapes
+const patchText = [
+  'diff --git a/a.txt b/a.txt', 'index c9e9e05f445e6b772f19fea1449759b7458a446e..0d1c98fa8dcf8485b4f81d7d5670082b14f13acd 100644', '--- a/a.txt', '+++ b/a.txt',
+  '@@ -1,2 +1,2 @@', ' one', '-two', '+TWO', '@@ -9 +9,2 @@ six', '-ten', '+TEN', '+eleven',
+  'diff --git a/empty.txt b/empty.txt', 'new file mode 100644', 'index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391',
+  'diff --git a/gone.txt b/gone.txt', 'deleted file mode 100644', 'index 286c5f5776916d7d7d5849988ca9d83e722cf9c2..0000000000000000000000000000000000000000', '--- a/gone.txt', '+++ /dev/null', '@@ -1 +0,0 @@', '-gone',
+  'diff --git a/moved from.txt b/moved to.txt', 'similarity index 100%', 'rename from moved from.txt', 'rename to moved to.txt',
+  'diff --git a/old name.txt b/new name.txt', 'similarity index 50%', 'rename from old name.txt', 'rename to new name.txt', 'index 1275430f..328f0bbd 100644', '--- a/old name.txt\t', '+++ b/new name.txt\t', '@@ -1 +1,2 @@', ' same', '+plus',
+  'diff --git a/pic one.bin b/pic one.bin', 'index 0df5c993..af750960 100644', 'Binary files a/pic one.bin and b/pic one.bin differ',
+  'diff --git a/run.sh b/run.sh', 'old mode 100644', 'new mode 100755',
+  'diff --git a/touched.txt b/touched.txt',
+  'diff --git "a/we\\"ird \\303\\244.txt" "b/we\\"ird \\303\\244.txt"', 'new file mode 100644', 'index 00000000..19d9cc85', '--- /dev/null', '+++ "b/we\\"ird \\303\\244.txt"', '@@ -0,0 +1 @@', '+x',
+  'diff --git "a/t\\tab.bin" "b/t\\tab.bin"', 'new file mode 100644', 'index 00000000..af750960', 'Binary files /dev/null and "b/t\\tab.bin" differ',
+  '',
+].join('\n');
+const patchRows = lib.patchFiles(patchText);
+assert.deepStrictEqual(patchRows.map(r => [r.filename, r.status, r.additions, r.deletions, r.previous_filename || '']), [
+  ['a.txt', 'modified', 3, 2, ''], ['empty.txt', 'added', 0, 0, ''], ['gone.txt', 'removed', 0, 1, ''], ['moved to.txt', 'renamed', 0, 0, 'moved from.txt'],
+  ['new name.txt', 'renamed', 1, 0, 'old name.txt'], ['pic one.bin', 'modified', 0, 0, ''], ['run.sh', 'modified', 0, 0, ''], ['we"ird ä.txt', 'added', 1, 0, ''], ['t\tab.bin', 'added', 0, 0, '']]);
+assert.strictEqual(patchRows[0].patch, '@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n@@ -9 +9,2 @@ six\n-ten\n+TEN\n+eleven');   // the hunks, without the lines above them
+// and those rows go the way of a pull request's: the same notes and the same folding
+const localDiff = lib.mapDiff(patchRows, { additions: 5, deletions: 3 });
+assert.deepStrictEqual([localDiff.partial, ...localDiff.files.map(f => f.note || f.fold || `${f.hunks.length} hunks`)],
+  [false, '2 hunks', 'Empty file.', 'This file was deleted.', 'File renamed without changes.', '1 hunks', 'Binary file not shown.', 'Only the mode of this file changed.', '1 hunks', 'Binary file not shown.']);
+// a file git does not know yet: all of it added. Without a line break at its end, empty, binary, or too large to read
+assert.deepStrictEqual(lib.untrackedRow('n.txt', Buffer.from('one\ntwo\n')), { filename: 'n.txt', status: 'added', additions: 2, deletions: 0, changes: 2, patch: '@@ -0,0 +1,2 @@\n+one\n+two' });
+assert.strictEqual(lib.untrackedRow('n.txt', Buffer.from('one')).patch, '@@ -0,0 +1 @@\n+one\n\\ No newline at end of file');
+assert.deepStrictEqual([lib.untrackedRow('e', Buffer.alloc(0)), lib.untrackedRow('b', Buffer.from([1, 0, 2])), lib.untrackedRow('big', null)].map(r => lib.mapDiffFile(r).note),
+  ['Empty file.', 'Binary file not shown.', 'The diff of this file is too large to show here.']);
 // syntax colours: highlight.js's HTML as lines of [class, text]. Entities are text again, a span that crosses
 // a line break goes on in the next line, and of spans inside each other the innermost counts
 assert.deepStrictEqual(lib.colouredLines('<span class="k">if</span> (a &lt; b &amp;&amp; c) <span class="s">&quot;x<span class="e">\\n</span>&#x27;\nmore</span> end\n'),

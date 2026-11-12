@@ -197,6 +197,7 @@ function mapDiffFile(f, partial) {
     anchor: `diff-${crypto.createHash('sha256').update(f.filename).digest('hex')}`,
     hunks: f.patch ? parsePatch(f.patch) : null,
     note: f.patch ? '' : f.changes ? 'The diff of this file is too large to show here.' : f.sha === EMPTY_BLOB ? 'Empty file.'
+      : f.binary ? 'Binary file not shown.' : f.modeOnly ? 'Only the mode of this file changed.'   // git says which it is, for a local diff
       : partial ? 'GitHub gives no diff for this file: the pull request is over its limits, or the file is binary.'
         : f.previous_filename ? 'File renamed without changes.' : f.status === 'added' || f.status === 'removed' ? 'Binary file not shown.'
           : 'No lines changed: a binary file, or a file whose mode alone changed.',
@@ -219,6 +220,69 @@ function mapDiff(rows, totals) {
     return file;
   });
   return { partial, files };
+}
+
+// ---------- the local diff, for a branch without a pull request ----------
+
+// A path as git prints it when it holds a character that cannot stand as it is (a double quote, a backslash, a
+// control character): in double quotes, with the escapes of C. With core.quotePath off, as the app asks for
+// it, other letters come as they are.
+const C_ESCAPE = { n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', f: '\f', v: '\v' };
+function unquotePath(s) {
+  if (!s.startsWith('"')) return s;
+  const out = [], body = [...s.slice(1, -1)];
+  for (let i = 0; i < body.length; i++) {
+    const octal = body[i] === '\\' && /^[0-7]{3}$/.test(body.slice(i + 1, i + 4).join(''));
+    if (octal) { out.push(Buffer.from([parseInt(body.slice(i + 1, i + 4).join(''), 8)])); i += 3; }
+    else if (body[i] === '\\') { i++; out.push(Buffer.from(C_ESCAPE[body[i]] || body[i])); }
+    else out.push(Buffer.from(body[i]));
+  }
+  return Buffer.concat(out).toString('utf8');
+}
+
+// git's patch text (`git diff-index -p -M --full-index`) as the rows GitHub's list of a pull request's files has:
+// one per file, with its status, its counts, and its hunks as `patch`. The local diff then goes the way of the
+// pull request's (mapDiff). What a file is called is read from the lines that say it unmistakably: "rename to",
+// "+++ b/…" or "--- a/…", and, for a file without those, the two equal halves of its first line.
+function patchFiles(text) {
+  const rows = [];
+  for (const chunk of text.split(/^(?=diff --git )/m)) {
+    if (!chunk.startsWith('diff --git ')) continue;
+    const at = chunk.search(/^@@ /m);
+    const head = (at < 0 ? chunk : chunk.slice(0, at)).split('\n');
+    const patch = at < 0 ? undefined : chunk.slice(at).replace(/\n$/, '');
+    const said = start => { const l = head.find(x => x.startsWith(start)); return l === undefined ? undefined : l.slice(start.length); };
+    const added = said('new file mode ') !== undefined, removed = said('deleted file mode ') !== undefined;
+    const to = said('rename to '), binary = head.some(x => /^Binary files .* differ$/.test(x) || x === 'GIT binary patch');
+    const modeOnly = !patch && !binary && said('old mode ') !== undefined;
+    if (!patch && !binary && !modeOnly && !added && !removed && to === undefined) continue;   // a file that was only touched
+    const side = prefix => { const l = said(prefix); return l === undefined || l.startsWith('/dev/null') ? undefined : unquotePath(l.replace(/\t$/, '')).slice(2); };   // a name with a space ends in a tab there
+    const first = head[0].slice('diff --git '.length);
+    const halves = /^"((?:[^"\\]|\\.)*)" "((?:[^"\\]|\\.)*)"$/.exec(first);
+    const filename = to !== undefined ? unquotePath(to) : side('+++ ') || side('--- ') || (halves ? unquotePath(`"${halves[2]}"`).slice(2) : first.slice(2, 2 + (first.length - 5) / 2));
+    const [, before, after] = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/m.exec(head.join('\n')) || [];
+    const lines = patch ? parsePatch(patch).flatMap(k => k.lines) : [];
+    const additions = lines.filter(l => l.type === '+').length, deletions = lines.filter(l => l.type === '-').length;
+    rows.push({
+      sha: removed ? before : after, filename, previous_filename: to === undefined ? undefined : unquotePath(said('rename from ')),
+      status: added ? 'added' : removed ? 'removed' : to !== undefined ? 'renamed' : 'modified',
+      additions, deletions, changes: additions + deletions, patch, binary, modeOnly,
+    });
+  }
+  return rows;
+}
+
+// A file git does not know yet, as such a row: all of it added. buf: what the file holds, or null where it was
+// too large to read (see `localDiff` in main.js). A zero byte among the first 8000 makes it binary, as for git.
+function untrackedRow(filename, buf) {
+  const row = { filename, status: 'added', additions: 0, deletions: 0, changes: 0 };
+  if (!buf) return { ...row, changes: 1 };
+  if (!buf.length) return { ...row, sha: EMPTY_BLOB };
+  if (buf.subarray(0, 8000).includes(0)) return { ...row, binary: true };
+  const text = buf.toString('utf8'), whole = text.endsWith('\n');
+  const lines = (whole ? text.slice(0, -1) : text).split('\n');
+  return { ...row, additions: lines.length, changes: lines.length,
+    patch: `@@ -0,0 +1${lines.length === 1 ? '' : `,${lines.length}`} @@\n${lines.map(l => `+${l}`).join('\n')}${whole ? '' : '\n\\ No newline at end of file'}` };
 }
 
 // ---------- syntax colours for a diff ----------
@@ -779,7 +843,7 @@ function homePath(home, rel) {
 module.exports = {
   worktreeName, openBlockers, defaultTemplate, renderTemplate, AUTONOMY, autonomyOf, mergeInstruction, mergeNote, toldToMerge, issuePrompt, prAction, backgroundWork, ownPrompt,
   byNumber, issuesQuery, mapIssue, issueUrl, parseGitHub,
-  PR_FIELDS, checksOf, mapPr, parsePatch, mapDiffFile, mapDiff, colouredLines, colourHunks, groupName,
+  PR_FIELDS, checksOf, mapPr, parsePatch, mapDiffFile, mapDiff, unquotePath, patchFiles, untrackedRow, colouredLines, colourHunks, groupName,
   REVIEW_SYSTEM, REVIEW_SCHEMA, reviewPrompt, reviewVerdict, waitForChecks,
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,
   auditEntries, auditPick, toolKey, parseVersion, newerVersion,

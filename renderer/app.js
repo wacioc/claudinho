@@ -413,8 +413,9 @@ function renderPending(t, inst) {
 
 // order: where the card sits in the grid. A group's cards share one, so they sit next to each other.
 function updateCard(t, inst, order) {
-  if (t.tab === 'diff' && inst.done && !t.inst.done) loadDiff(t);   // its turn has just ended: what it pushed should show
+  if (t.tab === 'diff' && inst.done && !t.inst.done) loadDiff(t);   // its turn has just ended: what it did should show
   t.inst = inst;
+  t.p.tabs.children[1].textContent = inst.pr ? 'Diff (git)' : 'Diff (local)';   // the pull request as GitHub has it, or the folder's own diff until there is one
   const st = statusOf(inst), s = inst.status || {};
   t.p.title.textContent = `${inst.worktree ? '🌳' : '📁'} ${inst.label}`;
   t.p.title.title = inst.cwd;
@@ -560,10 +561,11 @@ function showTab(t, name) {
 }
 
 // The pull request of the session's branch as GitHub's "Files changed" has it: what is pushed, against the
-// merge base. Read-only: the tab shows and links to GitHub, and nothing in it writes anywhere.
+// merge base. Until the branch has one, the folder's own diff: what it holds beyond the default branch,
+// committed or not. Read-only: the tab shows and links to GitHub, and nothing in it writes anywhere.
 async function loadDiff(t) {
   const mine = t.diffLoad = {};
-  if (!t.p.diff.firstChild) t.p.diff.replaceChildren(h('div.empty', 'Reading the pull request from GitHub…'));
+  if (!t.p.diff.firstChild) t.p.diff.replaceChildren(h('div.empty', 'Reading the diff…'));
   if (t.diffAt) t.diffAt.textContent = 'reading…';
   let d;
   try { d = await api.call('prDiff', t.inst.id); } catch (e) { d = { error: errText(e) }; }
@@ -577,22 +579,27 @@ function renderDiff(t, d) {
   const box = t.p.diff, known = t.inst.pr;
   t.diffAt = h('span.hint');
   const bar = (...kids) => h('div.diff-bar', kids, h('span.spacer'), t.diffAt, h('button', { onclick: () => loadDiff(t) }, '↻ Refresh'));
-  if (!d) {
-    return box.replaceChildren(bar(known ? `Pull request #${known.number} could not be read from GitHub just now.` : 'This session has no pull request yet.'),
-      h('div.empty', 'What the pull request of this session\'s branch changes shows here, as GitHub has it: what is pushed, not what is only in the worktree so far.'));
-  }
+  if (!d) return box.replaceChildren(bar(known ? `Pull request #${known.number} could not be read from GitHub just now.` : 'There is nothing to show for this session.'));
   if (d.error) return box.replaceChildren(bar(h('span.loss', d.error)));
-  const onGitHub = (text, hash = '') => h('a', { title: 'Opens GitHub in the browser', onclick: () => call('openUrl', `${d.url}/files${hash}`) }, text);
+  // local: the branch has no pull request yet, and this is the folder's own diff. There is nothing on GitHub to link to.
+  const onGitHub = d.local ? null : (text, hash = '') => h('a', { title: 'Opens GitHub in the browser', onclick: () => call('openUrl', `${d.url}/files${hash}`) }, text);
   const files = d.files.map(f => diffFile(f, onGitHub));
   // GitHub's "Jump to": a file's name takes you to its diff.
   const jump = h('select', { onchange: e => { const el = files[e.target.value]; e.target.value = ''; if (el) { el.open = true; el.scrollIntoView(); } } },
     h('option', { value: '' }, `${plural(d.files.length, 'changed file')}…`), d.files.map((f, i) => h('option', { value: i }, `${f.path}   +${f.additions} −${f.deletions}`)));
   const top = box.scrollTop;
+  // What the folder's own diff is a diff against, in a few words, and in full as the tooltip.
+  const [against, more] = !d.local ? [] : !d.git ? ['not a git repository', 'This folder is not a git repository.']
+    : d.against === 'HEAD' ? ['what is not committed', 'No default branch was found to compare with, so this is what the folder holds beyond its last commit.']
+      : d.against ? [`compared with ${d.against}`, `What this folder holds beyond ${d.against}: the commits on its branch, what is not committed, and the files git does not know yet.`]
+        : ['nothing is committed yet', 'This repository has no commit yet: everything in the folder is new.'];
   box.replaceChildren(...[
-    bar(onGitHub(`#${d.number}`), h('b.diff-title', { title: d.title }, d.title), h('span.chip', d.state === 'OPEN' ? (d.draft ? 'draft' : 'open') : d.state.toLowerCase()),
-      jump, h('span.good', `+${d.additions}`), h('span.loss', `−${d.deletions}`)),
+    d.local ? bar(h('b', 'No pull request yet'), h('span.hint.diff-title', { title: more }, against), jump, h('span.good', `+${d.additions}`), h('span.loss', `−${d.deletions}`))
+      : bar(onGitHub(`#${d.number}`), h('b.diff-title', { title: d.title }, d.title), h('span.chip', d.state === 'OPEN' ? (d.draft ? 'draft' : 'open') : d.state.toLowerCase()),
+        jump, h('span.good', `+${d.additions}`), h('span.loss', `−${d.deletions}`)),
     d.partial && h('div.diff-note', 'This pull request is larger than what GitHub hands over, so some of its files come without their diff. ', onGitHub('See all of it on GitHub')),
-    !d.files.length && h('div.empty', 'This pull request changes no files.'),
+    d.more > 0 && h('div.diff-note', `${plural(d.more, 'more new file')} that git does not know yet ${d.more === 1 ? 'is' : 'are'} not shown.`),
+    !d.files.length && h('div.empty', !d.local ? 'This pull request changes no files.' : d.git ? 'Nothing here differs from that.' : 'There is nothing to compare.'),
     ...files,
   ].filter(Boolean));
   box.scrollTop = top;
@@ -607,7 +614,7 @@ function diffFile(f, onGitHub) {
   const body = h('div');
   const fill = () => {
     if (body.firstChild) return;
-    body.replaceChildren(f.hunks ? diffTable(f.hunks) : h('div.diff-note', f.note, ' ', onGitHub('Open it on GitHub', `#${f.anchor}`)));
+    body.replaceChildren(f.hunks ? diffTable(f.hunks) : h('div.diff-note', f.note, onGitHub && [' ', onGitHub('Open it on GitHub', `#${f.anchor}`)]));
     if (f.hunks) diffColours(body.firstChild, f);
   };
   const el = h('details.diff-file', { open: !f.fold, ontoggle: () => { if (el.open) fill(); } },
