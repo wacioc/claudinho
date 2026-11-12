@@ -58,7 +58,7 @@ The first `npm install` downloads the Electron binary.
 | **Instances** | Every Claude Code instance as a live terminal, titled with its worktree (or the folder name), with model, context window, API-equivalent cost, uptime, and the CPU and memory used by it and everything it started. Click one for the full terminal, a per-process breakdown, its environment variables, its autonomy and the input level, on a second tab the diff of its pull request, and beside it the list of all sessions to go from one to the next. A session that was sent after an issue, and one whose branch has a pull request, carry a button for each that opens it on GitHub. Sessions that belong to a group carry its name and colour, and one whose turn has ended a green outline and checkmark. Sessions started outside the app appear as status-only cards, which a filter can hide, and sessions that were open when the app last stopped appear as cards with a Resume button. |
 | **Worktrees** | Every worktree under `.claude/worktrees`: its branch, whether it holds uncommitted changes or commits that exist nowhere else, its last commit, and the session at work in it. Each can be removed from here. |
 | **Issues** | Open issues by default, in number order with the highest first, with the issues blocking each one. Select one or many, right-click, "Tackle with Claude Code". |
-| **Pull requests** | The repository's open pull requests in number order, drafts and those ready for review: branch, checks, review state, and the session at work on each. A click on a title opens it on GitHub. |
+| **Pull requests** | The repository's open pull requests in number order with the highest first, drafts and those ready for review: branch, checks, review state, and the session at work on each. A click on a title opens it on GitHub. |
 | **.claude** | Everything under `.claude` and `.github` of the open folder, and your own configuration from the home folder (`~/.claude`): `CLAUDE.md`, `settings.json`, agents, skills, commands, rules. All of it is editable inline. Saving a file of the open folder offers to commit and push. "New skill" and "New agent" generate one from a prompt in a terminal, where Claude can ask follow-up questions. |
 
 The header shows the app's version, the logged-in account, the 5-hour and 7-day usage as last reported by
@@ -370,7 +370,7 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   (`shareCpu` in `lib.js`) for the systems whose kernel cannot share by weight.
 - Issues come from `gh api graphql`; blockers are GitHub's native issue dependencies. Pull requests come from
   `gh pr list`. Both are fetched newest first, and GitHub cannot order issues by number, so the app sorts
-  them: the issues highest number first, the pull requests lowest first.
+  them, highest number first.
 - The Diff tab reads GitHub's list of a pull request's files (`gh api repos/{owner}/{repo}/pulls/<n>/files`),
   a hundred a page. Each file comes with its status, its counts and its hunks, cut the way GitHub's page cuts
   them. `gh pr diff` prints the same lines with some hunks cut differently, and refuses a pull request of more

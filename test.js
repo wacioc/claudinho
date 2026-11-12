@@ -11,8 +11,8 @@ assert.strictEqual(lib.worktreeName(7, 'No prefix here'), '7-no-prefix-here');
 const long = lib.worktreeName(274, 'CHORE | ' + 'delegate from calls and tell the owner the result '.repeat(3));
 assert.ok(long.length <= 64 && !long.endsWith('-') && long.startsWith('274-delegate-from-calls'), long);
 
-// the Issues and Pull requests lists: by number as a number, lowest first (as text, #10 would come before #9)
-assert.deepStrictEqual([{ number: 10 }, { number: 9 }, { number: 100 }, { number: 1 }].sort(lib.byNumber).map(i => i.number), [1, 9, 10, 100]);
+// the Issues and Pull requests lists: by number as a number, highest first (as text, #9 would come before #10)
+assert.deepStrictEqual([{ number: 10 }, { number: 9 }, { number: 100 }, { number: 1 }].sort(lib.byNumber).map(i => i.number), [100, 10, 9, 1]);
 
 // blockers: only "closed as completed" unblocks
 assert.deepStrictEqual(lib.openBlockers([{ number: 1, state_reason: 'completed' }, { number: 2, state_reason: null }, { number: 3, state_reason: 'not_planned' }]), [2, 3]);

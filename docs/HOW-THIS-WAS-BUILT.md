@@ -1190,6 +1190,10 @@ disk holds the issue's address. Of three made-up interrupted sessions, the one w
 the open folder has a button to that folder's repository, the one of another folder has plain text, and the
 one with its own address keeps it.
 
+0.6.1 came out on the first attempt. Asked whether the pull requests should follow the issues, the owner
+answered "Yes, PRs too": both lists are highest number first, with one order in `lib.js` for the two. Checked
+read-only: 56 open pull requests and 1000 open issues, each list falling and the same as GitHub's.
+
 ## 15. Still open
 
 - The Diff tab has GitHub's default view and no other, and shows no diff where GitHub's list of files gives

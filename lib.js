@@ -97,11 +97,10 @@ const ownPrompt = text => !/^\s*<(task-notification|agent-message)[\s>]/.test(te
 
 // ---------- GitHub issues ----------
 
-// The order of the Issues and the Pull requests list: by number. The pull requests come lowest first, the
-// issues highest first (see `issues` in main.js). GitHub orders issues by a date or by their comments, not by
-// number, so both lists are sorted once they are here. They are asked for newest first: where a repository has
-// more than the app fetches, the list then misses its oldest and none in between.
-const byNumber = (a, b) => a.number - b.number;
+// The order of the Issues and the Pull requests list: by number, highest first. GitHub orders issues by a date
+// or by their comments, not by number, so both lists are sorted once they are here. They are asked for newest
+// first: where a repository has more than the app fetches, the list then misses its oldest and none in between.
+const byNumber = (a, b) => b.number - a.number;
 
 function issuesQuery(state) {
   const states = state === 'ALL' ? '' : `, states: [${state === 'CLOSED' ? 'CLOSED' : 'OPEN'}]`;

@@ -4,6 +4,13 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.6.2 (2026-11-13)
+
+**Pull requests**
+
+- The Pull requests list is in number order with the highest first, like the Issues list. Before, the lowest
+  came first.
+
 ## 0.6.1 (2026-11-13)
 
 **Instances**

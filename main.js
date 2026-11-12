@@ -906,7 +906,7 @@ const rpc = {
       if (!data.pageInfo.hasNextPage) break;
       cursor = data.pageInfo.endCursor;
     }
-    return out.sort((a, b) => lib.byNumber(b, a));   // the Issues list: highest number first
+    return out.sort(lib.byNumber);
   },
   dispatch({ issues, model, effort, level, parallel, autonomy, template, group }) {
     if (!claudeBin) throw new Error('Claude Code CLI (claude) was not found on PATH.');
