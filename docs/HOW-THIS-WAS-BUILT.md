@@ -728,7 +728,7 @@ And, once the first of them was built:
 
 **macOS: done by the owner, as 0.3.1.** While this round's features were being built on the Windows PC, the
 owner signed the Mac apps in a session of their own, on their Mac, and released that as 0.3.1 (sections 8 and
-13 carry what that session recorded). The work here was then put on top of it. A variant written on the PC
+14 carry what that session recorded). The work here was then put on top of it. A variant written on the PC
 before that, with an App Store Connect key in place of the Apple ID, was dropped unrun. Two things from it are
 worth keeping: electron-builder's page says `APPLE_API_KEY` holds the key's text, while version 26.18.0 passes
 it to `notarytool --key`, which takes a file's path; and under the hardened runtime, programs inside the
@@ -927,8 +927,93 @@ under the address the update asks for.
 | A subagent told to run `sleep 30` came back after four seconds. | Claude Code refuses a bare `sleep` in the foreground and points the model to a monitor or to the background. | The subagent of the test waits with `node -e "setTimeout(…)"`. |
 | The run of the 0.4.0 tag failed. | An outage at GitHub, above. | The failed job was run again; no new tag was needed. |
 
-## 13. Still open
+## 13. The eighth round: lists by number, autonomy as one dropdown
 
+The same day, two short requests, the second while the first was being worked on:
+
+> I want the GH issues and PRs to be ordered by their #
+
+> The auto-merge feature shouldn't be a checkbox, it should be the dropdown with the same options:
+> manual/merge by the agent's discretion/auto merge
+
+### The order of the two lists
+
+| Decision | Why |
+|---|---|
+| Lowest number first. | The request names no direction. The pull requests already came highest first, which is how `gh pr list` hands them over, so a request that includes them asks for the other way round. Several issues are also started in the order of the list, and a batch that begins with its lowest number follows the way a plan is numbered. |
+| Sorted in the app. | GitHub's schema, read with `gh api graphql`, orders issues by `CREATED_AT`, `UPDATED_AT` or `COMMENTS`: there is no order by number. `gh pr list` asks for `CREATED_AT`, descending, which `GH_DEBUG=api` shows. |
+| Issues are asked for newest first, no longer last changed first. | The app stops at 1000 issues. In number order, the 1000 changed last are a list with holes in it; the newest 1000 are a list that starts later. The first live run showed the holes, on a repository with more open issues than that. |
+
+### Autonomy
+
+Until now the dialog for several issues had a dropdown with three settings, from the brief: Manual, Semi-auto,
+Full-auto. Everywhere else there was a checkbox, auto-merge on or off: in the dialog for one issue, in the
+dialogs for a new instance and a new worktree, and in an instance's detail view. Now the dropdown is in all of
+them, and a session has one setting, its autonomy, where the code had two.
+
+| Decision | Why |
+|---|---|
+| The three settings mean the same wherever they are chosen. | That is what the owner asked for. It changes one case: one issue on Manual is now told not to merge, as each issue of a batch always was. An unticked box had said nothing about merging and left it to the repository's own process. |
+| A session started without an issue is told nothing on Manual and on Full-auto. | Its prompt is the owner's own, and the default must not put a sentence about pull requests into every session. Full-auto worked without a word to such a session before, by reading what it writes, and still does. |
+| Semi-auto is said at the end of the first prompt wherever there is one. | With Semi-auto the session is the one that merges, so it has to know. An issue's prompt ended with the sentence already; the first prompt of a start dialog now does too. The first live run showed that it has to be there (below). |
+| Where there is no first prompt, or the setting changes later, the session is told by a note: the app's answer to its next `UserPromptSubmit` or `PostToolUse` hook. | The hooks reference gives both an `additionalContext`, "added to Claude's context alongside" the prompt or the tool result. The other way is typing into the session's terminal, and there a dialog may be open that the Enter key would answer. A tool call of a subagent carries an `agent_id`; no note is sent with those. |
+| Only a change to Semi-auto or away from it is told. | With the two others the owner or the app merges, whatever the session knows. Away from Semi-auto has to be told: a session that still believes it may merge would do so on a card that says Manual. |
+| The card says "not told yet" until the note has gone. | An idle session has no prompt and no tool call for the note to go with. The owner can see that, and type something. |
+| A session that is started again from its first prompt is taken to know what that prompt says about merging, and nothing since. | Its conversation is gone, and every note with it. Where the card says something else by now, it is owed a note, which goes with that prompt. |
+| A record written by 0.4.1 or older reads as Full-auto with auto-merge on, as Manual without. | That is all such a record says. A batch started with Semi-auto before the update therefore shows as Manual after it. |
+
+### How it was verified
+
+`test.js` has asserts for the order by number, for the query's order, for the note, for what a first prompt
+says about merging, and for what an older record reads as.
+
+The lists were checked read-only, in an empty folder whose `origin` is a public repository with more than a
+thousand open issues. The Issues tab showed 1000 rows, each with a higher number than the row above, and they
+were the same 1000 that `gh issue list` gives as the newest; the same held for every state. The 59 open pull
+requests were GitHub's 59, in number order. All four start dialogs had the dropdown, on Manual, and no
+checkbox; three issues went to the dialog lowest number first. Three made-up records, two of them in the form
+0.4.1 writes, came up as interrupted cards with the right setting.
+
+The settings were then run live in the clone of the test repository, with Haiku sessions in auto mode, which is
+this machine's default.
+
+| Session | What happened |
+|---|---|
+| Semi-auto, with a first prompt. | The prompt on its screen ended with the sentence. It opened a pull request and merged it itself with `gh pr merge`, 39 seconds after its start. The app reviewed nothing. One notification: "is done: pull request … (merged)". |
+| Full-auto. | As before this round: review, wait for checks, merged by the app at 47 seconds. |
+| Started on Manual; its detail view set to Semi-auto while it ran three commands of twelve seconds each. | Chip "semi-auto merge · not told yet". Thirteen seconds later, while the turn was still running, the chip lost its second half. Asked at the end of the turn what it had been told about merging, the session quoted the sentence. |
+| The same session, set back to Manual while idle. | "manual merge · not told yet", and still so four seconds later. Told with the next prompt typed to it, after which it quoted the Manual sentence and the chip was gone. |
+| One issue, sent from the dialog with Semi-auto chosen. | Its prompt ended with the sentence, and its card was on Semi-auto from the start. |
+
+Last, four made-up records without a conversation were started again from their first prompt, which asked
+each session to quote what its prompt and what a note said about merging.
+
+| Record | What happened |
+|---|---|
+| Semi-auto sentence in its prompt, card on Manual since. | "manual merge · not told yet" at its start. It quoted the sentence from its prompt and, as the note, the Manual one; the chip was gone. |
+| Nothing about merging in its prompt, card on Semi-auto since. | "semi-auto merge · not told yet" at its start, then told: it quoted the Semi-auto sentence as the note. |
+| Semi-auto sentence in its prompt, card on Semi-auto. | Nothing owed, no note. |
+| Nothing in its prompt, card on Manual. | Nothing owed, no note. |
+
+Not exercised: several real issues started in the order of the list, a session outside auto mode that hears of
+Semi-auto by a note, a session resumed with its conversation while a note is still owed, and a conversation
+that is cleared after it was told.
+
+### What went wrong
+
+| Symptom | Cause | What changed |
+|---|---|---|
+| In the first live run a session started by hand with Semi-auto heard of it by the note, next to its first prompt. It opened a pull request, ran `gh pr merge` and was refused: "Blocked by auto mode", "Merge Without Review". It left the pull request open and said so. | To auto mode a note from a hook is not the owner's word, and merging without review is something it wants the owner's word for. | Where a session starts with a prompt, the sentence is part of it: the same session then merged. For the rest the README says what holds. Nothing was done to get a note past auto mode. |
+| A session whose card was changed while it worked was not told until its next prompt. | Every tool call reports to the app, but the app read such a report only while an input request was open. | It also reads it while a note is owed. |
+| The check that compared the open issues with GitHub's list failed. | The app held the 1000 changed last, the list the 1000 newest. | The order the issues are asked for, above. |
+| Found when the changes were read once more before the release: a session started with Semi-auto in its prompt, set to Manual on its card and told so, would have read the sentence again when it was started again without its conversation, with nothing owed to it. It could then have merged on a card that says Manual. | The record kept what the session was told last. A session without its conversation knows its first prompt only. | Started again, what it knows is read from that prompt (`toldToMerge` in `lib.js`). |
+| In one session a `git commit` followed by a push stopped with "Permission denied" on the repository's `.git/config`. | Not looked into. Two sessions were at work in two worktrees of the one repository at that moment, on Windows. | Nothing. The commit was there; the session pushed again. |
+
+## 14. Still open
+
+- Semi-auto by a note does not get a session in auto mode to merge, and an idle session hears of a change only
+  with the owner's next prompt (section 13). Whether the app should give a Semi-auto session a permission rule
+  for `gh pr merge` is the owner's to decide.
 - What a session still has running is read when a turn ends, and only then. A monitor is listed as a shell,
   and a scheduled wake-up is not counted as something running (section 12).
 
@@ -943,7 +1028,7 @@ under the address the update asks for.
   that starts without a prompt gives no sign that its `SessionStart` hooks are done (see the table in
   section 9).
 - A group cannot be renamed or closed as a whole, and sessions started outside the app cannot be put into one.
-- The Pull requests tab shows and links; it does not merge, and it stops at 200.
+- The Pull requests tab shows and links; it does not merge, and it stops at 200. The Issues tab stops at 1000.
 - A person has only used the app on Windows. On macOS and Linux it has been started by `pack-check.js`, with a
   stand-in for Claude Code; everything in section 7 is untried there.
 - The effect of App Nap on the app's timers was not measured. The design avoids depending on it.
@@ -967,7 +1052,7 @@ under the address the update asks for.
 - A flag placed before the `.` on the command line makes the app open its own source folder (see the table
   above). The app could find the folder argument more carefully.
 
-## 14. Continuing the work
+## 15. Continuing the work
 
 - **Windows** is the development machine. `npm run check:cpu` runs the job-object mechanism directly.
 - **Linux** was a WSL distribution (Ubuntu 24.04, systemd 255). The default mechanism there is the kernel one;
@@ -997,8 +1082,9 @@ under the address the update asks for.
   `SessionStart` command hook that appends a line when it begins and when it ends, each with the time and its
   folder. Issues can be handed to the `dispatch` call directly; with `GH_REPO` set, `gh` has a repository for
   the blocker lookup although the folder has no GitHub remote.
-- **The Pull requests tab** is tested read-only: an empty folder with `git init` and an `origin` that points at
-  a public repository with many open pull requests.
+- **The Issues and the Pull requests tab** are tested read-only: an empty folder with `git init` and an
+  `origin` that points at a public repository with many of both. The start dialogs can be opened and read
+  there too, and closed with Cancel.
 - **Input requests** need a session that is asked before it uses a tool. On a machine whose default is auto
   mode, the scratch repository's `.claude/settings.json` gets `"permissions": { "defaultMode": "default" }` for
   the test. Answers in the terminal are typed by writing keys to the instance.
@@ -1017,6 +1103,9 @@ under the address the update asks for.
   and the test writes down what the card says until that has ended. A command in the background is `sleep 90`
   with `run_in_background`; a subagent that has to take a while runs `node -e "setTimeout(() => {}, 60000)"`,
   because Claude Code refuses a bare `sleep` in the foreground.
+- **Autonomy** is tested live in the same clone. A note is not shown in the terminal, so the test asks the
+  session to quote what it has been told about merging; the card's "not told yet" says when the note went.
+  The machine's default is auto mode, which refuses a merge that only a note asked for.
 - **A release run that fails on GitHub's side** is run again, not tagged again: read the failed step with
   `gh run view <run> --log-failed`, then `gh run rerun <run> --failed`. Only the failed job and the release
   job run; the files of the jobs that passed are taken from the first attempt.
@@ -1029,7 +1118,7 @@ under the address the update asks for.
 - This repository has no `docs/PROCESS.md` on purpose. The app, like the owner's helper, tells an agent to
   follow that file when it exists, and this record is a history, not a process to follow.
 
-## 15. Sources
+## 16. Sources
 
 The owner's rule for the session was to name the documentation before building on it. These are the pages the
 work relied on.
@@ -1050,6 +1139,11 @@ work relied on.
 - <https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options>
 - <https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart>
 - <https://signpath.org/terms>
+
+**Autonomy and the lists**: the `hooks` page below, for `additionalContext` ("Add context for Claude", and the
+decision control of `UserPromptSubmit` and of `PostToolUse`) and for the `agent_id` a subagent's tool call
+carries. GitHub's own schema for the orders its issue query offers (`{ __type(name: "IssueOrderField") {
+enumValues { name } } }` through `gh api graphql`), and `GH_DEBUG=api gh pr list` for the order `gh` asks for.
 
 **When a session is done**: the `hooks` page below, for what the `Stop` hook is given (`background_tasks`,
 `session_crons`) and for what else fires `UserPromptSubmit`, and `agent-view` for what `status` says. For the

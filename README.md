@@ -55,10 +55,10 @@ The first `npm install` downloads the Electron binary.
 
 | Tab | What it shows |
 |---|---|
-| **Instances** | Every Claude Code instance as a live terminal, titled with its worktree (or the folder name), with model, context window, API-equivalent cost, uptime, and the CPU and memory used by it and everything it started. Click one for the full terminal, a per-process breakdown, its environment variables, the auto-merge checkbox and the input level. Sessions that belong to a group carry its name and colour, and one whose turn has ended a green outline and checkmark. Sessions started outside the app appear as status-only cards, which a filter can hide, and sessions that were open when the app last stopped appear as cards with a Resume button. |
+| **Instances** | Every Claude Code instance as a live terminal, titled with its worktree (or the folder name), with model, context window, API-equivalent cost, uptime, and the CPU and memory used by it and everything it started. Click one for the full terminal, a per-process breakdown, its environment variables, its autonomy and the input level. Sessions that belong to a group carry its name and colour, and one whose turn has ended a green outline and checkmark. Sessions started outside the app appear as status-only cards, which a filter can hide, and sessions that were open when the app last stopped appear as cards with a Resume button. |
 | **Worktrees** | Every worktree under `.claude/worktrees`: its branch, whether it holds uncommitted changes or commits that exist nowhere else, its last commit, and the session at work in it. Each can be removed from here. |
-| **Issues** | Open issues by default, with the issues blocking each one. Select one or many, right-click, "Tackle with Claude Code". |
-| **Pull requests** | The repository's open pull requests, drafts and those ready for review: branch, checks, review state, and the session at work on each. A click on a title opens it on GitHub. |
+| **Issues** | Open issues by default, in number order with the lowest first, with the issues blocking each one. Select one or many, right-click, "Tackle with Claude Code". |
+| **Pull requests** | The repository's open pull requests in number order, drafts and those ready for review: branch, checks, review state, and the session at work on each. A click on a title opens it on GitHub. |
 | **.claude** | Everything under `.claude` and `.github` of the open folder, and your own configuration from the home folder (`~/.claude`): `CLAUDE.md`, `settings.json`, agents, skills, commands, rules. All of it is editable inline. Saving a file of the open folder offers to commit and push. "New skill" and "New agent" generate one from a prompt in a terminal, where Claude can ask follow-up questions. |
 
 The header shows the app's version, the logged-in account, the 5-hour and 7-day usage as last reported by
@@ -147,7 +147,7 @@ purpose, or left by a session that crashed) can be removed from the Worktrees ta
 
 Claude Code saves every conversation as it goes. The app adds what it knows on top: every 10 seconds, and
 whenever an instance starts or closes, it writes down which instances are open, in which worktree, with which
-model, input level, auto-merge setting and CPU weight.
+model, input level, autonomy and CPU weight.
 
 The next time the app starts, whatever was open is back on the Instances tab as an "interrupted" card, whether
 the app was quit, crashed, or lost power. **Resume** continues that conversation in its worktree with its
@@ -210,14 +210,33 @@ worktree is created only when the session in the previous one has finished its `
 then that card says "starting", and the queued issues say which one they are waiting for. How many agents then
 work at once is still the number you choose.
 
-With several issues selected you also choose how many agents run at once (max 4), the group's name (see
-[Groups](#groups)) and the autonomy:
+Several issues are started in the order of the list, lowest number first. For them you also choose how many
+agents run at once (max 4) and the group's name (see [Groups](#groups)). For one issue or several you choose
+the autonomy (next section).
 
-| Autonomy | Behaviour |
-|---|---|
-| Manual | Agents are told not to merge. |
-| Semi-auto | The agent is told to merge its PR only if it judges that safe. |
-| Full-auto | Every agent gets auto-merge: the app merges its PR once the agent says it is ready (next section). |
+### Autonomy: who merges
+
+Every session has an autonomy: who merges its pull request. It is a dropdown wherever a session is started
+(**+ New instance**, **+ New worktree…**, the dialog for one issue or for several), and in the session's
+detail view, where it can be changed while the session runs.
+
+| Autonomy | Who merges | What the session is told |
+|---|---|---|
+| Manual | You. Nothing gets merged automatically. | For an issue: not to merge. Otherwise nothing: what you ask of it holds. |
+| Semi-auto | The session, if it judges that safe. | To decide whether the pull request is safe to merge without review, and then to merge it with `gh pr merge --squash` (method configurable under ⚙) or to leave it open and say why. |
+| Full-auto | The app, once the session says the pull request is ready (see [Auto-merge](#auto-merge)). | For an issue: not to merge, and to say when the pull request is ready. |
+
+A session reads this at the end of its first prompt: an issue's prompt, or the first prompt of the start
+dialog when Semi-auto is chosen there. A session that is set to Semi-auto without one (started without a
+prompt, or changed in its detail view), and one that is set away from Semi-auto, is told by a note instead.
+Claude Code puts the note next to the session's next prompt or tool result, so a session at work hears of it
+at its next tool call and an idle one with your next prompt. Until then its card says "not told yet". A
+session that has to be started again after the app stopped reads its first prompt once more: where its
+autonomy was changed in the meantime, the note comes with that prompt.
+
+A note is not a prompt of yours. A session running in Claude Code's auto mode that knows of Semi-auto from a
+note only is refused the merge by auto mode ("Merge Without Review"): it leaves the pull request open and says
+so. Choose Semi-auto at the start, or tell the session yourself.
 
 ### Merging a pull request yourself
 
@@ -229,8 +248,8 @@ folder itself, with or without auto-merge.
 
 ### Auto-merge
 
-With **Merge the PR once the session says it is ready** ticked for an instance, merging is the app's job, not
-the session's. Every time such a session ends a turn with an open pull request on its branch and nothing it
+With **Full-auto** as a session's autonomy, merging is the app's job, not the session's. Every time such a
+session ends a turn with an open pull request on its branch and nothing it
 started still running, the app reads what the session wrote and decides between three things.
 
 | The app | When | What happens |
@@ -249,8 +268,9 @@ The card shows where a pull request stands (`reviewing`, `follow-up 1 of 3`, `wa
 `not merged`), with the reason as its tooltip and in the detail view; every follow-up is a notification and
 stands in the session's terminal as feedback from the Stop hook. The session counts as working until the app
 has decided, which includes the wait for the checks. Interrupting it in the terminal, typing a new prompt or
-unticking the box calls the merge off. Ticked for a session that is already idle, the box has the app decide
-from the session's last reply; no follow-up can be sent then, so one that would be needed shows as the reason.
+choosing another autonomy calls the merge off. Chosen for a session that is already idle, Full-auto has the
+app decide from the session's last reply; no follow-up can be sent then, so one that would be needed shows as
+the reason.
 
 The reading is done by a Claude run of its own (Sonnet, no tools, about five seconds and one cent at list
 price per turn that ends), on your subscription like the sessions. It is given the prompt the session was
@@ -299,6 +319,9 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   no project's settings or hooks come into it. A follow-up is the hook's answer (`additionalContext`), which
   makes Claude Code carry on with it. The wait for checks reads `gh pr view --json statusCheckRollup` every
   15 seconds, for at most an hour.
+- A change of autonomy that the session has to know of is the app's answer to that session's next
+  `UserPromptSubmit` or `PostToolUse` hook (`additionalContext`): Claude Code hands it to the model next to
+  the prompt or the tool result, and shows nothing of it in the terminal.
 - The app's own update is [electron-updater](https://www.electron.build/v26/docs/features/auto-update)
   reading the repository's GitHub releases: the `latest*.yml` file of a release names its installer and that
   file's checksum, which is verified after the download.
@@ -317,7 +340,7 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
 - CPU limits live in `cpu.js`: one mechanism per operating system behind the same calls, and one sharing policy
   (`shareCpu` in `lib.js`) for the systems whose kernel cannot share by weight.
 - Issues come from `gh api graphql`; blockers are GitHub's native issue dependencies. Pull requests come from
-  `gh pr list`.
+  `gh pr list`. Both are fetched newest first, and GitHub cannot order issues by number, so the app sorts them.
 - "Finished its `SessionStart` hooks" is read from another hook, `UserPromptSubmit`: Claude Code holds the
   first prompt back until those hooks are done, and gives no other sign of it. The status line and
   `claude agents` both react while the hooks are still running.
@@ -394,7 +417,13 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
 - The button to merge or mark ready shows what the app knew when the session's turn ended. A pull request
   merged or closed on GitHub since then still has its button until the next turn, and a session resumed after
   a restart has none until then.
-- The Pull requests tab lists the first 200 open pull requests.
+- The Issues tab lists the newest 1000 issues and the Pull requests tab the newest 200 open pull requests. In
+  a repository with more, the lists start at a higher number than its first.
+- Semi-auto depends on the session being let to merge: Claude Code's own permissions still apply to its
+  `gh pr merge`, and auto mode refuses it when the session was told by a note and not in a prompt. A session
+  is told once; a conversation that is cleared or compacted may no longer know. An idle session hears of a
+  change only with your next prompt. Sessions started for several issues with Semi-auto by a version up to
+  0.4.1, and resumed by a later one, show as Manual: their record did not say.
 - With Remote Control on, a permission prompt can also be answered from your other devices, whichever comes first.
 - From the home folder, the editor lists what you write yourself: `CLAUDE.md`, `settings.json`,
   `keybindings.json`, and what is under `agents`, `commands`, `output-styles`, `rules` and `skills/<name>`.

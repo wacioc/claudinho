@@ -34,14 +34,30 @@ function renderTemplate(template, vars) {
   });
 }
 
-// issue: { number, title, url }
-// autonomy: 'manual' | 'semi' | 'full' | undefined (single issue without auto-merge: the repo's own process decides)
-function issuePrompt(template, issue, autonomy, mergeMethod = 'squash') {
-  const tail = {
+// Who merges a session's pull request. manual: the owner. semi: the session itself, if it judges that safe.
+// full: the app, once the session says the pull request is ready (auto-merge, see reviewPrompt).
+const AUTONOMY = ['manual', 'semi', 'full'];
+// A session's record written by 0.4.1 or older says only whether auto-merge was on.
+const autonomyOf = r => (AUTONOMY.includes(r.autonomy) ? r.autonomy : r.autoMerge ? 'full' : 'manual');
+
+// What a session is told about merging, for each of the three.
+function mergeInstruction(autonomy, mergeMethod = 'squash') {
+  return {
     manual: 'Do not merge the pull request; a human will review and merge it.',
     semi: `After opening the pull request, decide whether it is safe to merge without human review (checks green, change small and low-risk). If it is, merge it yourself with \`gh pr merge --${mergeMethod}\`; if not, leave it open and say why.`,
     full: 'Do not merge the pull request yourself. When it is ready for merge, say so at the end of your reply, together with anything you want decided first. The app settles those points with you and then merges it.',
   }[autonomy];
+}
+// The same for a session that is already at work: a hook hands it this next to a prompt or a tool result.
+const mergeNote = (autonomy, mergeMethod) => `A note from claudinho, the app this session runs in. Its owner has set how a pull request of this session gets merged, and this replaces what was said about merging before: ${mergeInstruction(autonomy, mergeMethod)}`;
+// Whether a first prompt tells its session to merge by itself. A session that starts again from that prompt
+// knows this much and nothing that was said since.
+const toldToMerge = prompt => ['squash', 'merge', 'rebase'].some(m => (prompt || '').includes(mergeInstruction('semi', m)));
+
+// issue: { number, title, url }
+// autonomy: one of AUTONOMY. Without one, nothing is said about merging.
+function issuePrompt(template, issue, autonomy, mergeMethod = 'squash') {
+  const tail = mergeInstruction(autonomy, mergeMethod);
   const base = renderTemplate(template, { issue_id: issue.number, issue_title: issue.title || '', issue_url: issue.url || '' });
   return tail ? `${base}\n\n${tail}` : base;
 }
@@ -81,11 +97,16 @@ const ownPrompt = text => !/^\s*<(task-notification|agent-message)[\s>]/.test(te
 
 // ---------- GitHub issues ----------
 
+// The order of the Issues and the Pull requests list: by number, lowest first. GitHub orders issues by a date
+// or by their comments, not by number, so both lists are sorted once they are here. They are asked for newest
+// first: where a repository has more than the app fetches, the list then misses its oldest and none in between.
+const byNumber = (a, b) => a.number - b.number;
+
 function issuesQuery(state) {
   const states = state === 'ALL' ? '' : `, states: [${state === 'CLOSED' ? 'CLOSED' : 'OPEN'}]`;
   return `query($owner: String!, $name: String!, $cursor: String) {
   repository(owner: $owner, name: $name) {
-    issues(first: 100, after: $cursor${states}, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    issues(first: 100, after: $cursor${states}, orderBy: {field: CREATED_AT, direction: DESC}) {
       pageInfo { hasNextPage endCursor }
       nodes {
         number title state url updatedAt
@@ -631,7 +652,8 @@ function homePath(home, rel) {
 }
 
 module.exports = {
-  worktreeName, openBlockers, defaultTemplate, renderTemplate, issuePrompt, prAction, backgroundWork, ownPrompt, issuesQuery, mapIssue, parseGitHub,
+  worktreeName, openBlockers, defaultTemplate, renderTemplate, AUTONOMY, autonomyOf, mergeInstruction, mergeNote, toldToMerge, issuePrompt, prAction, backgroundWork, ownPrompt,
+  byNumber, issuesQuery, mapIssue, parseGitHub,
   PR_FIELDS, checksOf, mapPr, groupName,
   REVIEW_SYSTEM, REVIEW_SCHEMA, reviewPrompt, reviewVerdict, waitForChecks,
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,

@@ -121,6 +121,10 @@ function formDialog(title, fields, ok = 'OK', submit) {
 
 const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh', 'max'].map(e => [e, e || 'default']);
 const LEVELS = [['manual', 'Manual: always wait for me'], ['timed', 'Timed: wait, then take the recommended option'], ['auto', 'Auto: take the recommended option at once']];
+// Who merges a session's pull request: the same choice wherever a session is started, and on its card.
+const AUTONOMY = [['manual', 'Manual: nothing gets merged automatically'], ['semi', 'Semi-auto: the agent merges if it judges it safe'], ['full', 'Full-auto: the app merges the PR once the agent says it is ready']];
+const autonomyField = () => ({ key: 'autonomy', label: 'Autonomy', type: 'select', value: 'manual', options: AUTONOMY });
+const MERGE_CHIP = { manual: 'manual merge', semi: 'semi-auto merge', full: 'auto-merge' };
 const MODELS = ['fable', 'opus', 'sonnet', 'haiku'];
 const launchFields = () => [
   { key: 'model', label: 'Model', type: 'select', value: MODELS.includes(prefs.model) ? prefs.model : 'opus', options: MODELS.map(m => [m, m]) },
@@ -322,7 +326,7 @@ function createCard(inst) {
     info: h('dl'), env: h('div.env'), procs: h('div.procs'), audit: h('div.audit'),
     groupIn: h('input', { type: 'text', list: 'groups', maxLength: 40, placeholder: 'none', title: 'Sessions with the same group name are marked as belonging together. Clear the name to take this one out of its group.',
       onchange: e => call('setInstance', inst.id, { group: e.target.value }) }),
-    merge: h('input', { type: 'checkbox', onchange: e => call('setInstance', inst.id, { autoMerge: e.target.checked }) }),
+    merge: h('select', { onchange: e => call('setInstance', inst.id, { autonomy: e.target.value }) }, AUTONOMY.map(([v, text]) => h('option', { value: v }, text))),
     level: h('select', { onchange: e => call('setInstance', inst.id, { level: e.target.value }) }, LEVELS.map(([v, text]) => h('option', { value: v }, text))),
     filter: h('input', { type: 'search', placeholder: 'filter by name…', oninput: () => renderEnv(t) }),
     weight: h('select', { title: 'Counts when "Share the CPU between instances by weight" is on in Settings.', onchange: e => call('setInstance', inst.id, { weight: e.target.value }) },
@@ -340,7 +344,7 @@ function createCard(inst) {
       h('h3', 'CPU and memory'), p.procs,
       h('label', 'CPU weight ', p.weight),
       h('h3', 'Automation'),
-      h('label', p.merge, ' Merge the PR once the session says it is ready'),
+      h('label', 'Autonomy ', p.merge),
       h('label', 'When input is needed ', p.level),
       h('h3', 'Environment variables'), p.filter, p.env)));
   $('#grid').append(card);
@@ -433,7 +437,9 @@ function updateCard(t, inst, order) {
     // The merge state in a word or two ("merged", "not merged", "follow-up 1 of 3"). What follows its colon is
     // the reason: the tooltip here, and in full in the detail view's PR row.
     inst.pr && h('span.chip', { title: inst.merge || '' }, `PR #${inst.pr.number}${inst.merge ? ` ${inst.merge.split(':')[0]}` : inst.pr.state === 'CLOSED' ? ' closed' : inst.pr.draft ? ' draft' : ''}`),
-    inst.autoMerge && 'auto-merge',
+    // Who merges its pull request, unless that is you. A session that has not heard of a change yet says so.
+    (inst.autonomy !== 'manual' || inst.untold) && h('span', { className: inst.untold ? 'chip warn' : 'chip',
+      title: inst.untold ? 'The session has not been told yet. It is, with its next prompt or tool call.' : '' }, `${MERGE_CHIP[inst.autonomy]}${inst.untold ? ' · not told yet' : ''}`),
     inst.level !== 'manual' && `input: ${inst.level}`,
     // Its turn has ended, but it is not done: what it started is still running, and it carries on when that ends.
     inst.background && h('span.chip', { title: `The session's turn has ended, with this still running:\n${inst.background.detail}\nIt is done when nothing is.` }, `still running: ${inst.background.text}`),
@@ -442,7 +448,7 @@ function updateCard(t, inst, order) {
   if (document.activeElement !== t.p.weight) t.p.weight.value = inst.weight;
   renderPending(t, inst);
   if (document.activeElement !== t.p.level) t.p.level.value = inst.level;
-  t.p.merge.checked = inst.autoMerge;
+  if (document.activeElement !== t.p.merge) t.p.merge.value = inst.autonomy;
   t.p.info.replaceChildren(...infoRows(inst).flatMap(([k, v]) => (v ? [h('dt', k), h('dd', v)] : [])));
 }
 
@@ -541,7 +547,7 @@ function renderResumable() {
         h('button.primary', { onclick: () => call('resume', r.id) }, 'Resume'),
         h('button', { title: 'Take it off this list. Its conversation stays available to `claude --resume`.', onclick: () => call('forget', r.id) }, 'Forget')),
       h('div.meta', [
-        [r.model || 'default model', r.effort].filter(Boolean).join(' · '), r.issue && `issue #${r.issue}`, r.autoMerge && 'auto-merge',
+        [r.model || 'default model', r.effort].filter(Boolean).join(' · '), r.issue && `issue #${r.issue}`, r.autonomy !== 'manual' && MERGE_CHIP[r.autonomy],
         r.level !== 'manual' && `input: ${r.level}`, `open until ${new Date(r.savedAt).toLocaleString()}`,
       ].filter(Boolean).map(c => h('span.chip', c))),
       h('div.note', r.conversation ? 'Was open when the app last stopped. Resume continues its conversation where it left off.'
@@ -594,7 +600,7 @@ async function newInstance(worktree) {
   const v = await formDialog(worktree ? 'New worktree' : `New instance in ${state.repo.name}`, [
     worktree && { key: 'worktree', label: 'Worktree name', type: 'text', list: 'worktrees', placeholder: 'blank = generated', pattern: '[A-Za-z0-9._\\-]{1,64}', hint: 'Created with `claude -w` under .claude/worktrees. An existing name reopens that worktree.' },
     ...launchFields(),
-    { key: 'autoMerge', label: 'Auto-merge the PR once the session says it is ready', type: 'checkbox' },
+    autonomyField(),
     { key: 'prompt', label: 'First prompt (optional)', type: 'textarea', rows: 3 },
   ], 'Start');
   if (!v) return;
@@ -725,9 +731,8 @@ async function tackle(picked) {
       return `#${i.number} ${i.title}${open.length ? `  [starts once ${open.join(' ')} is completed]` : i.blocked ? '  [labelled blocked]' : ''}`;
     }) },
     ...launchFields(),
-    !multi && { key: 'autoMerge', label: 'Auto-merge the PR once the session says it is ready', type: 'checkbox' },
     multi && { key: 'parallel', label: 'Agents running at once', type: 'number', min: 1, max: 4, value: Math.min(4, picked.length), hint: 'One instance and worktree per issue; the rest queue (max 4).' },
-    multi && { key: 'autonomy', label: 'Autonomy', type: 'select', value: 'manual', options: [['manual', 'Manual: nothing gets merged automatically'], ['semi', 'Semi-auto: the agent merges if it judges it safe'], ['full', 'Full-auto: the app merges each PR once its agent says it is ready']] },
+    autonomyField(),
     multi && { key: 'group', label: 'Group', type: 'text', list: 'groups', maxLength: 40, required: true, value: batchName(picked),
       hint: 'Issues started together are a group: their cards carry this name and its colour. An existing name adds them to that group.' },
     { key: 'template', label: 'Prompt', type: 'textarea', rows: 3, value: state.repo.template, required: true, hint: PROMPT_HINT + ' This is the default prompt, changed under ⚙; an edit here counts for this start only.' },

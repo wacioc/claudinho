@@ -71,8 +71,8 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
   `SessionStart` command hook that writes down when it begins and ends, in which folder. Two set-ups must
   never overlap. Issues can be handed to `dispatch` directly; with `GH_REPO` set, `gh` finds a repository for
   the blocker lookup although the scratch folder has no GitHub remote.
-- The Pull requests tab is tested read-only in an empty folder whose `origin` is a public repository with
-  many open pull requests. Nothing is started there.
+- The Issues and the Pull requests tab are tested read-only in an empty folder whose `origin` is a public
+  repository with many of both. Nothing is started there; a start dialog can be opened, read and cancelled.
 - Input requests need a session that is asked before it uses a tool. Where the machine's default is auto
   mode, give the scratch repository `"permissions": { "defaultMode": "default" }` in its `.claude/settings.json`.
   A test answers in the terminal by writing keys to the instance (`api.write`): Enter, Down, Escape.
@@ -83,6 +83,11 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
   there and the app merges them. A fresh clone needs its workspace trust dialog answered once before
   `claude -w` works in it. The verdicts come from a real Claude run, so a test records what happened and
   tells each session what to write at the end of its turn.
+- Autonomy is tested live in the same clone. A note to a session (see `mergeNote` in `main.js`) is not shown
+  in its terminal: have the session quote what it has been told about merging, and watch for "not told yet"
+  on its card. Where the machine's default is auto mode, a merge that only a note asked for is refused.
+  A session that starts again from its first prompt is a record in the `state.json` of a scratch data folder,
+  without `sessionId` and `transcript`, that is resumed.
 - When a session is done is tested live too: tell a session to start something and end its turn, and watch
   what the card says until that has ended. A command in the background is `sleep 90` with `run_in_background`.
   Claude Code refuses a bare `sleep` in the foreground, to a subagent as well, so a subagent that has to take
@@ -125,4 +130,4 @@ an update, and not notarised. A release whose update fails is not published.
 - The Windows installer is not signed, by the owner's decision (section 11 of the build history), and the
   installers carry Electron's default icon. A packaged build must keep Electron's `RunAsNode` fuse on (see
   `cpu.js`); `pack-check.js` fails when it is off.
-- The open points are listed in the README under "Limits" and in section 13 of the build history.
+- The open points are listed in the README under "Limits" and in section 14 of the build history.

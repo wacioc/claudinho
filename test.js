@@ -11,6 +11,9 @@ assert.strictEqual(lib.worktreeName(7, 'No prefix here'), '7-no-prefix-here');
 const long = lib.worktreeName(274, 'CHORE | ' + 'delegate from calls and tell the owner the result '.repeat(3));
 assert.ok(long.length <= 64 && !long.endsWith('-') && long.startsWith('274-delegate-from-calls'), long);
 
+// the Issues and Pull requests lists: by number as a number, lowest first (as text, #10 would come before #9)
+assert.deepStrictEqual([{ number: 10 }, { number: 9 }, { number: 100 }, { number: 1 }].sort(lib.byNumber).map(i => i.number), [1, 9, 10, 100]);
+
 // blockers: only "closed as completed" unblocks
 assert.deepStrictEqual(lib.openBlockers([{ number: 1, state_reason: 'completed' }, { number: 2, state_reason: null }, { number: 3, state_reason: 'not_planned' }]), [2, 3]);
 
@@ -28,6 +31,13 @@ assert.strictEqual(lib.issuePrompt(lib.defaultTemplate(os.tmpdir()), is5).includ
 assert.match(lib.issuePrompt('x {{ issue_id }}', is5, 'semi', 'rebase'), /^x 5\n\n.*gh pr merge --rebase/);
 assert.match(lib.issuePrompt('x {{ issue_id }}', is5, 'manual'), /Do not merge/);
 assert.match(lib.issuePrompt('x {{ issue_id }}', is5, 'full'), /Do not merge the pull request yourself\. When it is ready for merge, say so/);
+// a session already at work is handed the same sentence as a note, and told that it replaces what was said before
+assert.ok(lib.mergeNote('semi', 'rebase').includes('gh pr merge --rebase') && lib.mergeNote('manual', 'squash').endsWith('replaces what was said about merging before: Do not merge the pull request; a human will review and merge it.'));
+// what a first prompt alone tells a session: only the semi-auto sentence lets it merge, with any merge method
+assert.deepStrictEqual(['semi', 'manual', 'full', undefined].map(a => lib.toldToMerge(lib.issuePrompt('x {{ issue_id }}', is5, a, 'rebase'))), [true, false, false, false]);
+assert.strictEqual(lib.toldToMerge(undefined), false);
+// a record written before there were three: auto-merge on or off. Anything else is manual, never a merge.
+assert.deepStrictEqual([{ autonomy: 'semi', autoMerge: true }, { autoMerge: true }, { autoMerge: false }, {}, { autonomy: 'everything' }].map(lib.autonomyOf), ['semi', 'full', 'manual', 'manual', 'manual']);
 
 // what happens to a PR when the agent stops
 assert.strictEqual(lib.prAction(null, true), 'none');
@@ -91,6 +101,7 @@ assert.strictEqual(issue.blocked, true);
 assert.deepStrictEqual(issue.blockedBy.map(b => [b.number, b.done]), [[4, true], [5, false]]);
 assert.strictEqual(lib.mapIssue({ ...issue, labels: { nodes: [{ name: 'Blocked' }] }, assignees: { nodes: [] }, blockedBy: { nodes: [] } }).blocked, true);
 assert.ok(lib.issuesQuery('OPEN').includes('states: [OPEN]') && !lib.issuesQuery('ALL').includes('states'));
+assert.ok(lib.issuesQuery('OPEN').includes('orderBy: {field: CREATED_AT, direction: DESC}'));   // newest first: a list cut short misses its oldest
 // pull requests: a draft with one failing and one running check; a ready one with nothing but successes
 const pr = lib.mapPr({
   number: 7, title: 't', url: 'u', isDraft: true, headRefName: 'worktree-7-x', baseRefName: 'main', author: { login: 'a' }, updatedAt: 'd', reviewDecision: '',

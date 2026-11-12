@@ -4,6 +4,29 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.5.0 (2026-11-12)
+
+**Issues and pull requests**
+
+- Both lists are in number order, lowest first. Before, the issues came last changed first and the pull
+  requests newest first. Several issues sent to Claude Code together start in that order.
+- In a repository with more than 1000 issues the tab holds the newest 1000. Before, it held the 1000 changed
+  last.
+
+**Autonomy**
+
+- The auto-merge checkbox is gone. Where it was, in the dialogs for a new instance, a new worktree and one
+  issue and in an instance's detail view, there is the dropdown that the dialog for several issues had:
+  Manual, Semi-auto, Full-auto. Full-auto is what the ticked box was.
+- Semi-auto, in which the session merges its own pull request if it judges that safe, is thereby there for one
+  issue and for a session started by hand. The session reads it at the end of its first prompt.
+- The autonomy can be changed while a session runs. A change to Semi-auto or away from it is told to the
+  session with its next prompt or tool call; until then its card says "not told yet". A session in Claude
+  Code's auto mode that was told this way is refused the merge by auto mode: choose Semi-auto at the start.
+- One issue started on Manual is now told not to merge, as each issue of a batch always was. Before, an
+  unticked box said nothing about merging.
+- Sessions on record from an older version keep their setting: auto-merge on is Full-auto, off is Manual.
+
 ## 0.4.1 (2026-11-12)
 
 **Instances**

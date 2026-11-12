@@ -111,13 +111,13 @@ function snapshot() {
     // Not the ones whose conversation is live again somewhere (resumed by hand in a terminal, say).
     resumable: interrupted.filter(r => !sessions.some(s => s.sessionId && s.sessionId === r.sessionId)).map(r => ({
       id: r.id, label: r.worktree || path.basename(r.root), worktree: r.worktree, dir: r.worktree ? path.join(r.root, '.claude', 'worktrees', r.worktree) : r.root,
-      issue: r.issue, model: r.model, effort: r.effort, level: r.level, autoMerge: r.autoMerge, group: r.group || null, savedAt: r.savedAt,
+      issue: r.issue, model: r.model, effort: r.effort, level: r.level, autonomy: lib.autonomyOf(r), group: r.group || null, savedAt: r.savedAt,
       conversation: !!r.transcript && fs.existsSync(r.transcript),
     })),
     instances: [...instances.values()].map(i => {
       const s = sessionOf(i) || {};
       return {
-        id: i.id, kind: i.kind, issue: i.issue, model: i.model, effort: i.effort, level: i.level, autoMerge: i.autoMerge,
+        id: i.id, kind: i.kind, issue: i.issue, model: i.model, effort: i.effort, level: i.level, autonomy: i.autonomy, untold: untold(i),
         startedAt: i.startedAt, exited: i.exited, exitCode: i.exitCode, cwd: i.cwd, ...lib.labelFor(i.root, i.cwd, worktrees),
         status: i.status, session: { status: s.status || s.state, waitingFor: s.waitingFor, name: s.name },
         pending: i.pending.map(p => p.view), pr: i.pr, merge: i.merge, procs: i.exited ? undefined : procUsage.get(i.pid),
@@ -140,7 +140,9 @@ function userStatusLine() { return readJson(path.join(configDir(), 'settings.jso
 // resume + transcript: continue that conversation instead of starting one (see "sessions on disk").
 // group: the name of the group it belongs to, if any (see lib.groupName).
 // audit: the input requests on record for a session that is being resumed.
-function spawnInstance({ cwd, worktree, resume, transcript, model, effort, prompt, level = 'manual', autoMerge = false, kind = 'instance', issue = null, pooled = false, weight = 'normal', group = null, audit = [] }) {
+// autonomy: who merges its pull request (see lib.AUTONOMY). autoMerge: what an older record has in its place.
+// mayMerge: the session has been told that it may merge its pull request itself (see mergeNote).
+function spawnInstance({ cwd, worktree, resume, transcript, model, effort, prompt, level = 'manual', autonomy, autoMerge, mayMerge = false, kind = 'instance', issue = null, pooled = false, weight = 'normal', group = null, audit = [] }) {
   if (!claudeBin) throw new Error('Claude Code CLI (claude) was not found on PATH.');
   const root = cwd || repo.path;
   const id = crypto.randomBytes(4).toString('hex');
@@ -160,7 +162,8 @@ function spawnInstance({ cwd, worktree, resume, transcript, model, effort, promp
   // On Windows this puts the new process into its job before it can start anything of its own.
   const limited = cpu.attach(id, proc.pid, limits);
   const inst = {
-    id, kind, issue, pooled, model, effort, level, autoMerge, root, wt, prompt, proc, env, dir, statusFile, pid: proc.pid, startedAt: Date.now(),
+    id, kind, issue, pooled, model, effort, level, autonomy: lib.autonomyOf({ autonomy, autoMerge }), mayMerge: !!mayMerge,
+    root, wt, prompt, proc, env, dir, statusFile, pid: proc.pid, startedAt: Date.now(),
     cwd: wt || root, sessionId: resume || null, transcript: transcript || null, group: lib.groupName(group),
     // A new worktree with a first prompt: until that prompt has gone in, the session is still running its
     // SessionStart hooks, where a repository sets a fresh worktree up (see onHook and pump).
@@ -251,7 +254,7 @@ async function tick() {
 // seconds, and whenever an instance comes or goes.
 const sessionRecord = i => ({
   id: i.id, root: i.root, worktree: i.wt && path.basename(i.wt), kind: i.kind, issue: i.issue, pooled: i.pooled, model: i.model, effort: i.effort,
-  level: i.level, autoMerge: i.autoMerge, weight: i.weight, group: i.group, prompt: i.prompt, sessionId: i.sessionId, transcript: i.transcript, savedAt: Date.now(),
+  level: i.level, autonomy: i.autonomy, mayMerge: i.mayMerge, weight: i.weight, group: i.group, prompt: i.prompt, sessionId: i.sessionId, transcript: i.transcript, savedAt: Date.now(),
   audit: i.audit,
 });
 function saveSessions() {
@@ -383,8 +386,9 @@ function startHookServer() {
       const inst = instances.get(id);
       if (req.method !== 'POST' || token !== hookToken || !inst) { res.writeHead(404); return res.end(); }
       // Every tool call of the session reports here when it has run (see lib.instanceSettings). Its body, which
-      // holds the tool's whole result, is only worth reading while an input request is still without an answer.
-      if (tail === 'after' && !inst.audit.some(e => !e.picked)) { req.resume(); res.writeHead(200); return res.end(); }
+      // holds the tool's whole result, is only worth reading while an input request is still without an answer,
+      // or while the session is owed a note (see mergeNote).
+      if (tail === 'after' && !inst.audit.some(e => !e.picked) && !untold(inst)) { req.resume(); res.writeHead(200); return res.end(); }
       let body = '';
       req.on('data', c => { body += c; });
       req.on('end', () => {
@@ -395,6 +399,24 @@ function startHookServer() {
     });
     server.listen(0, '127.0.0.1', () => { hookPort = server.address().port; resolve(); });
   });
+}
+
+// With semi-auto the session itself merges, so it has to know. It reads it in its first prompt: an issue's, or
+// the one from the start dialog (see `spawn`). One started without a prompt, or whose card was set to something
+// else since, is told here: the note is the hook's answer to its next prompt or tool call, which Claude Code
+// puts next to that prompt or tool result. Only a change of the session's own part is told, to semi-auto or
+// away from it: with the two others the owner or the app merges, whatever the session knows.
+// A note is not the owner's own words. Measured on Claude Code 2.1.322: a session in auto mode that had the
+// sentence from a note only was refused the merge by auto mode ("Merge Without Review") and left its pull
+// request open; with the sentence in its prompt it merged.
+// ponytail: an idle session hears of it with its next prompt, and nothing confirms that a note arrived. Should
+// a session have to act on it at once, answer its Stop hook with the note, as a follow-up is.
+function untold(inst) { return inst.mayMerge !== (inst.autonomy === 'semi'); }
+function mergeNote(inst, ev) {
+  if (ev.agent_id || !untold(inst)) return;   // a subagent's tool call: the note would go to the subagent
+  inst.mayMerge = inst.autonomy === 'semi';
+  push();
+  return { hookSpecificOutput: { hookEventName: ev.hook_event_name, additionalContext: lib.mergeNote(inst.autonomy, saved.settings.mergeMethod) } };
 }
 
 function onHook(inst, ev, res) {
@@ -409,12 +431,12 @@ function onHook(inst, ev, res) {
     // With auto-merge on, the hook is answered only when the app knows what the end of this turn means. That
     // takes a review, and can take as long as the pull request's checks; the answer may be a follow-up, which
     // keeps the session going (see mergeWhenReady). Dropped unanswered, the owner has interrupted in the terminal.
-    if (!inst.autoMerge) reply();
+    if (inst.autonomy !== 'full') reply();
     onStop(inst, ev, () => res.destroyed && !res.writableEnded).then(reply, () => reply());
     return;
   }
   if (ev.hook_event_name === 'UserPromptSubmit') {
-    reply();
+    reply(mergeNote(inst, ev));
     inst.done = false; inst.background = null;   // a new turn begins; what still runs is reported again at its end
     // With a prompt of the owner's, what the app was settling starts over, and the review is told what the owner
     // asked for last. What wakes a session comes as a prompt too (see lib.ownPrompt) and changes neither.
@@ -427,7 +449,7 @@ function onHook(inst, ev, res) {
     push();
     return;
   }
-  if (ev.hook_event_name === 'PostToolUse' || ev.hook_event_name === 'PostToolUseFailure') { reply(); answeredElsewhere(inst, ev); return; }
+  if (ev.hook_event_name === 'PostToolUse' || ev.hook_event_name === 'PostToolUseFailure') { reply(mergeNote(inst, ev)); answeredElsewhere(inst, ev); return; }
   const kind = lib.inputKind(ev);
   if (!kind) return reply();
   // On record from here on: what was asked, what was on offer and what the app would pick. What was picked,
@@ -539,7 +561,7 @@ async function onStop(inst, ev, gone) {
 // auto-merge on, what the session wrote decides what happens to the PR; a follow-up for it is returned.
 async function checkPr(inst, gone, canAsk) {
   const pr = await readPr(inst);
-  const action = lib.prAction(pr, inst.autoMerge);
+  const action = lib.prAction(pr, inst.autonomy === 'full');
   if (action === 'review') return mergeWhenReady(inst, pr, gone, canAsk);
   if (action !== 'none') inst.finished = true;
 }
@@ -570,8 +592,8 @@ const GH_WAIT = 60000;
 // gone(): the hook was dropped unanswered. canAsk: a hook is open to answer; without one a follow-up cannot be sent.
 async function mergeWhenReady(inst, pr, gone = () => false, canAsk = true) {
   const mine = inst.reviewing = {};
-  // The owner has taken over (a new prompt, an interrupt, the box unticked) or the session is gone.
-  const stale = () => inst.reviewing !== mine || inst.exited || !inst.autoMerge || gone();
+  // The owner has taken over (a new prompt, an interrupt, another autonomy on its card) or the session is gone.
+  const stale = () => inst.reviewing !== mine || inst.exited || inst.autonomy !== 'full' || gone();
   const state = text => { inst.merge = text; push(); };
   const ask = text => {
     inst.asked.push(text);
@@ -684,7 +706,7 @@ async function pump() {
       queue.splice(queue.indexOf(job), 1);
       spawnInstance({
         cwd: job.root, worktree: lib.worktreeName(job.number, job.title), model: job.model, effort: job.effort, level: job.level,
-        autoMerge: job.autoMerge, issue: job.number, pooled: job.pooled, group: job.group,
+        autonomy: job.autonomy, mayMerge: job.autonomy === 'semi', issue: job.number, pooled: job.pooled, group: job.group,
         prompt: lib.issuePrompt(job.template, job, job.autonomy, saved.settings.mergeMethod),
       });
     }
@@ -732,7 +754,12 @@ const rpc = {
     return openRepo(dest);
   },
 
-  spawn: o => spawnInstance({ worktree: o.worktree, model: o.model, effort: o.effort, prompt: o.prompt, level: o.level, autoMerge: !!o.autoMerge, kind: o.kind }),
+  spawn(o) {
+    // Semi-auto with a first prompt: the sentence goes into that prompt, as it does for an issue (see mergeNote).
+    const semi = o.autonomy === 'semi' && !!o.prompt;
+    const prompt = semi ? `${o.prompt}\n\n${lib.mergeInstruction('semi', saved.settings.mergeMethod)}` : o.prompt;
+    return spawnInstance({ worktree: o.worktree, model: o.model, effort: o.effort, prompt, level: o.level, autonomy: o.autonomy, mayMerge: semi, kind: o.kind });
+  },
   // What closing would do to the instance's worktree, for the dialog that asks first.
   async closeInfo(id) {
     const inst = instances.get(id);
@@ -753,7 +780,9 @@ const rpc = {
     const resume = r.sessionId && r.transcript && fs.existsSync(r.transcript) ? r.sessionId : undefined;
     const dir = resume && r.worktree ? path.join(r.root, '.claude', 'worktrees', r.worktree) : r.root;
     if (!fs.existsSync(dir)) throw new Error(`${dir} no longer exists.`);
-    const started = spawnInstance({ ...r, cwd: r.root, resume });
+    // Started again, it knows of merging what its first prompt says, whatever its card was set to since: where
+    // the two differ, it is owed a note (see mergeNote).
+    const started = spawnInstance({ ...r, cwd: r.root, resume, mayMerge: resume ? r.mayMerge : lib.toldToMerge(r.prompt) });
     interrupted = interrupted.filter(x => x !== r);
     saveSessions(); push();
     return started;
@@ -765,11 +794,11 @@ const rpc = {
     if (['manual', 'timed', 'auto'].includes(patch.level)) inst.level = patch.level;
     if (Object.hasOwn(lib.WEIGHTS, patch.weight)) inst.weight = patch.weight;
     if (typeof patch.group === 'string') inst.group = lib.groupName(patch.group);   // '' takes it out of its group
-    if (typeof patch.autoMerge === 'boolean') {
-      inst.autoMerge = patch.autoMerge;
-      // Ticked after the session already went idle: judged by what it wrote last. No hook is open then, so a
-      // follow-up cannot be sent and shows on the card as the reason instead.
-      if (inst.autoMerge && (sessionOf(inst) || {}).status === 'idle') checkPr(inst, undefined, false).then(push);
+    if (lib.AUTONOMY.includes(patch.autonomy)) {
+      inst.autonomy = patch.autonomy;
+      // Full-auto chosen after the session already went idle: judged by what it wrote last. No hook is open
+      // then, so a follow-up cannot be sent and shows on the card as the reason instead.
+      if (inst.autonomy === 'full' && (sessionOf(inst) || {}).status === 'idle') checkPr(inst, undefined, false).then(push);
     }
     push();
   },
@@ -837,7 +866,7 @@ const rpc = {
   async issues(state) {
     const out = [];
     let cursor;
-    // ponytail: stops at 1000 issues (10 pages of 100); add server-side search if a repo outgrows that.
+    // ponytail: stops at 1000 issues (10 pages of 100), the newest; add server-side search if a repo outgrows that.
     for (let page = 0; page < 10; page++) {
       const args = ['api', 'graphql', '-F', 'owner={owner}', '-F', 'name={repo}', '-f', `query=${lib.issuesQuery(state)}`];
       if (cursor) args.push('-f', `cursor=${cursor}`);
@@ -846,27 +875,26 @@ const rpc = {
       if (!data.pageInfo.hasNextPage) break;
       cursor = data.pageInfo.endCursor;
     }
-    return out;
+    return out.sort(lib.byNumber);
   },
-  dispatch({ issues, model, effort, level, autoMerge, parallel, autonomy, template, group }) {
+  dispatch({ issues, model, effort, level, parallel, autonomy, template, group }) {
     if (!claudeBin) throw new Error('Claude Code CLI (claude) was not found on PATH.');
     lib.issuePrompt(template, issues[0]);   // a prompt that cannot be filled in is refused here, before anything is queued
     const pooled = issues.length > 1;
     group = lib.groupName(group);
     if (pooled && !group) throw new Error('Issues started together are a group: give it a name.');
     if (pooled) poolLimit = Math.min(4, Math.max(1, Number(parallel) || 1));
-    else autonomy = autoMerge ? 'full' : undefined;
     for (const is of issues) {
       if (queue.some(j => j.number === is.number)) continue;
-      queue.push({ number: is.number, title: is.title, url: is.url, root: repo.path, model, effort, level, autonomy, template, pooled, group, autoMerge: autonomy === 'full', waitingOn: [] });
+      queue.push({ number: is.number, title: is.title, url: is.url, root: repo.path, model, effort, level, autonomy, template, pooled, group, waitingOn: [] });
     }
     pump();
   },
   unqueue(number) { const i = queue.findIndex(j => j.number === number); if (i >= 0) queue.splice(i, 1); push(); },
-  // The open pull requests of the folder's repository, drafts included.
-  // ponytail: the first 200. Page through them with `gh api graphql`, as `issues` does, if a repo outgrows that.
+  // The open pull requests of the folder's repository, drafts included, in number order like the issues.
+  // ponytail: the newest 200. Page through them with `gh api graphql`, as `issues` does, if a repo outgrows that.
   async prs() {
-    return JSON.parse(await run('gh', ['pr', 'list', '--state', 'open', '--limit', '200', '--json', lib.PR_FIELDS], repo.path)).map(lib.mapPr);
+    return JSON.parse(await run('gh', ['pr', 'list', '--state', 'open', '--limit', '200', '--json', lib.PR_FIELDS], repo.path)).map(lib.mapPr).sort(lib.byNumber);
   },
 
   // Paths starting with "~/" are in the home config folder, the rest in the open folder.
