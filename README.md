@@ -55,7 +55,7 @@ The first `npm install` downloads the Electron binary.
 
 | Tab | What it shows |
 |---|---|
-| **Instances** | Every Claude Code instance as a live terminal, titled with its worktree (or the folder name), with model, context window, API-equivalent cost, uptime, and the CPU and memory used by it and everything it started. Click one for the full terminal, a per-process breakdown, its environment variables, its autonomy and the input level. Sessions that belong to a group carry its name and colour, and one whose turn has ended a green outline and checkmark. Sessions started outside the app appear as status-only cards, which a filter can hide, and sessions that were open when the app last stopped appear as cards with a Resume button. |
+| **Instances** | Every Claude Code instance as a live terminal, titled with its worktree (or the folder name), with model, context window, API-equivalent cost, uptime, and the CPU and memory used by it and everything it started. Click one for the full terminal, a per-process breakdown, its environment variables, its autonomy and the input level, on a second tab the diff of its pull request, and beside it the list of all sessions to go from one to the next. Sessions that belong to a group carry its name and colour, and one whose turn has ended a green outline and checkmark. Sessions started outside the app appear as status-only cards, which a filter can hide, and sessions that were open when the app last stopped appear as cards with a Resume button. |
 | **Worktrees** | Every worktree under `.claude/worktrees`: its branch, whether it holds uncommitted changes or commits that exist nowhere else, its last commit, and the session at work in it. Each can be removed from here. |
 | **Issues** | Open issues by default, in number order with the lowest first, with the issues blocking each one. Select one or many, right-click, "Tackle with Claude Code". |
 | **Pull requests** | The repository's open pull requests in number order, drafts and those ready for review: branch, checks, review state, and the session at work on each. A click on a title opens it on GitHub. |
@@ -166,6 +166,16 @@ a stripe in the group's colour, and the cards of one group sit next to each othe
 - The group is saved with the session, so it is still there after a restart, on the interrupted card and on
   the resumed instance.
 
+### Going from one session to the next
+
+Beside the session on show, the detail view lists every instance the app runs: its name, its status as on its
+card, a checkmark once it is done, and the stripe of its group. The list is in the order of the wall. The
+session on show is marked, and one that waits for input stands out. Sessions that run in the same folder have
+the same name, so each of those also shows the name Claude Code gave it. A click goes to that session and keeps the
+tab you are on: from one terminal to the next, or from one session's diff to the next one's.
+
+Sessions started outside the app are not in the list: they have no view to go to.
+
 ### Sessions started outside the app
 
 Claude Code sessions that run in the folder but were started elsewhere (a terminal, the desktop app) show up
@@ -237,6 +247,24 @@ autonomy was changed in the meantime, the note comes with that prompt.
 A note is not a prompt of yours. A session running in Claude Code's auto mode that knows of Semi-auto from a
 note only is refused the merge by auto mode ("Merge Without Review"): it leaves the pull request open and says
 so. Choose Semi-auto at the start, or tell the session yourself.
+
+### The diff of a session's pull request
+
+The detail view of an instance has two tabs, **Terminal** and **Diff**. The Diff tab shows what the pull
+request of the session's branch changes, the way GitHub's "Files changed" shows it: the same files in the same
+order, the same hunks and line numbers, added lines green and removed ones red, and the code coloured by its
+language in GitHub's colours. A click on a file's name folds or opens it, and the name stays in view while its
+diff scrolls by. As on GitHub, a deleted file and a diff of
+more than 400 lines or 20 KB start folded, and so do the files after the first 20,000 lines of a long pull
+request. The list in the bar jumps to a file; the pull request's number opens its files on GitHub.
+
+The tab is read-only: it shows, and changes nothing, here or on GitHub. Text can be selected and copied,
+without the line numbers and the + and − marks.
+
+What it shows is what has been pushed, compared with the point where the branch left its base. Work that is
+only in the worktree so far is not in it. It is read from GitHub when the tab is opened, when the session's
+turn ends while the tab is open, and with **↻ Refresh**. For a session whose branch has no pull request the
+tab says so.
 
 ### Merging a pull request yourself
 
@@ -341,6 +369,14 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   (`shareCpu` in `lib.js`) for the systems whose kernel cannot share by weight.
 - Issues come from `gh api graphql`; blockers are GitHub's native issue dependencies. Pull requests come from
   `gh pr list`. Both are fetched newest first, and GitHub cannot order issues by number, so the app sorts them.
+- The Diff tab reads GitHub's list of a pull request's files (`gh api repos/{owner}/{repo}/pulls/<n>/files`),
+  a hundred a page. Each file comes with its status, its counts and its hunks, cut the way GitHub's page cuts
+  them. `gh pr diff` prints the same lines with some hunks cut differently, and refuses a pull request of more
+  than 300 files. The page is drawn with text nodes only, so nothing in a diff can become markup.
+- The syntax colours are [highlight.js](https://highlightjs.org/)'s, with the colour theme it ships for
+  GitHub's dark page. It runs in the main process, for one file at a time when that file is first drawn, and
+  picks the language by the file's name. What it answers is taken apart into runs of text with a class each,
+  and a line whose runs do not add up to the line itself stays uncoloured.
 - "Finished its `SessionStart` hooks" is read from another hook, `UserPromptSubmit`: Claude Code holds the
   first prompt back until those hooks are done, and gives no other sign of it. The status line and
   `claude agents` both react while the hooks are still running.
@@ -419,6 +455,14 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   a restart has none until then.
 - The Issues tab lists the newest 1000 issues and the Pull requests tab the newest 200 open pull requests. In
   a repository with more, the lists start at a higher number than its first.
+- The Diff tab has GitHub's default view and no other: one column, no side-by-side view, no marking of the
+  changed words inside a line, no unfolding of the lines between two hunks, no hiding of whitespace changes.
+  Its colours are worked out hunk by hunk, where GitHub colours whole files: a hunk that starts inside a
+  comment or a string that began above it is coloured as code. A file whose name tells no language, or one
+  the highlighter does not know, stays uncoloured. GitHub's list of files hands over less than its page can load: a binary file, a file
+  whose own diff is very large, and some files of a very large pull request come without a diff. The tab
+  names such a file, with its counts where GitHub gives them, and links to it on GitHub. A file whose mode
+  alone changed cannot be told from a binary file that changed. A pull request's first 3000 files are listed.
 - Semi-auto depends on the session being let to merge: Claude Code's own permissions still apply to its
   `gh pr merge`, and auto mode refuses it when the session was told by a note and not in a prompt. A session
   is told once; a conversation that is cleared or compacted may no longer know. An idle session hears of a

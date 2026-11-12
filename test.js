@@ -115,6 +115,41 @@ assert.strictEqual(lib.checksOf([{ state: 'ERROR' }]).state, 'failing');
 assert.strictEqual(lib.checksOf([{ status: 'COMPLETED', conclusion: 'SOMETHING_NEW' }]).state, 'failing');   // unknown is not shown as fine
 assert.deepStrictEqual(lib.checksOf(null), { state: 'none', failing: 0, total: 0 });
 assert.strictEqual(lib.mapPr({ number: 1, author: null, isDraft: false, reviewDecision: 'APPROVED' }).review, 'APPROVED');
+// a pull request's diff: every line of a file's patch with its number in the old and in the new file
+const hunks = lib.parsePatch('@@ -3,4 +3,5 @@ function a() {\n one\n-two\n+2\n+2b\n \n four\n\\ No newline at end of file\n@@ -20 +21 @@\n-x\n+@@ -1 +1 @@\n');
+assert.deepStrictEqual(hunks.map(k => k.header), ['@@ -3,4 +3,5 @@ function a() {', '@@ -20 +21 @@']);
+assert.deepStrictEqual(hunks[0].lines.map(l => [l.type, l.old, l.new, l.text]), [[' ', 3, 3, 'one'], ['-', 4, undefined, 'two'], ['+', undefined, 4, '2'], ['+', undefined, 5, '2b'],
+  [' ', 5, 6, ''], [' ', 6, 7, 'four'], ['\\', undefined, undefined, 'No newline at end of file']]);
+assert.deepStrictEqual(hunks[1].lines.map(l => [l.type, l.old, l.new, l.text]), [['-', 20, undefined, 'x'], ['+', undefined, 21, '@@ -1 +1 @@']]);   // an added line that looks like a header
+// a file of it. Without a patch GitHub shows no diff: the note says which of its reasons it is
+const dfile = (o, partial) => lib.mapDiffFile({ sha: 'abc', filename: 'docs/testing.md', status: 'modified', additions: 0, deletions: 0, changes: 0, ...o }, partial);
+assert.deepStrictEqual([dfile({ patch: '@@ -1 +1 @@\n-a\n+b', changes: 2 }), dfile({ changes: 9 }), dfile({ sha: 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391' }), dfile({ previous_filename: 'old.md' }),
+  dfile({ status: 'added' }), dfile({})].map(f => f.note),
+['', 'The diff of this file is too large to show here.', 'Empty file.', 'File renamed without changes.', 'Binary file not shown.', 'No lines changed: a binary file, or a file whose mode alone changed.']);
+assert.match(dfile({}, true).note, /over its limits, or the file is binary/);   // past what GitHub hands over, a file without numbers can be anything
+assert.strictEqual(dfile({ patch: '@@ -1 +1 @@\n-a\n+b' }).hunks[0].lines.length, 2);
+// folded as on GitHub's page: a deleted file, and a diff of more than 400 lines or 20 KB
+assert.deepStrictEqual([dfile({ status: 'removed', patch: '@@ -1 +0,0 @@\n-a' }), dfile({ patch: `@@ -1,400 +1,400 @@\n${' x\n'.repeat(400)}` }), dfile({ patch: `@@ -1 +1 @@\n+${'x'.repeat(21000)}` }), dfile({ patch: `@@ -1,300 +1,300 @@${'\n x'.repeat(300)}` })].map(f => f.fold),
+  ['This file was deleted.', 'Large diffs are not rendered by default.', 'Large diffs are not rendered by default.', '']);
+assert.strictEqual(dfile({}).anchor, 'diff-c22885d97fa21ad974a3f5f982d92b6f45edc251fd34bc14223492ebd7391245');   // where GitHub's page had docs/testing.md
+// a whole pull request: 60 files of 400 lines. The first 50 come to 20,000 lines and are open, the rest start folded
+const many = Array.from({ length: 60 }, (_, i) => ({ sha: 'abc', filename: `f${i}`, status: 'added', additions: 399, deletions: 0, changes: 399, patch: `@@ -0,0 +1,399 @@${'\n+x'.repeat(399)}` }));
+const whole = lib.mapDiff(many, { additions: 60 * 399, deletions: 0 });
+assert.deepStrictEqual([whole.partial, whole.files.filter(f => !f.fold).length, whole.files[49].fold, whole.files[50].fold], [false, 50, '', 'Folded: the files before this one come to 20,000 lines.']);
+// its files add up to less than the pull request's own totals: GitHub has handed over a part of it
+assert.strictEqual(lib.mapDiff(many, { additions: 60 * 399 + 1, deletions: 0 }).partial, true);
+// syntax colours: highlight.js's HTML as lines of [class, text]. Entities are text again, a span that crosses
+// a line break goes on in the next line, and of spans inside each other the innermost counts
+assert.deepStrictEqual(lib.colouredLines('<span class="k">if</span> (a &lt; b &amp;&amp; c) <span class="s">&quot;x<span class="e">\\n</span>&#x27;\nmore</span> end\n'),
+  [[['k', 'if'], ['', ' (a < b && c) '], ['s', '"x'], ['e', '\\n'], ['s', "'"]], [['s', 'more'], ['', ' end']], []]);
+// a file's hunks: one entry per line, and each line's runs add up to that line. The old side and the new side
+// are coloured apart: the comment that the old side closes on its second line is still open on the new side
+const coloured = lib.colourHunks('src/a.js', lib.parsePatch('@@ -1,3 +1,3 @@\n /* a comment\n-   that ends */ let old = "<b>";\n+   that goes on\n const x = 1;'));
+assert.deepStrictEqual(coloured.map(runs => runs.map(r => r[1]).join('')), ['/* a comment', '   that ends */ let old = "<b>";', '   that goes on', 'const x = 1;']);
+assert.deepStrictEqual([coloured[1][0], coloured[1].find(r => r[1] === 'let'), coloured[2], coloured[3]],
+  [['hljs-comment', '   that ends */'], ['hljs-keyword', 'let'], [['hljs-comment', '   that goes on']], [['hljs-comment', 'const x = 1;']]]);
+// a file whose name tells no language, and plain text, get no colours
+assert.deepStrictEqual([lib.colourHunks('LICENSE', []), lib.colourHunks('notes.txt', []), lib.colourHunks('Dockerfile', []), lib.colourHunks('page.vue', [])], [null, null, [], []]);
 
 // groups: a name, tidied; nothing left means no group
 assert.strictEqual(lib.groupName('  payments   batch \n'), 'payments batch');

@@ -1009,8 +1009,150 @@ that is cleared after it was told.
 | Found when the changes were read once more before the release: a session started with Semi-auto in its prompt, set to Manual on its card and told so, would have read the sentence again when it was started again without its conversation, with nothing owed to it. It could then have merged on a card that says Manual. | The record kept what the session was told last. A session without its conversation knows its first prompt only. | Started again, what it knows is read from that prompt (`toldToMerge` in `lib.js`). |
 | In one session a `git commit` followed by a push stopped with "Permission denied" on the repository's `.git/config`. | Not looked into. Two sessions were at work in two worktrees of the one repository at that moment, on Windows. | Nothing. The commit was there; the session pushed again. |
 
-## 14. Still open
+## 14. The ninth round: a Diff tab, its colours, and a list of sessions
 
+The same day, after 0.5.0 was out:
+
+> In a claude code session view, I also want to have a Diff tab where I can see the updates in the PR that's
+> currently in that claude code session.
+> It should work exactly as the diff in GitHub and it should be read-only.
+
+Shown the first version and what it leaves out, the owner picked one of those before any release:
+
+> Syntax colours first
+
+and, while that was being built:
+
+> I also want in a claude code view to have a sidebar with a list of all the other running claude code
+> sessions with their name and status so that I can cycle through them easily.
+
+### How it was read, and why
+
+| Decision | Why |
+|---|---|
+| The session view is the instance's detail view. It gets two tabs above the terminal: Terminal and Diff. | It is the one view of a single session, and the terminal has to stay a click away. The side panel stays beside both. |
+| The diff is the pull request's as GitHub has it, not what is in the worktree. | "The PR that's currently in that session", "as the diff in GitHub": what "Files changed" shows there, which is what is pushed, against the merge base. |
+| "Exactly as GitHub" was taken as GitHub's files, hunks and line numbers in GitHub's order, drawn like its default view. Not built in the first version: the side-by-side view, syntax colours, the marking of changed words inside a line, unfolding the lines between two hunks, hiding whitespace. | The default view is what GitHub shows without a click, and plain DOM can draw it. Syntax colours need a library, which this project does without where it can; the others are more code than a first version should carry unasked. The owner was told what is left out, before the work and after it, and asked for the colours (the second table). |
+| GitHub's own page is not embedded. | It would need a github.com sign-in inside the app, and it is not read-only. |
+| The data is GitHub's list of a pull request's files, not `gh pr diff`. | The list is structured: names as they are, a status, counts, and each file's hunks, so none of git's file headers has to be parsed. It is also the form the page shows. `gh pr diff` cuts some hunks differently, and it refuses a pull request of more than 300 files with a pointer to this list. |
+| A file starts folded where it does on GitHub: a deleted file, a diff of more than 400 lines or 20 KB, and what follows a pull request's first 20,000 lines. | Deleted files fold on GitHub's page; the numbers are the ones GitHub documents. The last one also bounds how long the window is busy drawing, and every terminal lives in that window. |
+| What GitHub's list leaves out is named and linked, not fetched another way. | The list has no patch for a binary file, for a file whose own diff is very large, and for some files of a very large pull request, which then come with their counts at zero as well. The worktree has the commits, so git could fill the gap. That is a second mechanism, left until it is missed. |
+| It is read when the tab is opened, when the session's turn ends with the tab open, and on Refresh. A read that brings nothing new changes nothing on screen. | The end of a turn is when a session has usually pushed. What is open, and the place in the pane, outlive a refresh. |
+| The tab asks GitHub for the branch's pull request itself. | The card learns of a pull request only when a turn ends. |
+| Every row is a text node, built with the helper the rest of the window uses. | A diff is whatever a session, or anyone, wrote. The window can start sessions and remove worktrees, so nothing in a diff may become markup. |
+
+The syntax colours and the list of sessions:
+
+| Decision | Why |
+|---|---|
+| The colours come from highlight.js, the first dependency taken on for a feature. | A language needs a grammar to be coloured, and the platform has none. The owner chose colours knowing they need a library. highlight.js has 193 languages, finds one by a name or an alias, which a file's ending mostly is, ships GitHub's colours for a dark page as a style sheet, and is under the BSD licence. |
+| It runs in the main process, for one file a call, when the tab first draws that file. | The window is sandboxed and loads no modules, and it stays so. In the main process the work has to be short, since every terminal passes through there: 8 µs a line when measured, 25 ms for the slowest of 700 files. A file that is never opened is never coloured. |
+| What it answers, which is HTML, is never read as markup. It is taken apart into runs of text with a class each, and a line whose runs do not add up to the line stays uncoloured. | The rule of the diff itself. The comparison also means that a mistake in the taking apart cannot change what a line says. |
+| A hunk is coloured as two pieces of code, its old side and its new side. | A comment or a string that runs over several lines keeps its colour within the hunk, and a removed line is coloured as part of the old file. What began above the hunk is not known. GitHub colours whole files and has that right; reading both versions of every file was not worth it for a first version. |
+| The language is told by the file's name, with three endings set by hand (`.htm`, `.vue`, `.m`). The content is not guessed from. | Guessing takes long and goes wrong on short pieces. A wrong language is worse than no colours. |
+| The list of sessions is a column on the left of the detail view: the app's instances in the order of the wall, each with its name, its status, the mark for done and its group's stripe. The session on show stays in it, marked. | "All the other running sessions", "to cycle through them": a list whose rows change with every click is hard to go through. Sessions started outside the app are left out: they have no view to go to. |
+| Sessions with the same name also show the name Claude Code gave each. | An instance is named after its worktree, or after the folder when it has none, so two sessions in the folder itself would be two rows that read the same. On the wall their terminals tell them apart; in a list nothing does. |
+| A click keeps the tab. | Going through the sessions' diffs is as likely as going through their terminals. Coming from the Diff tab, the keyboard is taken out of the terminal that is not on show. |
+| No key for the next session. | The request names a list. Offered to the owner. |
+
+### How it was verified
+
+`test.js` has asserts for the hunks of a patch with their line numbers, for the note of a file without a
+patch, for what starts folded, and for a pull request that GitHub hands over in part.
+
+Read-only, against 150 pull requests of a public repository: 1,625 files, 3,529 hunks, 184,222 lines. In every
+file the added and removed rows were as many as GitHub counts, the line numbers ran on without a gap, and each
+hunk held as many lines as its header says. For 40 of them the result was compared with what `gh pr diff`
+prints: the same files and the same added and removed lines in all 40, with the hunks cut differently in 8.
+For one of those 8, GitHub's page was fetched: it has the hunks of the list. The address of a file on that
+page, the hash of its name, was checked there too.
+
+Live, in the clone of the test repository. The clone's checkout was put on a branch with one commit that holds
+every kind of change, and a session was told to push it and open the pull request, with its Diff tab open from
+before.
+
+| What | What happened |
+|---|---|
+| Before the pull request. | "This session has no pull request yet." |
+| The session's turn ends, 20 seconds in. | A second later the tab shows the pull request, without a click: number, title, "open", and GitHub's totals. |
+| The 14 files. | GitHub's 14, in its order. Every open file has as many added and removed rows as GitHub counts. |
+| A deleted file; a file of 600 added lines. | Folded, with the reason beside the name. Opened, the large one has its 600 rows. |
+| A binary file, an empty file, a file that was only renamed. | Each with its note and a link to GitHub. |
+| A renamed file with changes; a name with a space and a letter outside ASCII. | Both names with an arrow; the name as it is. |
+| A file without a line break at its end. | The "No newline at end of file" row under each of the two lines. |
+| A line that holds `<script>` and `<img onerror>`. | Shown as text. No script and no image element came of it. |
+| A line of 400 characters; tabs. | Wraps inside the pane; kept. |
+| The list for jumping. | Scrolls to the file, below the bar, which stays at the top. |
+| Refresh with nothing new. | The pane stays where it was, and what was opened stays open. |
+| The pull request closed on GitHub, then Refresh. | "closed", with the same 14 files. |
+| The session resumed after the app was stopped. | Its tab reads the pull request of its branch. |
+| Back to the terminal, and back to the wall. | The terminal is fitted and has the keyboard; the card on the wall shows its terminal and no tabs. |
+
+Drawing was timed by handing the data of public pull requests to the same code. One of 3,600 rows took 119 ms.
+One of 738 files, far over GitHub's limits, took 281 ms: most of its files are deleted or large and start
+folded, 197 were open, with 6,789 rows. Made-up pull requests whose every file is open cost about 0.15 ms a
+row: 1.2 seconds for 4,000 rows, 2.9 for 20,000, 6.3 for 50,000. Once drawn, jumping through the pane cost
+nothing that could be measured.
+
+The colours were checked the same three ways. `test.js` has asserts for the taking apart of highlight.js's
+answer and for a hunk whose two sides are coloured differently. Read-only, on five public pull requests, the
+one of 738 files among them: 542 of 695 files were coloured, 106,615 lines in 0.8 seconds, and every line's
+runs added up to the line. The slowest file took 24 ms, apart from the first one, whose 131 ms hold the loading
+of the library. The rest had names that tell no language. Live, the one file of code in the test session's
+pull request came out in GitHub's colours (a keyword in `rgb(255, 123, 114)`), its text files stayed as they
+were, and the line with `<script>` in it was still text. The data of a public pull request of Go code, handed
+to the same drawing, gave 4,554 coloured runs on added, removed and kept lines, and all 3,499 lines read
+exactly as GitHub had given them.
+
+The list of sessions was run with three sessions: one in the clone's checkout, two in worktrees and in a group,
+one of those with a question held on its card.
+
+| What | What happened |
+|---|---|
+| On the wall. | No list. |
+| A session on show. | A column of 230 px on the left with three rows, in the order of the wall; the session fills the rest, and its terminal is fitted to that. |
+| The rows. | Name and status of each; the one on show marked; the one with the question in the colour for "needs input"; the two of the group with its stripe. |
+| A click on another row, from the Diff tab. | That session is on show, on its Diff tab, which says that its branch has no pull request. The keyboard is not in its terminal. |
+| A click on the third row, from the Terminal tab. | Its terminal, fitted and with the keyboard, and its question above it. |
+| The question answered; the first session put into a group. | The row says idle and no longer stands out; the other row moves behind the first group and takes its own stripe. |
+| A second session in the clone's own folder. | Two rows with the folder's name, each with Claude Code's name for its session below it; the two in worktrees without one. |
+
+A packaged copy was built and `pack-check.js` run on it, with its new step: the highlighter loads from the
+package and colours a line, and the style sheet gives a keyword GitHub's red.
+
+Not exercised: a session in a worktree with a pull request (the test session with one ran in the clone's own
+checkout; the code asks for nothing but the instance's folder), a pull request of more than 100 files read by
+the app itself (the read-only check pages the same way and read the one of 738), a session's own pull request
+once merged ("merged" was drawn from a public one's data), and the list with more sessions than fit its height.
+
+### What went wrong
+
+| Symptom | Cause | What changed |
+|---|---|---|
+| In the first live run the bar drew and no file did. | `replaceChildren` was handed an array and two booleans. It takes nodes, one by one. | Spread and filtered, as the window's helper does with its own children. |
+| The Terminal tab lost its highlight. | The two buttons carried the class of the window's own navigation, whose code resets that class on everything that has it. | A class of their own; the style sheet gives both the same look. |
+| A file whose mode alone had changed was called a binary file. | GitHub reports it as modified, without a patch and with no counts, exactly like a binary file that changed. | The note names both. |
+| A check waited for minutes and came back with nothing, and scrolling a long diff seemed to take seconds. | The test window was covered by other windows. Chromium gives a hidden page no animation frames and holds its timers back, so the waits inside the page never ended. | Checks wait on their own side and measure in one go. The slowness was the check's, not the pane's. |
+| A comment in the code said GitHub hands over about a megabyte of a pull request. | A guess. Measured on the pull request of 738 files: 3.8 MB of patches came, and from 3.1 MB on every second file came without one. | The comment says what was measured. |
+| The first comparison of totals failed on one pull request. | Its files added up to less than its own totals. | That is how a pull request handed over in part is told, in the app as in the check, and the tab says so. |
+| The check of the list waited two and a half minutes for a question on a card, and none came. | At the "manual" input level the app holds nothing: the session asks in its own terminal. Only "timed" puts a request on the card. | The check uses "timed". The row of that first session said "needs input" all the same, from the session's status. |
+| At the end of that wait the list was reported as showing on the wall, before the check had opened any session. | Not found. Nothing in the app opens a session by itself; a click on a card does, and the test window stands on the owner's desktop. A second run, and the same wait once more with a look every fifteen seconds, had the list hidden throughout. | Nothing. The check now prints the state of the view with that verdict. |
+
+### The release of 0.5.0, which came before this round
+
+One change went in between the owner's go-ahead and the tag: the session that starts again from its first
+prompt (section 13). The first attempt of the `installers` run then failed in the Windows job at
+`upload-artifact`, with "Failed to FinalizeArtifact: Unable to make request: ECONNRESET", after the build, the
+install and the update had passed there. GitHub's status page reported nothing. `gh run rerun --failed` ran
+that job and the release job again, and the release came out with its 14 files.
+
+## 15. Still open
+
+- The Diff tab has GitHub's default view and no other, and shows no diff where GitHub's list of files gives
+  none (section 14). A side-by-side view and filling the gaps from the worktree with git are what would come
+  next. Its colours know nothing of what stands above a hunk. Its drawing is not spread over time: 20,000
+  lines hold the window for about three seconds.
+- The list of sessions is gone through with the mouse. There is no key for the next session.
 - Semi-auto by a note does not get a session in auto mode to merge, and an idle session hears of a change only
   with the owner's next prompt (section 13). Whether the app should give a Semi-auto session a permission rule
   for `gh pr merge` is the owner's to decide.
@@ -1052,7 +1194,7 @@ that is cleared after it was told.
 - A flag placed before the `.` on the command line makes the app open its own source folder (see the table
   above). The app could find the folder argument more carefully.
 
-## 15. Continuing the work
+## 16. Continuing the work
 
 - **Windows** is the development machine. `npm run check:cpu` runs the job-object mechanism directly.
 - **Linux** was a WSL distribution (Ubuntu 24.04, systemd 255). The default mechanism there is the kernel one;
@@ -1106,6 +1248,16 @@ that is cleared after it was told.
 - **Autonomy** is tested live in the same clone. A note is not shown in the terminal, so the test asks the
   session to quote what it has been told about merging; the card's "not told yet" says when the note went.
   The machine's default is auto mode, which refuses a merge that only a note asked for.
+- **The Diff tab** is tested three ways. Read-only: what `lib.js` makes of GitHub's list of files, for the pull
+  requests of a public repository, counted against GitHub's own numbers. Live, in the clone of the test
+  repository: its checkout on a branch with one commit that holds every kind of change, which a session pushes
+  and opens as a pull request. And by handing a large public pull request's data to `renderDiff` in the window.
+  The colours are checked with it: every line has to read as GitHub gave it.
+- **The list of sessions** is tested live with three sessions, two in a group, one with a question. For a
+  question the app holds on the card, that session is started at the "timed" input level.
+- **A test copy's window is usually covered by other windows.** A covered window gets no animation frames and
+  its timers are held back. A check waits on its own side, never inside the page, and times what it measures
+  in one go.
 - **A release run that fails on GitHub's side** is run again, not tagged again: read the failed step with
   `gh run view <run> --log-failed`, then `gh run rerun <run> --failed`. Only the failed job and the release
   job run; the files of the jobs that passed are taken from the first attempt.
@@ -1118,7 +1270,7 @@ that is cleared after it was told.
 - This repository has no `docs/PROCESS.md` on purpose. The app, like the owner's helper, tells an agent to
   follow that file when it exists, and this record is a history, not a process to follow.
 
-## 16. Sources
+## 17. Sources
 
 The owner's rule for the session was to name the documentation before building on it. These are the pages the
 work relied on.
@@ -1139,6 +1291,18 @@ work relied on.
 - <https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options>
 - <https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart>
 - <https://signpath.org/terms>
+
+**The Diff tab**: <https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files> for the list of a pull
+request's files, whose answer was also read from a real pull request;
+<https://docs.github.com/en/repositories/creating-and-managing-repositories/repository-limits#diff-limits> for
+what GitHub's page loads by itself (400 lines and 20 KB of a file, 20,000 lines of a pull request);
+<https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/about-comparing-branches-in-pull-requests>
+for what "Files changed" compares; `gh api --help` and `gh pr diff --help` of gh 2.72.0. Seen, not documented:
+where the page has a file (`#diff-` and the SHA-256 of its name), and that deleted files start folded there.
+For the colours, highlight.js 11.12.0: <https://highlightjs.readthedocs.io/en/latest/api.html> (`highlight`,
+`getLanguage`), <https://github.com/highlightjs/highlight.js/blob/main/README.md> (what `require` loads, the
+licence) and <https://highlightjs.readthedocs.io/en/latest/css-classes-reference.html> (the classes). That its
+answer escapes the code, and which entities it uses, is not on those pages: it was read from an answer.
 
 **Autonomy and the lists**: the `hooks` page below, for `additionalContext` ("Add context for Claude", and the
 decision control of `UserPromptSubmit` and of `PostToolUse`) and for the `agent_id` a subagent's tool call

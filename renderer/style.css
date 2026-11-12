@@ -41,8 +41,8 @@ header .spacer { flex: 1 0 0; }
 .note.fresh { border-left-color: #e5484d; }
 .note .mark { flex: none; width: 16px; text-align: center; font-weight: bold; color: var(--dim); }
 .note.input .mark { color: var(--warn); } .note.done .mark, .note.update .mark, .note.app .mark { color: var(--ok); } .note.auto .mark, .note.merge .mark { color: var(--busy); }
-.tab { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--dim); padding: 4px 8px; }
-.tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+.tab, .tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--dim); padding: 4px 8px; }
+.tab.active, .tabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 #setup { margin-left: auto; }
 .chip { border: 1px solid var(--line); border-radius: 10px; padding: 0 8px; color: var(--dim); white-space: nowrap; }
@@ -121,6 +121,49 @@ main > section { height: 100%; display: flex; flex-direction: column; min-height
 .procs td { padding: 1px 10px 1px 0; border: 0; }
 .procs td:first-child { color: var(--busy); overflow-wrap: anywhere; }
 .procs td.num { text-align: right; }
+
+/* the detail view's list of sessions, beside the one on show */
+#sessions { display: none; }
+#view-instances.detail { flex-direction: row; }
+#view-instances.detail #sessions { display: block; flex: none; width: 230px; overflow: auto; border-right: 1px solid var(--line); background: var(--panel); }
+#view-instances.detail #scroll { min-width: 0; }
+.srow { padding: 7px 10px; border-bottom: 1px solid var(--line); border-left: 4px solid transparent; cursor: pointer; }
+.srow:hover { background: var(--line); }
+.srow.active { background: #1c2a3d; }
+.srow.grouped { border-left-color: var(--group); }
+.srow.attention .name { color: var(--warn); }
+.srow .name, .srow .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srow .badge { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; margin-top: 3px; }
+
+/* the detail view's tabs, and the Diff tab: a pull request's files the way GitHub's "Files changed" draws them */
+.card .tabs { display: none; }
+.card.detail .tabs { display: flex; gap: 4px; padding: 0 10px; border-bottom: 1px solid var(--line); }
+.diff { min-height: 0; overflow: auto; }
+.diff-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 12px; background: var(--panel); border-bottom: 1px solid var(--line); white-space: nowrap; }
+.diff a { color: var(--busy); cursor: pointer; text-decoration: underline; }
+.diff-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.diff-bar select { max-width: 300px; }
+.diff-note { padding: 12px 14px; color: var(--dim); }
+.diff-file { margin: 12px; border: 1px solid var(--line); border-radius: 6px; scroll-margin-top: 50px; }
+/* the file's name stays in view while its diff scrolls by, under the bar */
+.diff-file > summary { position: sticky; top: 38px; z-index: 1; display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: var(--panel); border-radius: 6px; cursor: pointer; }
+.diff-file > summary::before { content: "▸"; color: var(--dim); }
+.diff-file[open] > summary { border-bottom: 1px solid var(--line); border-radius: 6px 6px 0 0; }
+.diff-file[open] > summary::before { content: "▾"; }
+.diff-file[open] > summary .hint { display: none; }   /* why it was folded: said until it is opened */
+.diff-file .path { overflow-wrap: anywhere; }
+.diff-table { table-layout: fixed; }
+.diff-table td { padding: 0 10px; border: 0; line-height: 20px; }
+.diff-table tbody tr { cursor: text; user-select: text; }
+.diff-table tbody tr:hover { background: none; }
+.diff-table td.ln { width: 64px; text-align: right; color: var(--dim); white-space: nowrap; user-select: none; }
+.diff-table td.code { position: relative; padding-left: 26px; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 8; }
+.diff-table td.code::before { content: attr(data-m); position: absolute; left: 10px; }
+/* GitHub's colours for a dark page */
+.diff-table tr.add td.code { background: rgba(46, 160, 67, .15); } .diff-table tr.add td.ln { background: rgba(63, 185, 80, .3); color: var(--fg); }
+.diff-table tr.del td.code { background: rgba(248, 81, 73, .15); } .diff-table tr.del td.ln { background: rgba(248, 81, 73, .3); color: var(--fg); }
+.diff-table tr.hunk td { background: rgba(56, 139, 253, .1); color: var(--dim); } .diff-table tr.hunk td.ln { background: rgba(56, 139, 253, .4); }
+.diff-table tr.eof td.code { color: var(--dim); font-style: italic; }
 
 /* ---- worktrees, pull requests ---- */
 #worktree-list, #prs { flex: 1; min-height: 0; overflow: auto; }

@@ -4,6 +4,22 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.6.0 (2026-11-12)
+
+**Instances**
+
+- The detail view of an instance has a second tab, **Diff**: what the pull request of the session's branch
+  changes, the way GitHub's "Files changed" shows it. The same files, hunks and line numbers in one column,
+  added lines green and removed ones red, the code in GitHub's syntax colours, and files that fold. As on
+  GitHub, a deleted file, a large diff and what follows the first 20,000 lines start folded.
+- The tab is read-only. It is read from GitHub when it is opened, when the session's turn ends and with
+  ↻ Refresh, and the pull request's number opens its files on GitHub.
+- It has GitHub's default view only: there is no side-by-side view. A file that GitHub's list of files gives
+  no diff for, a binary one or a very large one, is named and linked.
+- Beside the session on show, the detail view lists all sessions the app runs, with name and status. A click
+  goes to that session and keeps the tab, so the terminals, or the diffs, can be gone through one after
+  another.
+
 ## 0.5.0 (2026-11-12)
 
 **Issues and pull requests**

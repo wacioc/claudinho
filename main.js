@@ -570,7 +570,7 @@ async function checkPr(inst, gone, canAsk) {
 // still a draft, and whether it is open, merged or closed. Null when the branch has none.
 async function readPr(inst) {
   let pr = null;
-  try { pr = JSON.parse(await run('gh', ['pr', 'view', '--json', 'number,state,url,isDraft,title,body'], inst.cwd, GH_WAIT)); } catch { /* no PR on this branch */ }
+  try { pr = JSON.parse(await run('gh', ['pr', 'view', '--json', 'number,state,url,isDraft,title,body,additions,deletions'], inst.cwd, GH_WAIT)); } catch { /* no PR on this branch */ }
   if (!pr) return null;
   inst.pr = { number: pr.number, url: pr.url, draft: !!pr.isDraft, state: pr.state };
   if (pr.state === 'MERGED' && !/^merged/.test(inst.merge || '')) inst.merge = 'merged';
@@ -811,6 +811,28 @@ const rpc = {
     try { await run('gh', action === 'ready' ? ['pr', 'ready', n] : ['pr', 'merge', n, `--${saved.settings.mergeMethod}`], inst.cwd, GH_WAIT); }
     finally { await readPr(inst); push(); }
   },
+  // The pull request of the instance's branch with its files and their diffs, as GitHub lists them under
+  // "Files changed": what has been pushed, against the merge base. Null when the branch has none. Read-only.
+  // ponytail: what GitHub's list of files gives, which is less than its page can load: 3000 files at most, and
+  // no diff for a file once its own diff or the pull request's is too large. The tab then links to GitHub. For
+  // more, diff in the worktree with git, which has the commits.
+  async prDiff(id) {
+    const inst = instances.get(id);
+    const pr = inst && await readPr(inst);   // the branch may have got its pull request since the last turn ended
+    if (!pr) return null;
+    push();
+    const rows = [];
+    for (let page = 1; page <= 30; page++) {
+      const more = JSON.parse(await run('gh', ['api', `repos/{owner}/{repo}/pulls/${pr.number}/files?per_page=100&page=${page}`], inst.cwd, GH_WAIT));
+      rows.push(...more);
+      if (more.length < 100) break;
+    }
+    return { number: pr.number, title: pr.title, url: pr.url, state: pr.state, draft: !!pr.isDraft, additions: pr.additions, deletions: pr.deletions, ...lib.mapDiff(rows, pr) };
+  },
+  // The syntax colours of one file of a diff. The tab asks when it first draws the file, one file a call: the
+  // work is done here, where a whole pull request in one go would hold up every terminal. Measured: 8 µs a
+  // line, 25 ms for the slowest of 700 files.
+  diffColours: (file, hunks) => lib.colourHunks(String(file), hunks),
   answer(id, requestId, choice) {
     const inst = instances.get(id);
     const p = inst && inst.pending.find(x => x.view.id === requestId);

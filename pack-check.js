@@ -3,6 +3,7 @@
 //   - its binary still runs as plain Node (the CPU limits on macOS and Linux start their helper that way, see cpu.js)
 //   - the terminal library loads from the package, with the helper programs it ships
 //   - the app comes up, shows its version and opens a folder
+//   - the Diff tab's syntax colours: the highlighter and its style sheet are packages of their own
 //   - on macOS and Linux: an instance runs in a terminal. A stand-in plays Claude Code, so nothing here touches
 //     the subscription. On Windows node-pty needs a real .exe, so that part is tried by hand with the real one.
 // The executable is claudinho.exe, claudinho.app/Contents/MacOS/claudinho, or the AppImage file.
@@ -107,6 +108,10 @@ async function asApp() {
     report(shown === version, 'starts, shows its version', `${shown}${shown === version ? '' : `, expected ${version}`}`);
     const state = await until(`api.call('state').then(s => s.repo && s)`, 'the folder to open');
     report(state.repo.path === repo, 'opens a folder', `${state.repo.path}, git: ${state.repo.isGit}`);
+    // One line of code through the highlighter in the main process, and the colour its style sheet gives a keyword.
+    const runs = await ev(`api.call('diffColours', 'a.js', [{ header: '@@ -0,0 +1 @@', lines: [{ type: '+', new: 1, text: 'const a = 1;' }] }])`);
+    const colour = await ev(`(() => { const s = document.body.appendChild(Object.assign(document.createElement('span'), { className: 'hljs-keyword' })); const c = getComputedStyle(s).color; s.remove(); return c; })()`);
+    report(JSON.stringify(runs[0][0]) === '["hljs-keyword","const"]' && colour === 'rgb(255, 123, 114)', 'colours a diff', `${JSON.stringify(runs[0].slice(0, 2))}, a keyword in ${colour}`);
 
     if (!WIN) {
       const id = await ev(`api.call('spawn', { level: 'manual' })`);

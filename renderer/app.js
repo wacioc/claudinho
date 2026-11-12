@@ -324,6 +324,9 @@ function createCard(inst) {
     done: h('span.tick', { title: 'Done: its last turn has ended, nothing it started is still running, and nothing has been asked of it since.' }, '✓'),
     prBtn: h('button.pr-act', { hidden: true, onclick: e => { e.stopPropagation(); prAct(inst.id); } }),
     info: h('dl'), env: h('div.env'), procs: h('div.procs'), audit: h('div.audit'),
+    // The detail view's two tabs: the session's terminal, and the diff of its pull request.
+    tabs: h('div.tabs', h('button.active', { onclick: () => { showTab(t, 'term'); term.focus(); } }, 'Terminal'), h('button', { onclick: () => showTab(t, 'diff') }, 'Diff')),
+    diff: h('div.diff', { hidden: true }),
     groupIn: h('input', { type: 'text', list: 'groups', maxLength: 40, placeholder: 'none', title: 'Sessions with the same group name are marked as belonging together. Clear the name to take this one out of its group.',
       onchange: e => call('setInstance', inst.id, { group: e.target.value }) }),
     merge: h('select', { onchange: e => call('setInstance', inst.id, { autonomy: e.target.value }) }, AUTONOMY.map(([v, text]) => h('option', { value: v }, text))),
@@ -336,8 +339,8 @@ function createCard(inst) {
     h('div.head', p.done, p.title, p.group, p.badge, h('span.spacer'), p.prBtn,
       h('button.back', { onclick: e => { e.stopPropagation(); closeDetail(); } }, '← All instances'),
       h('button.x', { title: 'Stop and remove', onclick: e => { e.stopPropagation(); closeInstance(inst.id); } }, '✕')),
-    p.meta, p.pending,
-    h('div.body', wrap, h('aside.side',
+    p.meta, p.pending, p.tabs,
+    h('div.body', wrap, p.diff, h('aside.side',
       h('h3', 'Session'), p.info,
       h('label', 'Group ', p.groupIn),
       h('h3', 'Input requests'), p.audit,
@@ -405,6 +408,7 @@ function renderPending(t, inst) {
 
 // order: where the card sits in the grid. A group's cards share one, so they sit next to each other.
 function updateCard(t, inst, order) {
+  if (t.tab === 'diff' && inst.done && !t.inst.done) loadDiff(t);   // its turn has just ended: what it pushed should show
   t.inst = inst;
   const st = statusOf(inst), s = inst.status || {};
   t.p.title.textContent = `${inst.worktree ? '🌳' : '📁'} ${inst.label}`;
@@ -484,6 +488,7 @@ function openDetail(id) {
   loadAudit(t);
   $('#view-instances').classList.add('detail');
   t.card.classList.add('detail');
+  renderSessions();
   layoutSoon(t);
   t.term.focus();
   t.envRows = null;
@@ -494,8 +499,133 @@ function closeDetail() {
   const t = terms.get(detailId);
   detailId = null;
   $('#view-instances').classList.remove('detail');
-  if (t) t.card.classList.remove('detail');
+  if (t) { t.card.classList.remove('detail'); showTab(t, 'term'); }
   terms.forEach(layoutSoon);
+}
+
+// ---------- the detail view's list of sessions ----------
+
+const groupNames = () => [...new Set(state.instances.map(i => i.group).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+
+// Beside the session on show: every instance with its name and its status, in the order of the wall, the one
+// on show marked. A click goes to that session and keeps the tab, so each session's terminal, or each one's
+// diff, is one click from the last.
+let shownSessions = '';
+function renderSessions() {
+  if (!detailId) return;
+  const groups = groupNames();
+  const rows = state.instances.map(inst => ({ inst, st: statusOf(inst), order: inst.group ? groups.indexOf(inst.group) + 1 : 0 })).sort((a, b) => a.order - b.order);
+  const key = JSON.stringify([detailId, rows.map(r => [r.inst.id, r.inst.label, r.inst.group, r.st, !!r.inst.done, r.inst.session.name])]);
+  if (key === shownSessions) return;   // unchanged: leave the rows alone, a click may be under way
+  shownSessions = key;
+  // Sessions in one folder carry the same name: those are told apart by the name Claude Code gave each.
+  const twice = new Set(rows.map(r => r.inst.label).filter((label, i, all) => all.indexOf(label) !== i));
+  $('#sessions').replaceChildren(...rows.map(({ inst, st }) => {
+    const row = h('div', { className: `srow${inst.id === detailId ? ' active' : ''}${st.cls === 'wait' ? ' attention' : ''}`, title: `${inst.cwd}\n${st.text}`, onclick: () => switchTo(inst.id) },
+      h('div.name', inst.done && h('span.tick', '✓ '), `${inst.worktree ? '🌳' : '📁'} ${inst.label}`),
+      twice.has(inst.label) && inst.session.name && h('div.hint', inst.session.name),
+      h('span', { className: `badge ${st.cls}` }, st.text));
+    stripe(row, inst.group);
+    return row;
+  }));
+}
+function switchTo(id) {
+  const from = terms.get(detailId);
+  if (id === detailId || !terms.has(id)) return;
+  const tab = from && from.tab;
+  openDetail(id);
+  if (tab === 'diff') { showTab(terms.get(id), 'diff'); terms.get(id).term.blur(); }   // the keyboard stays out of a terminal that is not on show
+}
+
+// ---------- the Diff tab ----------
+
+function showTab(t, name) {
+  t.tab = name;
+  [...t.p.tabs.children].forEach((b, i) => b.classList.toggle('active', (i === 1) === (name === 'diff')));
+  t.wrap.hidden = name === 'diff';
+  t.p.diff.hidden = name !== 'diff';
+  if (name === 'diff') loadDiff(t); else layoutSoon(t);
+}
+
+// The pull request of the session's branch as GitHub's "Files changed" has it: what is pushed, against the
+// merge base. Read-only: the tab shows and links to GitHub, and nothing in it writes anywhere.
+async function loadDiff(t) {
+  const mine = t.diffLoad = {};
+  if (!t.p.diff.firstChild) t.p.diff.replaceChildren(h('div.empty', 'Reading the pull request from GitHub…'));
+  if (t.diffAt) t.diffAt.textContent = 'reading…';
+  let d;
+  try { d = await api.call('prDiff', t.inst.id); } catch (e) { d = { error: errText(e) }; }
+  if (t.diffLoad !== mine) return;                    // a newer read is on its way
+  const key = JSON.stringify(d);
+  if (key !== t.diffKey) { t.diffKey = key; renderDiff(t, d); }   // nothing new: what is open, and the place in it, stay
+  t.diffAt.textContent = `read ${new Date().toLocaleTimeString()}`;
+}
+
+function renderDiff(t, d) {
+  const box = t.p.diff, known = t.inst.pr;
+  t.diffAt = h('span.hint');
+  const bar = (...kids) => h('div.diff-bar', kids, h('span.spacer'), t.diffAt, h('button', { onclick: () => loadDiff(t) }, '↻ Refresh'));
+  if (!d) {
+    return box.replaceChildren(bar(known ? `Pull request #${known.number} could not be read from GitHub just now.` : 'This session has no pull request yet.'),
+      h('div.empty', 'What the pull request of this session\'s branch changes shows here, as GitHub has it: what is pushed, not what is only in the worktree so far.'));
+  }
+  if (d.error) return box.replaceChildren(bar(h('span.loss', d.error)));
+  const onGitHub = (text, hash = '') => h('a', { title: 'Opens GitHub in the browser', onclick: () => call('openUrl', `${d.url}/files${hash}`) }, text);
+  const files = d.files.map(f => diffFile(f, onGitHub));
+  // GitHub's "Jump to": a file's name takes you to its diff.
+  const jump = h('select', { onchange: e => { const el = files[e.target.value]; e.target.value = ''; if (el) { el.open = true; el.scrollIntoView(); } } },
+    h('option', { value: '' }, `${plural(d.files.length, 'changed file')}…`), d.files.map((f, i) => h('option', { value: i }, `${f.path}   +${f.additions} −${f.deletions}`)));
+  const top = box.scrollTop;
+  box.replaceChildren(...[
+    bar(onGitHub(`#${d.number}`), h('b.diff-title', { title: d.title }, d.title), h('span.chip', d.state === 'OPEN' ? (d.draft ? 'draft' : 'open') : d.state.toLowerCase()),
+      jump, h('span.good', `+${d.additions}`), h('span.loss', `−${d.deletions}`)),
+    d.partial && h('div.diff-note', 'This pull request is larger than what GitHub hands over, so some of its files come without their diff. ', onGitHub('See all of it on GitHub')),
+    !d.files.length && h('div.empty', 'This pull request changes no files.'),
+    ...files,
+  ].filter(Boolean));
+  box.scrollTop = top;
+}
+
+// One file, open or folded as on GitHub's page. Its rows are built when it is first opened.
+// ponytail: all rows of an open file are built and laid out at once, about 0.15 ms a row when measured, and a
+// pull request opens up to 20,000 lines by itself (lib.mapDiff): three seconds in which the window, terminals
+// included, draws nothing else. If that hurts, draw a file when it scrolls into view; `content-visibility: auto`
+// on .diff-file cut the time to a tenth in a first try, which was not looked at on screen.
+function diffFile(f, onGitHub) {
+  const body = h('div');
+  const fill = () => {
+    if (body.firstChild) return;
+    body.replaceChildren(f.hunks ? diffTable(f.hunks) : h('div.diff-note', f.note, ' ', onGitHub('Open it on GitHub', `#${f.anchor}`)));
+    if (f.hunks) diffColours(body.firstChild, f);
+  };
+  const el = h('details.diff-file', { open: !f.fold, ontoggle: () => { if (el.open) fill(); } },
+    h('summary', h('span.path', f.from ? `${f.from} → ${f.path}` : f.path), f.status !== 'modified' && h('span.chip', f.status), f.fold && h('span.hint', f.fold),
+      h('span.spacer'), h('span.good', `+${f.additions}`), h('span.loss', `−${f.deletions}`)),
+    body);
+  if (el.open) fill();
+  return el;
+}
+
+// Syntax colours come a moment after the rows: the main process works them out, for this file alone. A line is
+// then its runs of text, each in a span with highlight.js's class where it has one. A file in a language that
+// is not known, and a line the colouring could not account for, stay as they are.
+async function diffColours(table, f) {
+  const lines = await api.call('diffColours', f.path, f.hunks).catch(() => null);
+  if (!lines) return;
+  table.querySelectorAll('tr:not(.hunk):not(.eof) td.code').forEach((td, i) => {
+    if (lines[i]) td.replaceChildren(...lines[i].map(([cls, text]) => (cls ? h('span', { className: cls }, text) : text)));
+  });
+}
+
+// The hunks of one file in one column, as GitHub's default view has them: the line's number in the old file, its
+// number in the new one, and the line with its mark. The mark is drawn by the style sheet, so a copy holds the
+// code alone.
+function diffTable(hunks) {
+  return h('table.diff-table', h('tbody', hunks.flatMap(k => [
+    h('tr.hunk', h('td.ln'), h('td.ln'), h('td.code', k.header)),
+    ...k.lines.map(l => h('tr', { className: { '+': 'add', '-': 'del', '\\': 'eof' }[l.type] || '' },
+      h('td.ln', l.old), h('td.ln', l.new), h('td.code', { 'data-m': l.type === '\\' ? '' : l.type }, l.text))),
+  ])));
 }
 // What removing a worktree would throw away, in words ('' = nothing). w: a row from the main process.
 function lossOf(w) {
@@ -566,8 +696,9 @@ function renderInstances() {
     t.observer.disconnect(); t.term.dispose(); t.card.remove(); terms.delete(id);
   }
   // Cards in no group come first, then group after group by name.
-  const groups = [...new Set(state.instances.map(i => i.group).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const groups = groupNames();
   for (const inst of state.instances) updateCard(terms.get(inst.id) || createCard(inst), inst, inst.group ? groups.indexOf(inst.group) + 1 : 0);
+  renderSessions();
   // The names offered where a group is typed. Rebuilt only when they change: the list may be open under the cursor.
   const names = [...new Set([...state.instances, ...(state.resumable || []), ...state.queue].map(x => x.group).filter(Boolean))].sort();
   if (names.join('\n') !== shownGroups) { shownGroups = names.join('\n'); $('#groups').replaceChildren(...names.map(n => h('option', { value: n }))); }

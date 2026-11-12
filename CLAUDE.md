@@ -1,10 +1,10 @@
 # claudinho
 
 A desktop monitor (Electron) for the Claude Code instances running in a repo: live terminals in groups, their
-worktrees, GitHub issues with dispatch into worktrees, the open pull requests, merging a session's pull request
-once the session says it is ready, notifications with a record of every input request, an editor for the
-`.claude` setup, per-instance CPU limits, resuming every session after the app stops, and updating itself from
-its GitHub releases.
+worktrees, GitHub issues with dispatch into worktrees, the open pull requests, the diff of a session's pull
+request, merging that pull request once the session says it is ready, notifications with a record of every
+input request, an editor for the `.claude` setup, per-instance CPU limits, resuming every session after the
+app stops, and updating itself from its GitHub releases.
 
 - [README.md](README.md): what it does, how to run it, and its limits.
 - [docs/HOW-THIS-WAS-BUILT.md](docs/HOW-THIS-WAS-BUILT.md): the brief, the decisions and their reasons, the
@@ -30,7 +30,7 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
 | `main.js` | Electron main process: instances (`node-pty`), the hook server, the process sampler, the dispatch pool, the `rpc` table the window calls. |
 | `preload.js` | The bridge to the window: `api.call`, `api.write`, `api.resize`, `api.on`. |
 | `renderer/` | The window: plain JavaScript, one DOM helper, native `<dialog>` forms. No framework, no build step. |
-| `lib.js` | Pure helpers, no Electron. Anything that can be tested without the app belongs here. |
+| `lib.js` | Pure helpers, no Electron. Anything that can be tested without the app belongs here. It loads `highlight.js`, the one dependency taken on for a feature (the Diff tab's syntax colours), when a diff first asks for colours. |
 | `test.js` | Plain asserts for `lib.js`. No test framework. |
 | `cpu.js` | CPU limits: one mechanism per operating system behind the same calls. No Electron. |
 | `cpu-check.js` | Runs the machine's real mechanism under real load and checks the numbers. |
@@ -88,6 +88,16 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
   on its card. Where the machine's default is auto mode, a merge that only a note asked for is refused.
   A session that starts again from its first prompt is a record in the `state.json` of a scratch data folder,
   without `sessionId` and `transcript`, that is resumed.
+- The Diff tab is tested three ways. Read-only: what `lib.js` makes of GitHub's list of files for the pull
+  requests of a public repository, counted against GitHub's own numbers. Live, in the same clone: its checkout
+  on a branch with one commit that holds every kind of change, which a session pushes and opens as a pull
+  request. And by handing a large public pull request's data to `renderDiff` in the window. Its syntax
+  colours are checked the same three ways: every line must still read as GitHub gave it.
+- The detail view's list of sessions is tested live with three sessions, two of them in a group and one
+  waiting for an answer. For a request the app holds on the card, that session needs the "timed" input level:
+  at "manual" the session asks in its own terminal and the app holds nothing.
+- A test copy's window is usually covered by other windows. It then gets no animation frames and its timers
+  are held back: a check waits on its own side, never inside the page, and times what it measures in one go.
 - When a session is done is tested live too: tell a session to start something and end its turn, and watch
   what the card says until that has ended. A command in the background is `sleep 90` with `run_in_background`.
   Claude Code refuses a bare `sleep` in the foreground, to a subagent as well, so a subagent that has to take
@@ -130,4 +140,4 @@ an update, and not notarised. A release whose update fails is not published.
 - The Windows installer is not signed, by the owner's decision (section 11 of the build history), and the
   installers carry Electron's default icon. A packaged build must keep Electron's `RunAsNode` fuse on (see
   `cpu.js`); `pack-check.js` fails when it is off.
-- The open points are listed in the README under "Limits" and in section 14 of the build history.
+- The open points are listed in the README under "Limits" and in section 15 of the build history.

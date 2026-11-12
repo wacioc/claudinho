@@ -155,6 +155,128 @@ function mapPr(p) {
   };
 }
 
+// ---------- a pull request's diff ----------
+
+// One file's diff as GitHub hands it over (its hunks, without a file header), as hunks whose lines carry
+// their number in the old and in the new file.
+function parsePatch(patch) {
+  const hunks = [];
+  let a = 0, b = 0, hunk;
+  const rows = patch.split('\n');
+  if (rows[rows.length - 1] === '') rows.pop();   // a line break at the very end is not a line of the file
+  for (const row of rows) {
+    const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(row);
+    if (m) { a = +m[1]; b = +m[2]; hunks.push(hunk = { header: row, lines: [] }); continue; }
+    if (!hunk) continue;
+    const text = row.slice(1);
+    if (row[0] === '+') hunk.lines.push({ type: '+', new: b++, text });
+    else if (row[0] === '-') hunk.lines.push({ type: '-', old: a++, text });
+    else if (row[0] === '\\') hunk.lines.push({ type: '\\', text: text.trim() });   // "\ No newline at end of file", said of the line above
+    else hunk.lines.push({ type: ' ', old: a++, new: b++, text });
+  }
+  return hunks;
+}
+
+// GitHub's page loads a file's diff by itself up to this size; a larger one waits for a click ("Load diff").
+const DIFF_AUTO = { lines: 400, bytes: 20 * 1024 };
+const EMPTY_BLOB = 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391';   // git's name for a file without content
+
+// f: one row of GitHub's "List pull requests files".
+// partial: the rows add up to less than the pull request's own totals. Of a very large pull request GitHub
+// hands over a part: some files come without a patch and with their counts at zero. Measured on one of 738
+// files: from 3 MB of patches on, every second file.
+// note: why there are no hunks to show. GitHub also sends no patch for a file that is binary or empty, that was
+// only renamed, whose mode alone changed, or whose own diff is too large. A change of mode comes as "modified"
+// with nothing else to tell it by.
+// fold: why the file starts folded, as it does on GitHub's page.
+// anchor: where GitHub's "Files changed" page has this file (seen on that page; not in GitHub's reference).
+function mapDiffFile(f, partial) {
+  const rows = f.patch ? f.patch.split('\n').length : 0;
+  return {
+    path: f.filename, from: f.previous_filename || null, status: f.status, additions: f.additions, deletions: f.deletions,
+    anchor: `diff-${crypto.createHash('sha256').update(f.filename).digest('hex')}`,
+    hunks: f.patch ? parsePatch(f.patch) : null,
+    note: f.patch ? '' : f.changes ? 'The diff of this file is too large to show here.' : f.sha === EMPTY_BLOB ? 'Empty file.'
+      : partial ? 'GitHub gives no diff for this file: the pull request is over its limits, or the file is binary.'
+        : f.previous_filename ? 'File renamed without changes.' : f.status === 'added' || f.status === 'removed' ? 'Binary file not shown.'
+          : 'No lines changed: a binary file, or a file whose mode alone changed.',
+    fold: f.status === 'removed' && f.patch ? 'This file was deleted.' : rows > DIFF_AUTO.lines || (f.patch || '').length > DIFF_AUTO.bytes ? 'Large diffs are not rendered by default.' : '',
+  };
+}
+
+// rows: GitHub's "List pull requests files" for one pull request. totals: that pull request's own additions and
+// deletions.
+// GitHub's page loads 20,000 lines of one pull request by itself, and so does the tab: the files after that
+// start folded. Every open file is drawn in full, and the window draws nothing else meanwhile.
+const DIFF_TOTAL = 20000;
+function mapDiff(rows, totals) {
+  const sum = k => rows.reduce((n, f) => n + f[k], 0);
+  const partial = sum('additions') !== totals.additions || sum('deletions') !== totals.deletions;
+  let lines = 0;
+  const files = rows.map(f => {
+    const file = mapDiffFile(f, partial);
+    if (file.hunks && !file.fold && (lines += f.patch.split('\n').length) > DIFF_TOTAL) file.fold = 'Folded: the files before this one come to 20,000 lines.';
+    return file;
+  });
+  return { partial, files };
+}
+
+// ---------- syntax colours for a diff ----------
+
+// highlight.js answers with HTML: the code, escaped, with a span around whatever has a colour. Here that is
+// taken apart into lines of [class, text] runs. The window builds text nodes from them, so none of that HTML is
+// ever read as markup. A span that runs over a line break goes on in the next line; of spans inside each other
+// the innermost counts.
+const ENTITY = { amp: '&', lt: '<', gt: '>', quot: '"', '#x27': "'" };
+function colouredLines(html) {
+  const lines = [[]], open = [];
+  for (const [, cls, end, text] of html.matchAll(/<span class="([^"]*)">|(<\/span>)|([^<]+)/g)) {
+    if (cls !== undefined) open.push(cls);
+    else if (end) open.pop();
+    else {
+      text.replace(/&(amp|lt|gt|quot|#x27);/g, (_, e) => ENTITY[e]).split('\n').forEach((part, i) => {
+        if (i) lines.push([]);
+        if (part) lines[lines.length - 1].push([open[open.length - 1] || '', part]);
+      });
+    }
+  }
+  return lines;
+}
+
+let hljs;   // highlight.js with all its languages: loaded when the first diff asks for colours
+// File endings that highlight.js does not know, or knows as something rarer.
+const LANGUAGE = { htm: 'xml', vue: 'xml', m: 'objectivec' };
+// The syntax colours of one file's hunks: for each of its lines, in the order of the hunks and without the "no
+// newline" notes, its runs of [class, text], or null for a line that stays as it is. Null for the whole file
+// where its name tells highlight.js no language.
+// A hunk is coloured as two pieces of code, its old side and its new side, so a comment or a string that runs
+// over several lines keeps its colour within the hunk. A line whose runs do not add up to the line itself is
+// left as it is: the tab never shows code that the colouring has changed.
+// ponytail: what began above a hunk is not known here. A hunk that starts inside a comment is coloured as code,
+// where GitHub, which colours whole files, has it right. Read both versions of the file for that.
+function colourHunks(file, hunks) {
+  hljs = hljs || require('highlight.js');
+  const base = path.basename(file).toLowerCase(), ext = path.extname(base).slice(1);
+  const language = [LANGUAGE[ext], ext, base].find(n => n && hljs.getLanguage(n));
+  if (!language || hljs.getLanguage(language).name === 'Plain text') return null;
+  const out = [];
+  for (const k of hunks) {
+    const lines = k.lines.filter(l => l.type !== '\\');
+    const side = skip => {
+      const mine = lines.filter(l => l.type !== skip);
+      const got = colouredLines(hljs.highlight(mine.map(l => l.text).join('\n'), { language, ignoreIllegals: true }).value);
+      return mine.map((l, i) => (got[i] && got[i].map(r => r[1]).join('') === l.text ? got[i] : null));
+    };
+    const olds = side('+'), news = side('-');
+    let a = 0, b = 0;
+    for (const l of lines) {
+      if (l.type === '-') out.push(olds[a++]);
+      else { out.push(news[b++]); if (l.type === ' ') a++; }
+    }
+  }
+  return out;
+}
+
 // ---------- auto-merge: the review of a turn that ended ----------
 
 // With auto-merge on, the app merges a session's pull request once the session says it is ready. A Claude run
@@ -654,7 +776,7 @@ function homePath(home, rel) {
 module.exports = {
   worktreeName, openBlockers, defaultTemplate, renderTemplate, AUTONOMY, autonomyOf, mergeInstruction, mergeNote, toldToMerge, issuePrompt, prAction, backgroundWork, ownPrompt,
   byNumber, issuesQuery, mapIssue, parseGitHub,
-  PR_FIELDS, checksOf, mapPr, groupName,
+  PR_FIELDS, checksOf, mapPr, parsePatch, mapDiffFile, mapDiff, colouredLines, colourHunks, groupName,
   REVIEW_SYSTEM, REVIEW_SCHEMA, reviewPrompt, reviewVerdict, waitForChecks,
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,
   auditEntries, auditPick, toolKey, parseVersion, newerVersion,
