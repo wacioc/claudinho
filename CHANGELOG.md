@@ -4,6 +4,22 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.4.1 (2026-11-12)
+
+**Instances**
+
+- A session is done only when its turn has ended and nothing it started is still running: no command in the
+  background, no subagent, no monitor. Before, the end of every turn counted, so a session that had only
+  paused to wait for its own background work got the checkmark and the "is done" notification, and with
+  auto-merge on its pull request was judged at that point.
+- While a session waits like that, its card says what is still running. Nothing is announced, judged or merged
+  until that has ended, and a dispatched session keeps its place among the agents that run at once.
+
+**Auto-merge**
+
+- What wakes a session, the end of a command in the background or a subagent's report, no longer counts as a
+  prompt of yours when the pull request is judged.
+
 ## 0.4.0 (2026-11-11)
 
 **Auto-merge**

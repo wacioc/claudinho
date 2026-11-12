@@ -122,7 +122,7 @@ function snapshot() {
         status: i.status, session: { status: s.status || s.state, waitingFor: s.waitingFor, name: s.name },
         pending: i.pending.map(p => p.view), pr: i.pr, merge: i.merge, procs: i.exited ? undefined : procUsage.get(i.pid),
         weight: i.weight, limit: i.limited && !i.exited ? cpu.limit(i.id) : 1, group: i.group, starting: i.starting && !i.exited,
-        done: i.done && !i.exited, auditRev: i.auditRev,
+        done: i.done && !i.exited, background: i.exited ? null : i.background, auditRev: i.auditRev,
       };
     }),
     external: externalSessions().map(s => ({
@@ -165,8 +165,9 @@ function spawnInstance({ cwd, worktree, resume, transcript, model, effort, promp
     // A new worktree with a first prompt: until that prompt has gone in, the session is still running its
     // SessionStart hooks, where a repository sets a fresh worktree up (see onHook and pump).
     starting: !!(wt && prompt && !resume),
-    // done: its last turn has ended and no prompt has gone in since. audit: every input request (see onHook).
-    done: false, audit: Array.isArray(audit) ? audit : [], auditRev: 0,
+    // done: its last turn has ended with nothing it started still running, and no prompt has gone in since.
+    // background: what was still running when its last turn ended (see onStop). audit: every input request (see onHook).
+    done: false, background: null, audit: Array.isArray(audit) ? audit : [], auditRev: 0,
     status: null, pending: [], pr: null, merge: null, finished: false, exited: false, weight, limited,
     // Auto-merge (see mergeWhenReady): what the session wrote last, the follow-ups it got since the last prompt
     // of the owner's, that prompt, and the review that is under way.
@@ -414,9 +415,10 @@ function onHook(inst, ev, res) {
   }
   if (ev.hook_event_name === 'UserPromptSubmit') {
     reply();
-    inst.done = false;      // a new turn begins
-    inst.asked = []; inst.reviewing = null;   // with a prompt of the owner's: what the app was settling starts over
-    inst.lastPrompt = ev.prompt || null;      // the review is told what the owner asked for last
+    inst.done = false; inst.background = null;   // a new turn begins; what still runs is reported again at its end
+    // With a prompt of the owner's, what the app was settling starts over, and the review is told what the owner
+    // asked for last. What wakes a session comes as a prompt too (see lib.ownPrompt) and changes neither.
+    if (lib.ownPrompt(ev.prompt)) { inst.asked = []; inst.reviewing = null; inst.lastPrompt = ev.prompt || null; }
     // A request still open when a prompt goes into an idle session was dismissed with Escape, which ends a turn
     // without a Stop. In a busy session the prompt is a message sent along the way, and an approved tool may
     // still be running: that one is left open until its turn ends.
@@ -511,10 +513,20 @@ function notify(kind, text, inst) {
 
 // The turn has ended. Resolves to what the Stop hook answers: nothing, or a follow-up for the session.
 async function onStop(inst, ev, gone) {
-  inst.pending.slice().forEach(p => p.settle('terminal'));   // the turn is over: nothing can still be waiting
-  closeAudit(inst);
   if (inst.kind === 'generator') send('config-changed');
   inst.said = ev.last_assistant_message || '';
+  // A turn can end with what the session started still running: a shell in the background, a subagent, a
+  // monitor. Then it has only paused. Claude Code wakes it when one of them ends or reports (that comes as a
+  // prompt), and the turn that follows ends here again. Nothing is closed, judged or announced until the end
+  // that leaves nothing running: a subagent may still be waiting for an answer of the owner's.
+  // ponytail: this is only read at the end of a turn. Should something end without Claude Code waking the
+  // session (not seen so far), it stays on the card until the session's next turn. While something runs,
+  // `claude agents --json` reports the session as busy (measured on 2.1.322): idle there would be the sign to
+  // go by, if that turns out to matter.
+  inst.background = lib.backgroundWork(ev.background_tasks);
+  if (inst.background) { await readPr(inst); push(); return; }   // the card still shows its pull request
+  inst.pending.slice().forEach(p => p.settle('terminal'));   // the turn is over: nothing can still be waiting
+  closeAudit(inst);
   const followUp = await checkPr(inst, gone);
   // Handed to the session as feedback from the hook: it carries on, and its next Stop comes back here.
   if (followUp) return { hookSpecificOutput: { hookEventName: 'Stop', additionalContext: followUp } };

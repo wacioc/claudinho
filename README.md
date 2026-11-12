@@ -75,13 +75,19 @@ an entry opens the instance it is about.
 |---|---|
 | needs input | A session asks a question or for a permission, at the Manual and at the Timed level. |
 | answered for itself | The same at the Auto level, with what was asked and what was picked. |
-| is done | A session's turn has ended. With auto-merge on, it also says what became of the pull request. |
+| is done | A session's turn has ended and nothing it started is still running. With auto-merge on, it also says what became of the pull request. |
 | was told | With auto-merge on, the app sent the session a follow-up before merging (see [Auto-merge](#auto-merge)). |
 | Claude Code … is out | A newer version than the installed one has been released. Pressing it runs `claude update`. |
 | claudinho … is out | A newer release of the app has been published. Pressing it installs that release. |
 
-A session whose turn has ended is also marked on its card, with a green outline and a green checkmark, until the
-next prompt goes in.
+A session that is done is also marked on its card, with a green outline and a green checkmark, until the next
+prompt goes in.
+
+Done is more than the end of a turn. A turn can end while something the session started is still running: a
+command in the background, a subagent, a monitor. Claude Code wakes the session when one of them ends or
+reports, and the session carries on. Until a turn ends with nothing left running, the session is not done: its
+card says what is still running, there is no checkmark and no notification, and its pull request is left
+alone.
 
 ### The record of input requests
 
@@ -215,7 +221,7 @@ With several issues selected you also choose how many agents run at once (max 4)
 
 ### Merging a pull request yourself
 
-When a session's turn has ended and its branch has an open pull request, its card carries a button in the
+When a session is done and its branch has an open pull request, its card carries a button in the
 header, on the wall and in the detail view. For a draft it reads **Mark ready for review**; otherwise **Merge
 PR**, which asks before it merges, with the method set under ⚙. What GitHub refuses, a conflict or a rule of
 the branch, is shown as GitHub says it. The button is there for any instance, started in a worktree or in the
@@ -224,8 +230,8 @@ folder itself, with or without auto-merge.
 ### Auto-merge
 
 With **Merge the PR once the session says it is ready** ticked for an instance, merging is the app's job, not
-the session's. Every time such a session ends a turn with an open pull request on its branch, the app reads
-what the session wrote and decides between three things.
+the session's. Every time such a session ends a turn with an open pull request on its branch and nothing it
+started still running, the app reads what the session wrote and decides between three things.
 
 | The app | When | What happens |
 |---|---|---|
@@ -236,7 +242,8 @@ what the session wrote and decides between three things.
 What GitHub refuses also goes back to the session to be repaired: a failed check, or a conflict with the base
 branch once another pull request has been merged first. After three follow-ups without a prompt of yours in
 between, the pull request waits for you. A prompt you type counts for more than the one the session was started
-with, so "it is fine as it is" is taken at its word.
+with, so "it is fine as it is" is taken at its word. What wakes a session, the end of a command in the
+background or a subagent's report, is not a prompt of yours and changes neither.
 
 The card shows where a pull request stands (`reviewing`, `follow-up 1 of 3`, `waiting for checks`, `merged`,
 `not merged`), with the reason as its tooltip and in the detail view; every follow-up is a notification and
@@ -283,6 +290,10 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
 - Each instance gets its own `--settings` file. It wraps your status line so the JSON Claude Code feeds it (cost,
   context, rate limits) is also saved for the app, and it adds HTTP hooks pointing at a local server inside the app:
   `PreToolUse` on `AskUserQuestion` and `PermissionRequest` for the input levels, `Stop` to notice a finished turn.
+- Whether a finished turn is the end of the session's work comes with the `Stop` hook: its `background_tasks`
+  lists what the session started and is still running. Only a turn that ends with that list empty makes the
+  session done. What wakes a paused session reaches the app like a prompt (`UserPromptSubmit`), as a
+  `<task-notification>` or an `<agent-message>`, which is how it is told from a prompt of yours.
 - With auto-merge on, the `Stop` hook is answered only once the app has decided. The decision comes from
   `claude -p` with a JSON schema, no tools and its own system prompt, started in the app's data folder so that
   no project's settings or hooks come into it. A follow-up is the hook's answer (`additionalContext`), which
@@ -373,6 +384,13 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
 - The app's own update is run to the end on Windows, macOS and Linux each time a release is built, on a hosted
   machine, and a release whose update fails is not published. Downloads are checked against the checksum in
   the release; on macOS the system also checks the signature, on Windows and Linux nothing does.
+- What a session still has running is read when a turn ends. In every case tried, Claude Code woke the session
+  when something it had started ended, which leads to a turn and so to a new reading. Should something end
+  without that, it stays on the card until the session's next turn, and the session is not marked done before
+  that. A session that leaves a command running for good, a development server say, is never done: stop the
+  command, or have the session stop it. Claude Code lists a monitor started with its Monitor tool as a shell,
+  so that is what the card calls it. A scheduled wake-up (`/loop`) is not something running: between two of
+  them the session counts as done.
 - The button to merge or mark ready shows what the app knew when the session's turn ended. A pull request
   merged or closed on GitHub since then still has its button until the next turn, and a session resumed after
   a restart has none until then.

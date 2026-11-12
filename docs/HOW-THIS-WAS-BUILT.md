@@ -1,6 +1,6 @@
 # How claudinho was built
 
-claudinho was built in one long working session on 10 and 11 November 2026, between its owner and Claude
+claudinho was built in one long working session from 10 to 12 November 2026, between its owner and Claude
 (Anthropic's model, working as Claude Code on the owner's Windows PC). The owner wrote the brief, answered the
 design questions and decided what came next at every step. Claude wrote the code and ran the tests.
 
@@ -728,7 +728,7 @@ And, once the first of them was built:
 
 **macOS: done by the owner, as 0.3.1.** While this round's features were being built on the Windows PC, the
 owner signed the Mac apps in a session of their own, on their Mac, and released that as 0.3.1 (sections 8 and
-12 carry what that session recorded). The work here was then put on top of it. A variant written on the PC
+13 carry what that session recorded). The work here was then put on top of it. A variant written on the PC
 before that, with an App Store Connect key in place of the Apple ID, was dropped unrun. Two things from it are
 worth keeping: electron-builder's page says `APPLE_API_KEY` holds the key's text, while version 26.18.0 passes
 it to `notarytool --key`, which takes a file's path; and under the hardened runtime, programs inside the
@@ -840,7 +840,97 @@ still shows its button until the next turn, and a session resumed after a restar
 | The held session stayed held after the owner had told it the pull request was fine. | The review knew the prompt the session was started with and nothing later, so the session's "ready" contradicted its instructions. | The owner's latest prompt, which the `UserPromptSubmit` hook carries, is given to the review. |
 | A merged pull request carried a note saying the draft was being left as a draft. | The review was commenting on work that is the app's, and without knowing what the app does. | It is told that marking ready, waiting for checks and handing back failures are the app's, and that a merge carries a note only when a point was decided. |
 
-## 12. Still open
+## 12. The seventh round: when a session is done
+
+The next day, with 0.4.0 installed and in use, the owner wrote:
+
+> A claude code session should be considered done when it's not thinking any more, it has no subagents running,
+> it has no monitor and no shell still running. Push an updated version with this fix.
+
+### What was wrong
+
+Until 0.4.0, done meant that the session's last turn had ended and no prompt had gone in since. A turn also
+ends when the session has started something and waits for it: a command in the background, a subagent, a
+monitor. Claude Code wakes the session when that ends or reports, and the session carries on. Such a pause got
+the checkmark and the "is done" notification. With auto-merge on, the pull request was judged from what the
+session had written at that point, and a dispatched session gave up its place in the pool.
+
+### What Claude Code reports
+
+The hooks reference gives the `Stop` hook a list, `background_tasks`, so that a hook can "distinguish 'session
+is done' from 'session is paused waiting for background work to wake it back up'". What 2.1.322 sends was
+measured first, with three sessions that each started one thing and ended their turn:
+
+| Started | In `background_tasks` when the turn ended | What happened when it ended |
+|---|---|---|
+| A command, with `run_in_background`. | `{"type": "shell", "status": "running", "description": …, "command": "sleep 40"}` | A `<task-notification>` went in as a prompt (`UserPromptSubmit`). The turn that followed ended with an empty list. |
+| A subagent, with `run_in_background`. | `{"type": "subagent", "status": "running", "description": …, "agent_type": "general-purpose"}` | Its report went in as a prompt that starts with `<agent-message`. The turn that followed ended with an empty list. |
+| A monitor, with the Monitor tool. | An entry of type `shell`, with the monitor's command. The type `monitor` of the reference did not appear. | Each line the monitor reported went in as a `<task-notification>` prompt and made a turn of its own, which ended with the monitor still listed. The turn after its stream had ended closed with an empty list. |
+
+Two more things showed. `claude agents --json` reports a session that waits like this as `busy`, for the whole
+wait, which is why its card already read "working" beside the checkmark. And `SubagentStop` fires about a
+second after every `Stop`, for helpers of Claude Code's own; it carries the same list, but a subagent that is
+just ending is still in it.
+
+### Decisions
+
+| Decision | Why |
+|---|---|
+| Done is decided when a turn ends, from the list in that `Stop`. | That is what the list is for, and it is exact at that moment. With auto-merge the decision has to fall while the hook is still open, because a follow-up is the hook's answer. The status that is polled every three seconds says `busy` or `idle` and no more. |
+| Everything in the list counts, whatever its type. | The owner named shells, subagents and monitors. The list also knows workflows, teammates, cloud sessions and MCP tasks, and they are the same thing to the owner: work the session started that is not over. A monitor cannot be told from a shell there in any case. |
+| A scheduled wake-up does not count. | They are listed apart, in `session_crons`, and the owner's sentence is about what is running. A session in a `/loop` is done between two rounds; the next round goes in as a prompt and takes the mark away. |
+| A turn that ends with something running changes nothing but what the card shows. | No checkmark, no notification, no review of the pull request, no button to merge, and a dispatched session keeps its place in the pool. Input requests are left as they are as well: a subagent may be waiting for an answer. The card gets a chip, "still running: 1 shell", with each task's description as its tooltip and as a row of the detail view, and it still learns of its pull request. |
+| What wakes a session is not a prompt of the owner's. | `UserPromptSubmit` fires for it as for a typed prompt. The app took each one for the owner's latest prompt, which the review of a pull request weighs above the first, and began its count of follow-ups again. With done moved to the end of the background work, every such session would have been judged right after one. They are told apart by the tag they start with (`lib.ownPrompt`). |
+| Nothing polls for work that ends without waking the session. | In every case tried, the end of a task woke the session. The ceiling stands where it applies, as a `ponytail:` comment in `onStop`, with the sign to go by. |
+
+### How it was verified
+
+The two helpers have asserts in `test.js`, fed with the entries and the prompts as Claude Code sent them.
+
+The rest ran live, in the clone of the test repository, with four Haiku sessions told what to start and what
+to write. All four were waiting at the same time; their cards read "working", without checkmark or outline,
+with the chip, and without a button to merge.
+
+| Session | While it waited | In the end |
+|---|---|---|
+| Starts `sleep 90` in the background and ends its turn. | "still running: 1 shell", for 90 seconds. | Done 98 seconds after the start, with one notification. |
+| Starts a subagent in the background that takes a minute. | "still running: 1 subagent". | Done after the subagent's report, at 73 seconds, with one notification. |
+| Starts a monitor that reports five lines, 15 seconds apart. | Five turns of one word, each ending with "still running: 1 shell". | Done after the monitor's stream had ended, at 85 seconds, with one notification. |
+| Auto-merge on: opens a pull request, starts `sleep 45` in the background, and says the pull request is ready for merge. | The card showed the pull request, open, and the chip. No review. | When the command had ended, the session said so. Then came the review, the wait for checks and the merge, 89 seconds after the start, and one notification: "is done: pull request … (merged)". |
+
+Not exercised: an input request of a subagent that is open while its session's turn ends, a task that ends
+without waking its session, a `/loop`, and a dispatched batch, in which a waiting session has to keep its
+place.
+
+### The release of 0.4.0, which came before this round
+
+The tag's run failed and published nothing. The Mac job had built, signed, notarised and passed every check,
+and then could not hand its files over: `actions/upload-artifact` gave up after five attempts ("Failed to
+CreateArtifact … is not valid JSON") while GitHub Actions had an outage. The release job needs every build, so
+it was skipped. `gh run rerun <run> --failed` repeated the Mac job and then ran the release job, which also
+took the Windows and Linux files the first attempt had stored. The release has all 14 files.
+
+The published release was then read the way an installed copy reads it, without installing anything:
+electron-updater's GitHub provider, with the three lines the packaged app carries in `app-update.yml`, as a
+copy that claims version 0.3.9. It found 0.4.0 and named the Windows installer; as 0.4.0 it found nothing
+newer. Before the release the same reading had ended, as it should, with "Cannot find latest.yml" for 0.3.1.
+Every file that the three `latest*.yml` files name is in the release with the size given there, and is served
+under the address the update asks for.
+
+0.4.1 is the first release that an installed copy can update itself to.
+
+### What went wrong
+
+| Symptom | Cause | What changed |
+|---|---|---|
+| In the first live run, the card of the session that waited did not show its pull request, and the test's check for it failed. | The app reads a session's pull request in the same place where it judges it, and that no longer happens when a turn ends with something running. | Such a turn still reads the pull request, and does nothing else with it. |
+| A subagent told to run `sleep 30` came back after four seconds. | Claude Code refuses a bare `sleep` in the foreground and points the model to a monitor or to the background. | The subagent of the test waits with `node -e "setTimeout(…)"`. |
+| The run of the 0.4.0 tag failed. | An outage at GitHub, above. | The failed job was run again; no new tag was needed. |
+
+## 13. Still open
+
+- What a session still has running is read when a turn ends, and only then. A monitor is listed as a shell,
+  and a scheduled wake-up is not counted as something running (section 12).
 
 - Windows stays unsigned, by decision (section 11).
 - Auto-merge reads prose, not code, and leaves turns without a pull request alone. The cases not exercised
@@ -877,7 +967,7 @@ still shows its button until the next turn, and a session resumed after a restar
 - A flag placed before the `.` on the command line makes the app open its own source folder (see the table
   above). The app could find the folder argument more carefully.
 
-## 13. Continuing the work
+## 14. Continuing the work
 
 - **Windows** is the development machine. `npm run check:cpu` runs the job-object mechanism directly.
 - **Linux** was a WSL distribution (Ubuntu 24.04, systemd 255). The default mechanism there is the kernel one;
@@ -923,12 +1013,23 @@ still shows its button until the next turn, and a session resumed after a restar
   `latest.yml` with a higher version and no installer behind it. Never serve a real installer to a copy on a
   machine in use: the update installs over the app that is installed there. The install itself is what
   `pack-check.js --update` does on the hosted machines.
+- **When a session is done** is tested live as well: a session is told to start something and end its turn,
+  and the test writes down what the card says until that has ended. A command in the background is `sleep 90`
+  with `run_in_background`; a subagent that has to take a while runs `node -e "setTimeout(() => {}, 60000)"`,
+  because Claude Code refuses a bare `sleep` in the foreground.
+- **A release run that fails on GitHub's side** is run again, not tagged again: read the failed step with
+  `gh run view <run> --log-failed`, then `gh run rerun <run> --failed`. Only the failed job and the release
+  job run; the files of the jobs that passed are taken from the first attempt.
+- **A published release's update feed** can be read without installing anything: a few lines of Electron that
+  call electron-updater's `checkForUpdates` with `autoDownload` off and `forceDevUpdateConfig` on, beside a
+  `dev-app-update.yml` with the provider, owner and repository, and a `package.json` that claims an older
+  version.
 - **A command that must not run in a check** is replaced by a shell function. A stand-in folder on the `PATH`
   is not enough in Git Bash, where a Windows path in `PATH` is split at its colon.
 - This repository has no `docs/PROCESS.md` on purpose. The app, like the owner's helper, tells an agent to
   follow that file when it exists, and this record is a history, not a process to follow.
 
-## 14. Sources
+## 15. Sources
 
 The owner's rule for the session was to name the documentation before building on it. These are the pages the
 work relied on.
@@ -949,6 +1050,10 @@ work relied on.
 - <https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options>
 - <https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart>
 - <https://signpath.org/terms>
+
+**When a session is done**: the `hooks` page below, for what the `Stop` hook is given (`background_tasks`,
+`session_crons`) and for what else fires `UserPromptSubmit`, and `agent-view` for what `status` says. For the
+release run: <https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs>.
 
 **Auto-merge**: the `hooks` and `headless` pages below, `claude --help` of 2.1.322, and
 <https://cli.github.com/manual/gh_pr_merge>, <https://cli.github.com/manual/gh_pr_ready> and

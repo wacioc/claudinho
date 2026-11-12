@@ -83,6 +83,10 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
   there and the app merges them. A fresh clone needs its workspace trust dialog answered once before
   `claude -w` works in it. The verdicts come from a real Claude run, so a test records what happened and
   tells each session what to write at the end of its turn.
+- When a session is done is tested live too: tell a session to start something and end its turn, and watch
+  what the card says until that has ended. A command in the background is `sleep 90` with `run_in_background`.
+  Claude Code refuses a bare `sleep` in the foreground, to a subagent as well, so a subagent that has to take
+  a while runs `node -e "setTimeout(() => {}, 60000)"`.
 - `CLAUDINHO_UPDATES=<address>` makes the app look for its own releases there, also when run from source.
   Serve only a `latest.yml` that names a higher version, with no installer behind it: then the button and the
   notification can be looked at and nothing can be installed. A real installer served to a copy on a machine
@@ -121,4 +125,4 @@ an update, and not notarised. A release whose update fails is not published.
 - The Windows installer is not signed, by the owner's decision (section 11 of the build history), and the
   installers carry Electron's default icon. A packaged build must keep Electron's `RunAsNode` fuse on (see
   `cpu.js`); `pack-check.js` fails when it is off.
-- The open points are listed in the README under "Limits" and in section 12 of the build history.
+- The open points are listed in the README under "Limits" and in section 13 of the build history.

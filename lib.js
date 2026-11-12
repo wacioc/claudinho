@@ -57,6 +57,28 @@ function prAction(pr, autoMerge) {
   return pr.isDraft ? 'none' : 'finished';
 }
 
+// What a session still has running when its turn ends. tasks: the Stop hook's `background_tasks`, one entry
+// for each thing in flight, its kind in `type`: shell, subagent, monitor, workflow, teammate, cloud session,
+// MCP task. (A monitor started with the Monitor tool comes as a shell: measured on Claude Code 2.1.322.)
+// Null when nothing runs, which is also what an older Claude Code that sends no list gets. Otherwise the words
+// for the card: text "2 shells, 1 subagent", and detail with one line for each.
+function backgroundWork(tasks) {
+  const list = (Array.isArray(tasks) ? tasks : []).filter(t => t && typeof t === 'object');
+  if (!list.length) return null;
+  const counts = {};
+  for (const t of list) counts[t.type || 'task'] = (counts[t.type || 'task'] || 0) + 1;
+  return {
+    text: Object.entries(counts).map(([type, n]) => `${n} ${type}${n > 1 ? 's' : ''}`).join(', '),
+    detail: list.map(t => `${t.type || 'task'}: ${t.description || t.command || t.id || ''}`.slice(0, 200)).join('\n'),
+  };
+}
+
+// Claude Code reports what wakes a session as a prompt too: a shell that ended or a monitor's line comes as a
+// <task-notification>, a subagent's report as an <agent-message>. Those are not the owner's words.
+// ponytail: the two kinds measured on Claude Code 2.1.322. A message from a teammate or from another session
+// would still count as the owner's; add its tag here when one is seen.
+const ownPrompt = text => !/^\s*<(task-notification|agent-message)[\s>]/.test(text || '');
+
 // ---------- GitHub issues ----------
 
 function issuesQuery(state) {
@@ -609,7 +631,7 @@ function homePath(home, rel) {
 }
 
 module.exports = {
-  worktreeName, openBlockers, defaultTemplate, renderTemplate, issuePrompt, prAction, issuesQuery, mapIssue, parseGitHub,
+  worktreeName, openBlockers, defaultTemplate, renderTemplate, issuePrompt, prAction, backgroundWork, ownPrompt, issuesQuery, mapIssue, parseGitHub,
   PR_FIELDS, checksOf, mapPr, groupName,
   REVIEW_SYSTEM, REVIEW_SCHEMA, reviewPrompt, reviewVerdict, waitForChecks,
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,

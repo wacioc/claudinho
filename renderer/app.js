@@ -317,7 +317,7 @@ function createCard(inst) {
   const host = h('div.term-host'), wrap = h('div.term-wrap', host);
   const p = {
     title: h('span.title'), group: h('span.group'), badge: h('span.badge'), meta: h('div.meta'), up: h('span.chip'), pending: h('div.pending'),
-    done: h('span.tick', { title: 'Done: its last turn has ended, and nothing has been asked of it since.' }, '✓'),
+    done: h('span.tick', { title: 'Done: its last turn has ended, nothing it started is still running, and nothing has been asked of it since.' }, '✓'),
     prBtn: h('button.pr-act', { hidden: true, onclick: e => { e.stopPropagation(); prAct(inst.id); } }),
     info: h('dl'), env: h('div.env'), procs: h('div.procs'), audit: h('div.audit'),
     groupIn: h('input', { type: 'text', list: 'groups', maxLength: 40, placeholder: 'none', title: 'Sessions with the same group name are marked as belonging together. Clear the name to take this one out of its group.',
@@ -361,6 +361,7 @@ function infoRows(i) {
   const s = i.status || {};
   return [
     ['Status', statusOf(i).text],
+    ['Still running', i.background && i.background.detail.split('\n').map(line => h('div', line))],
     ['Folder', i.cwd],
     ['Branch', s.branch],
     ['Model', [s.model || i.model, s.effort || i.effort].filter(Boolean).join(' · ')],
@@ -434,6 +435,8 @@ function updateCard(t, inst, order) {
     inst.pr && h('span.chip', { title: inst.merge || '' }, `PR #${inst.pr.number}${inst.merge ? ` ${inst.merge.split(':')[0]}` : inst.pr.state === 'CLOSED' ? ' closed' : inst.pr.draft ? ' draft' : ''}`),
     inst.autoMerge && 'auto-merge',
     inst.level !== 'manual' && `input: ${inst.level}`,
+    // Its turn has ended, but it is not done: what it started is still running, and it carries on when that ends.
+    inst.background && h('span.chip', { title: `The session's turn has ended, with this still running:\n${inst.background.detail}\nIt is done when nothing is.` }, `still running: ${inst.background.text}`),
   ].filter(Boolean).map(c => (typeof c === 'string' ? h('span.chip', c) : c)), ...procChips(inst.procs, inst.limit), t.p.up);
   renderProcs(t.p.procs, inst.procs, inst.limit);
   if (document.activeElement !== t.p.weight) t.p.weight.value = inst.weight;

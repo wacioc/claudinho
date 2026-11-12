@@ -39,6 +39,29 @@ assert.strictEqual(lib.prAction({ state: 'MERGED' }, false), 'merged');
 assert.strictEqual(lib.prAction({ state: 'MERGED' }, true), 'merged');
 assert.strictEqual(lib.prAction({ state: 'CLOSED' }, true), 'none');
 
+// What a session still has running when its turn ends. The entries are what Claude Code 2.1.322 sent in the
+// Stop hook's background_tasks for a shell in the background, a monitor (it comes as a shell) and a subagent.
+const bgShell = { id: 'bm9940r1o', type: 'shell', status: 'running', description: 'Run sleep 40 in the background', command: 'sleep 40' };
+const bgMonitor = { id: 'b2at8tzg2', type: 'shell', status: 'running', description: 'Tick lines from a 3-cycle 12-second loop', command: 'for i in 1 2 3; do echo tick $i; sleep 12; done' };
+const bgAgent = { id: 'a93e25b9c195d5770', type: 'subagent', status: 'running', description: 'Run sleep 30 and reply', agent_type: 'general-purpose' };
+assert.strictEqual(lib.backgroundWork([]), null);                 // nothing runs: the session is done
+assert.strictEqual(lib.backgroundWork(undefined), null);          // a Claude Code that sends no list
+assert.deepStrictEqual(lib.backgroundWork([bgShell]), { text: '1 shell', detail: 'shell: Run sleep 40 in the background' });
+assert.deepStrictEqual(lib.backgroundWork([bgShell, bgAgent, bgMonitor]), {
+  text: '2 shells, 1 subagent',
+  detail: 'shell: Run sleep 40 in the background\nsubagent: Run sleep 30 and reply\nshell: Tick lines from a 3-cycle 12-second loop',
+});
+assert.deepStrictEqual(lib.backgroundWork([{ id: 't1', type: 'shell', command: 'npm run dev' }, { id: 't2' }, null]), { text: '1 shell, 1 task', detail: 'shell: npm run dev\ntask: t2' });
+assert.strictEqual(lib.backgroundWork([{ type: 'shell', description: 'x'.repeat(500) }]).detail.length, 200);
+
+// What wakes a session is reported as a prompt too. Only the owner's own words count as theirs.
+assert.strictEqual(lib.ownPrompt('Run the tests and fix what fails.'), true);
+assert.strictEqual(lib.ownPrompt('<task-notification>\n<task-id>bm9940r1o</task-id>\n<status>completed</status>\n<summary>Background command "Run sleep 40 in the background" completed (exit code 0)</summary>\n</task-notification>'), false);
+assert.strictEqual(lib.ownPrompt('<agent-message from="a93e25b9c195d5770">\n[Subagent hand-back] The text below is the final report of a subagent this session delegated to.'), false);
+assert.strictEqual(lib.ownPrompt('<div> does not close in index.html, fix it'), true);   // the owner may start with a tag too
+assert.strictEqual(lib.ownPrompt('<pasted_content id="1">\nlog lines\n</pasted_content id="1">\nwhat went wrong here?'), true);
+assert.strictEqual(lib.ownPrompt(undefined), true);
+
 // auto-merge: what the review is given, and what is made of its answer
 const aDraft = { number: 12, title: 'Add --json', body: 'Closes #5', isDraft: true };
 const reviewText = lib.reviewPrompt({ task: 'Implement #5', issue: { number: 5, title: 'JSON output', body: 'Wanted: --json' }, pr: aDraft, asked: ['Keep the alias.'], said: 'PR #12 is ready for merge.' });
