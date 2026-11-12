@@ -99,6 +99,11 @@ function externalSessions() {
   return sessions.filter(s => !mine.has(s.pid) && s.cwd && (lib.isInside(repo.path, s.cwd) || repo.worktrees.some(w => lib.isInside(w.path, s.cwd))));
 }
 
+// Where a session's issue is on GitHub. A session sent after an issue keeps the address GitHub gave for it.
+// One on record from 0.6.0 or older has the number alone: its address is made from the open folder's
+// repository, and only while that is the folder the session belongs to.
+const issueLink = x => (!x.issue ? null : x.issueUrl || (repo && repo.github && lib.samePath(repo.path, x.root) ? lib.issueUrl(repo.github, x.issue) : null));
+
 function snapshot() {
   const worktrees = repo ? repo.worktrees : [];
   return {
@@ -111,13 +116,13 @@ function snapshot() {
     // Not the ones whose conversation is live again somewhere (resumed by hand in a terminal, say).
     resumable: interrupted.filter(r => !sessions.some(s => s.sessionId && s.sessionId === r.sessionId)).map(r => ({
       id: r.id, label: r.worktree || path.basename(r.root), worktree: r.worktree, dir: r.worktree ? path.join(r.root, '.claude', 'worktrees', r.worktree) : r.root,
-      issue: r.issue, model: r.model, effort: r.effort, level: r.level, autonomy: lib.autonomyOf(r), group: r.group || null, savedAt: r.savedAt,
+      issue: r.issue, issueUrl: issueLink(r), model: r.model, effort: r.effort, level: r.level, autonomy: lib.autonomyOf(r), group: r.group || null, savedAt: r.savedAt,
       conversation: !!r.transcript && fs.existsSync(r.transcript),
     })),
     instances: [...instances.values()].map(i => {
       const s = sessionOf(i) || {};
       return {
-        id: i.id, kind: i.kind, issue: i.issue, model: i.model, effort: i.effort, level: i.level, autonomy: i.autonomy, untold: untold(i),
+        id: i.id, kind: i.kind, issue: i.issue, issueUrl: issueLink(i), model: i.model, effort: i.effort, level: i.level, autonomy: i.autonomy, untold: untold(i),
         startedAt: i.startedAt, exited: i.exited, exitCode: i.exitCode, cwd: i.cwd, ...lib.labelFor(i.root, i.cwd, worktrees),
         status: i.status, session: { status: s.status || s.state, waitingFor: s.waitingFor, name: s.name },
         pending: i.pending.map(p => p.view), pr: i.pr, merge: i.merge, procs: i.exited ? undefined : procUsage.get(i.pid),
@@ -142,7 +147,8 @@ function userStatusLine() { return readJson(path.join(configDir(), 'settings.jso
 // audit: the input requests on record for a session that is being resumed.
 // autonomy: who merges its pull request (see lib.AUTONOMY). autoMerge: what an older record has in its place.
 // mayMerge: the session has been told that it may merge its pull request itself (see mergeNote).
-function spawnInstance({ cwd, worktree, resume, transcript, model, effort, prompt, level = 'manual', autonomy, autoMerge, mayMerge = false, kind = 'instance', issue = null, pooled = false, weight = 'normal', group = null, audit = [] }) {
+// issue, issueUrl: the number of the issue it was sent after, and that issue's page on GitHub.
+function spawnInstance({ cwd, worktree, resume, transcript, model, effort, prompt, level = 'manual', autonomy, autoMerge, mayMerge = false, kind = 'instance', issue = null, issueUrl = null, pooled = false, weight = 'normal', group = null, audit = [] }) {
   if (!claudeBin) throw new Error('Claude Code CLI (claude) was not found on PATH.');
   const root = cwd || repo.path;
   const id = crypto.randomBytes(4).toString('hex');
@@ -162,7 +168,7 @@ function spawnInstance({ cwd, worktree, resume, transcript, model, effort, promp
   // On Windows this puts the new process into its job before it can start anything of its own.
   const limited = cpu.attach(id, proc.pid, limits);
   const inst = {
-    id, kind, issue, pooled, model, effort, level, autonomy: lib.autonomyOf({ autonomy, autoMerge }), mayMerge: !!mayMerge,
+    id, kind, issue, issueUrl, pooled, model, effort, level, autonomy: lib.autonomyOf({ autonomy, autoMerge }), mayMerge: !!mayMerge,
     root, wt, prompt, proc, env, dir, statusFile, pid: proc.pid, startedAt: Date.now(),
     cwd: wt || root, sessionId: resume || null, transcript: transcript || null, group: lib.groupName(group),
     // A new worktree with a first prompt: until that prompt has gone in, the session is still running its
@@ -253,7 +259,7 @@ async function tick() {
 // on top of that: which instances were open, where, and with which settings. That is written out every ten
 // seconds, and whenever an instance comes or goes.
 const sessionRecord = i => ({
-  id: i.id, root: i.root, worktree: i.wt && path.basename(i.wt), kind: i.kind, issue: i.issue, pooled: i.pooled, model: i.model, effort: i.effort,
+  id: i.id, root: i.root, worktree: i.wt && path.basename(i.wt), kind: i.kind, issue: i.issue, issueUrl: i.issueUrl, pooled: i.pooled, model: i.model, effort: i.effort,
   level: i.level, autonomy: i.autonomy, mayMerge: i.mayMerge, weight: i.weight, group: i.group, prompt: i.prompt, sessionId: i.sessionId, transcript: i.transcript, savedAt: Date.now(),
   audit: i.audit,
 });
@@ -660,7 +666,7 @@ async function checkClaude() {
   } catch { /* offline: the next check may get through */ }
   push();
 }
-setInterval(checkClaude, 6 * 3600 * 1000);
+setInterval(checkClaude, 3600 * 1000);   // every hour: `claude --version`, and one line of text from that address
 
 // ---------- the app itself: a newer release ----------
 
@@ -684,7 +690,10 @@ autoUpdater.on('update-downloaded', () => { installing = true; autoUpdater.quitA
 // A check that fails (offline, no release yet) says nothing; a download the owner asked for says why it failed.
 autoUpdater.on('error', e => { if (selfUpdate.state) { selfUpdate.state = `failed: ${String(e && e.message).split('\n')[0]}`; push(); } });
 const checkSelf = () => { if (app.isPackaged || process.env.CLAUDINHO_UPDATES) autoUpdater.checkForUpdates().catch(() => {}); };
-setInterval(checkSelf, 6 * 3600 * 1000);
+// Every hour. A check is three small requests to github.com's pages (the feed of releases, the newest release,
+// its latest*.yml). electron-updater keeps away from GitHub's API there, so the API's hourly limit for callers
+// without a login does not come into it.
+setInterval(checkSelf, 3600 * 1000);
 
 // ---------- issue dispatch pool ----------
 
@@ -706,7 +715,7 @@ async function pump() {
       queue.splice(queue.indexOf(job), 1);
       spawnInstance({
         cwd: job.root, worktree: lib.worktreeName(job.number, job.title), model: job.model, effort: job.effort, level: job.level,
-        autonomy: job.autonomy, mayMerge: job.autonomy === 'semi', issue: job.number, pooled: job.pooled, group: job.group,
+        autonomy: job.autonomy, mayMerge: job.autonomy === 'semi', issue: job.number, issueUrl: job.url, pooled: job.pooled, group: job.group,
         prompt: lib.issuePrompt(job.template, job, job.autonomy, saved.settings.mergeMethod),
       });
     }
@@ -897,7 +906,7 @@ const rpc = {
       if (!data.pageInfo.hasNextPage) break;
       cursor = data.pageInfo.endCursor;
     }
-    return out.sort(lib.byNumber);
+    return out.sort((a, b) => lib.byNumber(b, a));   // the Issues list: highest number first
   },
   dispatch({ issues, model, effort, level, parallel, autonomy, template, group }) {
     if (!claudeBin) throw new Error('Claude Code CLI (claude) was not found on PATH.');

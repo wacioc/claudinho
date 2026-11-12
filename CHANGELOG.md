@@ -4,6 +4,25 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.6.1 (2026-11-13)
+
+**Instances**
+
+- A session that was sent after an issue has a button with the issue's number on its card, and a session whose
+  branch has a pull request has one for the pull request, with its state. Each opens its page on GitHub, from
+  the wall and from the detail view. They take the place of the two chips that said the same without a link.
+- An interrupted session that was sent after an issue has the button too.
+
+**Issues**
+
+- The Issues list is in number order with the highest first. Before, the lowest came first. Several issues
+  sent to Claude Code together still start with the lowest number.
+
+**Versions**
+
+- The app looks for a newer release of itself, and for a newer Claude Code, every hour. Before, it looked
+  every six hours.
+
 ## 0.6.0 (2026-11-12)
 
 **Instances**

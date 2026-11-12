@@ -96,6 +96,8 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
 - The detail view's list of sessions is tested live with three sessions, two of them in a group and one
   waiting for an answer. For a request the app holds on the card, that session needs the "timed" input level:
   at "manual" the session asks in its own terminal and the app holds nothing.
+- What opens a browser is tested without one: in the window, put a function of your own in the place of
+  `call` that writes down what `openUrl` is given and passes everything else on.
 - A test copy's window is usually covered by other windows. It then gets no animation frames and its timers
   are held back: a check waits on its own side, never inside the page, and times what it measures in one go.
 - When a session is done is tested live too: tell a session to start something and end its turn, and watch

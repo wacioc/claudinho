@@ -97,9 +97,10 @@ const ownPrompt = text => !/^\s*<(task-notification|agent-message)[\s>]/.test(te
 
 // ---------- GitHub issues ----------
 
-// The order of the Issues and the Pull requests list: by number, lowest first. GitHub orders issues by a date
-// or by their comments, not by number, so both lists are sorted once they are here. They are asked for newest
-// first: where a repository has more than the app fetches, the list then misses its oldest and none in between.
+// The order of the Issues and the Pull requests list: by number. The pull requests come lowest first, the
+// issues highest first (see `issues` in main.js). GitHub orders issues by a date or by their comments, not by
+// number, so both lists are sorted once they are here. They are asked for newest first: where a repository has
+// more than the app fetches, the list then misses its oldest and none in between.
 const byNumber = (a, b) => a.number - b.number;
 
 function issuesQuery(state) {
@@ -351,6 +352,9 @@ async function waitForChecks(look, { stale = () => false, every = 15000, limit =
 function groupName(text) {
   return String(text == null ? '' : text).replace(/\s+/g, ' ').trim().slice(0, 40).trim() || null;
 }
+
+// An issue's page on GitHub, for a session on record with the issue's number alone (see `issueLink` in main.js).
+const issueUrl = (github, number) => `https://github.com/${github.owner}/${github.name}/issues/${number}`;
 
 function parseGitHub(remoteUrl) {
   // ponytail: github.com only; loosen the host match when GitHub Enterprise matters.
@@ -775,7 +779,7 @@ function homePath(home, rel) {
 
 module.exports = {
   worktreeName, openBlockers, defaultTemplate, renderTemplate, AUTONOMY, autonomyOf, mergeInstruction, mergeNote, toldToMerge, issuePrompt, prAction, backgroundWork, ownPrompt,
-  byNumber, issuesQuery, mapIssue, parseGitHub,
+  byNumber, issuesQuery, mapIssue, issueUrl, parseGitHub,
   PR_FIELDS, checksOf, mapPr, parsePatch, mapDiffFile, mapDiff, colouredLines, colourHunks, groupName,
   REVIEW_SYSTEM, REVIEW_SCHEMA, reviewPrompt, reviewVerdict, waitForChecks,
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,

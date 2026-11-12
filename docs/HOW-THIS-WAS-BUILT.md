@@ -1146,6 +1146,50 @@ prompt (section 13). The first attempt of the `installers` run then failed in th
 install and the update had passed there. GitHub's status page reported nothing. `gh run rerun --failed` ran
 that job and the release job again, and the release came out with its 14 files.
 
+### After the release of 0.6.0: hourly checks, the issues highest first, buttons to GitHub
+
+0.6.0 came out on the first attempt, with the new step of `pack-check.js` passing on all three systems. Then:
+
+> Make the claudinho update checker more often, like every 1 hour.
+
+There are two checks that ran every six hours: for the app's own releases and for Claude Code's version. The
+request names the first, and only that one was changed. An hourly look costs GitHub little: the installed
+electron-updater (6.8.11, `GitHubProvider.js`) asks github.com's pages for the feed of releases, for the newest
+release and for its `latest*.yml`, and says in a comment that it keeps away from GitHub's API because of that
+API's limit. Checked with a copy run from source and pointed at a stand-in feed: it asks at its start and shows
+the button. The hour until the next look was not waited for.
+
+The day after, four things in one message, to go out together as 0.6.1:
+
+> Update the issues list to be ordered descending by the issue #
+> In a claude code session and in the global viewer, if a claude code session is linked to an issue display a
+> button that links to the issue on github (#343 for example). And same for PR. If the claude code session has
+> an opened PR, display a button that links to the PR.
+> Make claude code update check hourly as well.
+> When you're done, deploy these changes as 0.6.1
+
+| Decision | Why |
+|---|---|
+| The Issues list is highest number first. The pull requests stay lowest first. | The request names the issues list. It takes back the direction chosen in section 13, for that list only. |
+| Issues sent together still start with the lowest number, and their group is named in that order. | A batch began with its lowest number because the list did, and for a reason of its own: a plan is numbered in the order it is to be done. The request is about the list. |
+| The two buttons are on the card, in the row of its chips, where "issue #5" and "PR #21 merged" stood as text. The card is the same on the wall and in the detail view, so both have them. | "In a claude code session and in the global viewer". The two chips that said the same without a link are gone. |
+| The pull request's button is there for any pull request of the branch, open, merged or closed, with that state on it. | The chip was, and a merged pull request is still worth a look. "Opened" was read as "has been opened". |
+| The buttons are kept out of the part of the row that is built anew with every state. | That happens every second or two, and a button that is replaced between the press and the release of the mouse does not get the click. |
+| A session keeps the address GitHub gave for its issue. One on record with the number alone gets the address of the open folder's repository, and no button where it belongs to another folder. | The window shows every session, also those of a folder that was open before. Making the address from the open folder's repository alone could lead to another repository's issue. |
+| The Claude Code check is hourly too. | Asked for. It is one run of `claude --version` and one line of text from the address the installer reads. |
+
+Checked read-only, in the folder of the public repository: 1000 open issues, each with a lower number than the
+one before and the same 1000 GitHub lists as its newest; three issues picked out of order go to the dialog
+lowest first, with the group named that way; the pull requests as before; and at its start the app asks the
+stand-in for Claude Code's releases. Checked live in the clone of the test repository, with the call that
+opens a browser caught in the window and written down: a session sent after issue #1 has the button "#1" on
+the wall and in the detail view, and it opens that issue; a session in the clone's checkout gets "PR #21" once
+its Diff tab has read the pull request, and "PR #21 closed" after it was closed; a click on the wall does not
+open the session; seven seconds of states later both buttons are still the same elements; the record on the
+disk holds the issue's address. Of three made-up interrupted sessions, the one with the number alone and of
+the open folder has a button to that folder's repository, the one of another folder has plain text, and the
+one with its own address keeps it.
+
 ## 15. Still open
 
 - The Diff tab has GitHub's default view and no other, and shows no diff where GitHub's list of files gives

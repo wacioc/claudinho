@@ -101,6 +101,7 @@ assert.strictEqual(issue.blocked, true);
 assert.deepStrictEqual(issue.blockedBy.map(b => [b.number, b.done]), [[4, true], [5, false]]);
 assert.strictEqual(lib.mapIssue({ ...issue, labels: { nodes: [{ name: 'Blocked' }] }, assignees: { nodes: [] }, blockedBy: { nodes: [] } }).blocked, true);
 assert.ok(lib.issuesQuery('OPEN').includes('states: [OPEN]') && !lib.issuesQuery('ALL').includes('states'));
+assert.strictEqual(lib.issueUrl(lib.parseGitHub('git@github.com:acme/widgets.git'), 343), 'https://github.com/acme/widgets/issues/343');   // a session's issue, from the folder's remote
 assert.ok(lib.issuesQuery('OPEN').includes('orderBy: {field: CREATED_AT, direction: DESC}'));   // newest first: a list cut short misses its oldest
 // pull requests: a draft with one failing and one running check; a ready one with nothing but successes
 const pr = lib.mapPr({

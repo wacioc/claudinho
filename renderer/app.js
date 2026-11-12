@@ -320,7 +320,11 @@ function createCard(inst) {
   term.loadAddon(fit);
   const host = h('div.term-host'), wrap = h('div.term-wrap', host);
   const p = {
-    title: h('span.title'), group: h('span.group'), badge: h('span.badge'), meta: h('div.meta'), up: h('span.chip'), pending: h('div.pending'),
+    title: h('span.title'), group: h('span.group'), badge: h('span.badge'), chips: h('span.chips-in'), up: h('span.chip'), pending: h('div.pending'),
+    // The session's issue and its pull request, each a button that opens it on GitHub. They stay in place while
+    // the chips beside them are built anew with every state: a button that is replaced under a click loses it.
+    issueBtn: h('button', { hidden: true, onclick: e => { e.stopPropagation(); call('openUrl', t.inst.issueUrl); } }),
+    prLink: h('button', { hidden: true, onclick: e => { e.stopPropagation(); call('openUrl', t.inst.pr.url); } }),
     done: h('span.tick', { title: 'Done: its last turn has ended, nothing it started is still running, and nothing has been asked of it since.' }, '✓'),
     prBtn: h('button.pr-act', { hidden: true, onclick: e => { e.stopPropagation(); prAct(inst.id); } }),
     info: h('dl'), env: h('div.env'), procs: h('div.procs'), audit: h('div.audit'),
@@ -335,6 +339,7 @@ function createCard(inst) {
     weight: h('select', { title: 'Counts when "Share the CPU between instances by weight" is on in Settings.', onchange: e => call('setInstance', inst.id, { weight: e.target.value }) },
       [['low', 'Low: half a share'], ['normal', 'Normal'], ['high', 'High: a double share']].map(([v, text]) => h('option', { value: v }, text))),
   };
+  p.meta = h('div.meta', p.issueBtn, p.prLink, p.chips);
   const card = h('article.card', { onclick: e => { if (detailId !== inst.id && !e.target.closest('button, .pending-box')) openDetail(inst.id); } },
     h('div.head', p.done, p.title, p.group, p.badge, h('span.spacer'), p.prBtn,
       h('button.back', { onclick: e => { e.stopPropagation(); closeDetail(); } }, '← All instances'),
@@ -377,7 +382,7 @@ function infoRows(i) {
     ['Lines', (s.added || s.removed) && `+${s.added || 0} −${s.removed || 0}`],
     ['Started', new Date(i.startedAt).toLocaleTimeString()],
     ['Session', i.session.name || s.sessionId],
-    ['Issue', i.issue && `#${i.issue}`],
+    ['Issue', i.issue && (i.issueUrl ? h('a', { onclick: () => call('openUrl', i.issueUrl) }, `#${i.issue}`) : `#${i.issue}`)],
     ['PR', i.pr && h('a', { onclick: () => call('openUrl', i.pr.url) }, `#${i.pr.number}${i.merge ? ` (${i.merge})` : ''}`)],
   ];
 }
@@ -433,14 +438,21 @@ function updateCard(t, inst, order) {
     t.p.prBtn.textContent = pr.draft ? 'Mark ready for review' : 'Merge PR';
     t.p.prBtn.title = pr.draft ? `Pull request #${pr.number} is a draft: mark it as ready for review` : `Merge pull request #${pr.number} (${state.settings.mergeMethod})`;
   }
-  t.p.meta.replaceChildren(...[
+  t.p.issueBtn.hidden = !inst.issue;
+  t.p.issueBtn.textContent = `#${inst.issue}`;
+  t.p.issueBtn.disabled = !inst.issueUrl;   // on record without its address, and not of the folder that is open
+  t.p.issueBtn.title = inst.issueUrl ? `Issue #${inst.issue}: open it on GitHub` : `Issue #${inst.issue}`;
+  t.p.prLink.hidden = !inst.pr;
+  if (inst.pr) {
+    // With the merge state in a word or two ("merged", "not merged", "follow-up 1 of 3"). What follows its colon
+    // is the reason: the tooltip here, and in full in the detail view's PR row.
+    t.p.prLink.textContent = `PR #${inst.pr.number}${inst.merge ? ` ${inst.merge.split(':')[0]}` : inst.pr.state === 'CLOSED' ? ' closed' : inst.pr.draft ? ' draft' : ''}`;
+    t.p.prLink.title = `${inst.merge ? `${inst.merge}\n` : ''}Pull request #${inst.pr.number}: open it on GitHub`;
+  }
+  t.p.chips.replaceChildren(...[
     [s.model || inst.model || 'default model', s.effort || inst.effort].filter(Boolean).join(' · '),
     s.ctxPct != null ? `ctx ${Math.round(s.ctxPct)}% of ${fmtTokens(s.ctxSize)}` : 'ctx –',
     s.cost != null ? `$${s.cost.toFixed(2)}` : '$ –',
-    inst.issue && `issue #${inst.issue}`,
-    // The merge state in a word or two ("merged", "not merged", "follow-up 1 of 3"). What follows its colon is
-    // the reason: the tooltip here, and in full in the detail view's PR row.
-    inst.pr && h('span.chip', { title: inst.merge || '' }, `PR #${inst.pr.number}${inst.merge ? ` ${inst.merge.split(':')[0]}` : inst.pr.state === 'CLOSED' ? ' closed' : inst.pr.draft ? ' draft' : ''}`),
     // Who merges its pull request, unless that is you. A session that has not heard of a change yet says so.
     (inst.autonomy !== 'manual' || inst.untold) && h('span', { className: inst.untold ? 'chip warn' : 'chip',
       title: inst.untold ? 'The session has not been told yet. It is, with its next prompt or tool call.' : '' }, `${MERGE_CHIP[inst.autonomy]}${inst.untold ? ' · not told yet' : ''}`),
@@ -677,9 +689,10 @@ function renderResumable() {
         h('button.primary', { onclick: () => call('resume', r.id) }, 'Resume'),
         h('button', { title: 'Take it off this list. Its conversation stays available to `claude --resume`.', onclick: () => call('forget', r.id) }, 'Forget')),
       h('div.meta', [
-        [r.model || 'default model', r.effort].filter(Boolean).join(' · '), r.issue && `issue #${r.issue}`, r.autonomy !== 'manual' && MERGE_CHIP[r.autonomy],
+        r.issue && (r.issueUrl ? h('button', { title: `Issue #${r.issue}: open it on GitHub`, onclick: () => call('openUrl', r.issueUrl) }, `#${r.issue}`) : `issue #${r.issue}`),
+        [r.model || 'default model', r.effort].filter(Boolean).join(' · '), r.autonomy !== 'manual' && MERGE_CHIP[r.autonomy],
         r.level !== 'manual' && `input: ${r.level}`, `open until ${new Date(r.savedAt).toLocaleString()}`,
-      ].filter(Boolean).map(c => h('span.chip', c))),
+      ].filter(Boolean).map(c => (typeof c === 'string' ? h('span.chip', c) : c))),
       h('div.note', r.conversation ? 'Was open when the app last stopped. Resume continues its conversation where it left off.'
         : 'Was open when the app last stopped, before Claude Code had saved a conversation for it. Resume starts it again.'));
     stripe(card, r.group);
@@ -855,6 +868,8 @@ const PROMPT_HINT = 'A Jinja2 template: {{ issue_id }}, {{ issue_title }} and {{
 // What a batch is called unless another name is typed: its issues, or the first three and how many more.
 const batchName = picked => { const n = picked.map(i => `#${i.number}`); return (n.length > 4 ? [...n.slice(0, 3), `+${n.length - 3}`] : n).join(' '); };
 async function tackle(picked) {
+  // Whatever the order of the list: issues sent together start with the lowest number, the way a plan is numbered.
+  picked = picked.slice().sort((a, b) => a.number - b.number);
   const multi = picked.length > 1;
   const v = await formDialog(multi ? `Tackle ${picked.length} issues` : `Tackle #${picked[0].number}`, [
     { type: 'static', label: multi ? 'Issues' : 'Issue', value: picked.map(i => {

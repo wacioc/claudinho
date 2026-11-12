@@ -55,9 +55,9 @@ The first `npm install` downloads the Electron binary.
 
 | Tab | What it shows |
 |---|---|
-| **Instances** | Every Claude Code instance as a live terminal, titled with its worktree (or the folder name), with model, context window, API-equivalent cost, uptime, and the CPU and memory used by it and everything it started. Click one for the full terminal, a per-process breakdown, its environment variables, its autonomy and the input level, on a second tab the diff of its pull request, and beside it the list of all sessions to go from one to the next. Sessions that belong to a group carry its name and colour, and one whose turn has ended a green outline and checkmark. Sessions started outside the app appear as status-only cards, which a filter can hide, and sessions that were open when the app last stopped appear as cards with a Resume button. |
+| **Instances** | Every Claude Code instance as a live terminal, titled with its worktree (or the folder name), with model, context window, API-equivalent cost, uptime, and the CPU and memory used by it and everything it started. Click one for the full terminal, a per-process breakdown, its environment variables, its autonomy and the input level, on a second tab the diff of its pull request, and beside it the list of all sessions to go from one to the next. A session that was sent after an issue, and one whose branch has a pull request, carry a button for each that opens it on GitHub. Sessions that belong to a group carry its name and colour, and one whose turn has ended a green outline and checkmark. Sessions started outside the app appear as status-only cards, which a filter can hide, and sessions that were open when the app last stopped appear as cards with a Resume button. |
 | **Worktrees** | Every worktree under `.claude/worktrees`: its branch, whether it holds uncommitted changes or commits that exist nowhere else, its last commit, and the session at work in it. Each can be removed from here. |
-| **Issues** | Open issues by default, in number order with the lowest first, with the issues blocking each one. Select one or many, right-click, "Tackle with Claude Code". |
+| **Issues** | Open issues by default, in number order with the highest first, with the issues blocking each one. Select one or many, right-click, "Tackle with Claude Code". |
 | **Pull requests** | The repository's open pull requests in number order, drafts and those ready for review: branch, checks, review state, and the session at work on each. A click on a title opens it on GitHub. |
 | **.claude** | Everything under `.claude` and `.github` of the open folder, and your own configuration from the home folder (`~/.claude`): `CLAUDE.md`, `settings.json`, agents, skills, commands, rules. All of it is editable inline. Saving a file of the open folder offers to commit and push. "New skill" and "New agent" generate one from a prompt in a terminal, where Claude can ask follow-up questions. |
 
@@ -106,13 +106,13 @@ still there after a restart.
 
 ### Claude Code's own version
 
-The header shows which version of Claude Code is installed. When a newer one has been released, a button with
-that version appears beside it, and a notification with it. Pressing either runs `claude update`. Sessions that
+The header shows which version of Claude Code is installed. The app looks for a newer one at its start and
+every hour. When one has been released, a button with that version appears beside it, and a notification with it. Pressing either runs `claude update`. Sessions that
 are running keep the version they started with; what is started afterwards gets the new one.
 
 ### The app's own version
 
-At its start and every six hours the installed app looks at the
+At its start and every hour the installed app looks at the
 [releases](https://github.com/wacioc/claudinho/releases) of its repository. When a newer one has been
 published, a button with that version appears beside the app's own, and a notification with it. Nothing is
 downloaded before you press one of them: installing restarts the app, and that stops every session running in
@@ -220,7 +220,7 @@ worktree is created only when the session in the previous one has finished its `
 then that card says "starting", and the queued issues say which one they are waiting for. How many agents then
 work at once is still the number you choose.
 
-Several issues are started in the order of the list, lowest number first. For them you also choose how many
+Several issues are started lowest number first, whatever the order of the list. For them you also choose how many
 agents run at once (max 4) and the group's name (see [Groups](#groups)). For one issue or several you choose
 the autonomy (next section).
 
@@ -352,13 +352,14 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   the prompt or the tool result, and shows nothing of it in the terminal.
 - The app's own update is [electron-updater](https://www.electron.build/v26/docs/features/auto-update)
   reading the repository's GitHub releases: the `latest*.yml` file of a release names its installer and that
-  file's checksum, which is verified after the download.
+  file's checksum, which is verified after the download. The hourly look is three small requests to
+  github.com's pages (the feed of releases, the newest release, its `latest*.yml`), not to GitHub's API.
 - An input request answered in the terminal is reported by no hook. What was picked is read from what the
   tool call did next, through `PostToolUse` and `PostToolUseFailure`: the result of a question holds the
   answers, and a tool that ran had been approved. One that never ran before its turn ended was refused.
 - The newest Claude Code version is read from the address the official installer reads it from,
   `https://downloads.claude.ai/claude-code-releases/latest` (or `stable`, if that is your release channel), at
-  the start and every six hours. Beside GitHub, for the app's own releases, it is the one address the app
+  the start and every hour. Beside GitHub, for the app's own releases, it is the one address the app
   itself contacts.
 - The tray icon's picture is drawn by the window, with the number on it, and handed to the main process.
 - Session status comes from `claude agents --json`; the account from `claude auth status`.
@@ -368,7 +369,8 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
 - CPU limits live in `cpu.js`: one mechanism per operating system behind the same calls, and one sharing policy
   (`shareCpu` in `lib.js`) for the systems whose kernel cannot share by weight.
 - Issues come from `gh api graphql`; blockers are GitHub's native issue dependencies. Pull requests come from
-  `gh pr list`. Both are fetched newest first, and GitHub cannot order issues by number, so the app sorts them.
+  `gh pr list`. Both are fetched newest first, and GitHub cannot order issues by number, so the app sorts
+  them: the issues highest number first, the pull requests lowest first.
 - The Diff tab reads GitHub's list of a pull request's files (`gh api repos/{owner}/{repo}/pulls/<n>/files`),
   a hundred a page. Each file comes with its status, its counts and its hunks, cut the way GitHub's page cuts
   them. `gh pr diff` prints the same lines with some hunks cut differently, and refuses a pull request of more
@@ -454,7 +456,11 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   merged or closed on GitHub since then still has its button until the next turn, and a session resumed after
   a restart has none until then.
 - The Issues tab lists the newest 1000 issues and the Pull requests tab the newest 200 open pull requests. In
-  a repository with more, the lists start at a higher number than its first.
+  a repository with more, the oldest are missing from the lists.
+- A session's issue button knows where to go from the issue it was sent after. A session on record from 0.6.0
+  or older has only the issue's number: its button leads to the open folder's repository, and where the
+  session belongs to another folder there is no button, only the number. A pull request button shows what the
+  app knew of the pull request when it last read it: at the end of a turn, or when the Diff tab was opened.
 - The Diff tab has GitHub's default view and no other: one column, no side-by-side view, no marking of the
   changed words inside a line, no unfolding of the lines between two hunks, no hiding of whitespace changes.
   Its colours are worked out hunk by hunk, where GitHub colours whole files: a hunk that starts inside a
