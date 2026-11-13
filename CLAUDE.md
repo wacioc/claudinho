@@ -1,7 +1,7 @@
 # claudinho
 
 A desktop monitor (Electron) for the Claude Code instances running in a repo: live terminals in groups, their
-worktrees, GitHub issues with dispatch into worktrees, the open pull requests, the diff of a session's pull
+worktrees or Docker containers, GitHub issues with dispatch into either, the open pull requests, the diff of a session's pull
 request, merging that pull request once the session says it is ready, notifications with a record of every
 input request, an editor for the `.claude` setup, per-instance CPU limits, resuming every session after the
 app stops, and updating itself from its GitHub releases.
@@ -9,7 +9,7 @@ app stops, and updating itself from its GitHub releases.
 - [README.md](README.md): what it does, how to run it, and its limits.
 - [docs/HOW-THIS-WAS-BUILT.md](docs/HOW-THIS-WAS-BUILT.md): the brief, the decisions and their reasons, the
   measurements, and what is still unverified. Read it before changing the CPU limits, the hooks, worktree
-  removal or the saved session state.
+  removal, the saved session state or the containers.
 - [CHANGELOG.md](CHANGELOG.md): what each version holds.
 
 ## Commands
@@ -19,6 +19,7 @@ npm install
 npm start                      # reopens the last folder; `npm start -- <folder>` opens another
 npm test                       # asserts for lib.js; prints "ok"
 npm run check:cpu              # real-load check of the CPU limits: every core busy for three to four minutes
+npm run check:box              # makes one container the way the app does and checks it: needs Docker Desktop, starts no session
 npm run dist                   # the installer of the system this runs on, into dist/
 npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it; which file to pass is in pack-check.js
 ```
@@ -34,6 +35,9 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
 | `test.js` | Plain asserts for `lib.js`. No test framework. |
 | `cpu.js` | CPU limits: one mechanism per operating system behind the same calls. No Electron. |
 | `cpu-check.js` | Runs the machine's real mechanism under real load and checks the numbers. |
+| `containers.js` | Sessions in Docker containers: the image, making, filling, stopping and removing a container, and what is asked of one. No Electron. Its top says what a container is and which volumes outlive it. |
+| `container/Dockerfile` | The image those containers are made from. |
+| `box-check.js` | Makes one real container the way the app does and checks what the app relies on there. No Claude Code session. |
 | `pack-check.js` | Starts a packaged copy of the app and checks what packaging can break. With `--update` it has an installed copy replace itself with a second build, which is for hosted machines only. No Electron. |
 | `package.json`, under `build` | The packaging settings for electron-builder. JSON takes no comments, so their reasons are in section 8 of the build history. |
 | `.github/workflows/installers.yml` | On a version tag: builds the installer of each system, runs `pack-check.js` on it, publishes the release. |
@@ -58,6 +62,19 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
 - Electron's own flags go after the `.`: `electron . --inspect=9229 <folder>`. Before it, the app takes `.` for
   the folder to open and works on this checkout. Before a test starts an instance, check which folder is open.
 - Worktree removal deletes folders and branches. Test it in a scratch repository, never in this one.
+- Sessions in containers are tested live in the clone of the test repository too. Start the test copy with
+  `CLAUDINHO_BOX=<a name>`: its containers are then called `<name>-slot-N`, and it never takes, stops or
+  removes a container of the copy in use. The image and the volumes with the two logins are shared with that
+  copy, so a test session is logged in. Never remove the volumes `claudinho-claude` and `claudinho-gh`: they
+  hold the owner's logins for containers.
+- A full house is made with stand-ins: `docker create --name <name>-slot-N <the image> true` takes a number
+  without starting anything. An issue sent off then waits for a free container, and one started by hand says
+  that all are taken.
+- A session is "in a container" for the code where `inst.box` is set. Its `cwd` is a path inside the container.
+  On Windows such a path resolves against the current drive, and can then be the very folder that is open:
+  never compare it with a path of this computer, and run `gh` for it in `hostDir(inst)`.
+- The terminal on this computer ending does not end Claude Code inside a container. After a test copy was
+  stopped hard, its containers run on: resume the sessions and close them, or remove the containers.
 - What closing an instance leaves running is tested with a stand-in: a copy of `node.exe` named
   `Docker Desktop.exe`, started detached from the instance's terminal beside an ordinary detached program.
   After the instance is closed with its worktree, the stand-in must still run and the other must not. Never
@@ -148,7 +165,9 @@ an update, and not notarised. A release whose update fails is not published.
 
 - A person has only used the app on Windows. On macOS and Linux the packaged app has been started on hosted
   machines by `pack-check.js`, with a stand-in for Claude Code, and the CPU limits were checked.
+- Sessions in containers have run on Windows with Docker Desktop only, and from source: `pack-check.js` does
+  not start one. On Linux with Docker Engine alone they cannot work yet (see the top of `containers.js`).
 - The Windows installer is not signed, by the owner's decision (section 11 of the build history), and the
   installers carry Electron's default icon. A packaged build must keep Electron's `RunAsNode` fuse on (see
   `cpu.js`); `pack-check.js` fails when it is off.
-- The open points are listed in the README under "Limits" and in section 15 of the build history.
+- The open points are listed in the README under "Limits" and in section 16 of the build history.

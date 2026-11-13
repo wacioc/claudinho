@@ -4,6 +4,32 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.7.0 (2026-11-13)
+
+**Two ways of working**
+
+- Sessions can work in Docker containers instead of worktrees: each in a container of its own, with a Docker
+  of its own inside, so that every session can run the same services on the same ports. The first start asks
+  which way to begin with, and a list in the header changes between the two at any time. Each way has its own
+  sessions, and the window shows those of the one that is chosen.
+- With Docker chosen, **+ New instance** and every issue sent to Claude Code get a new container: a clone of
+  the folder on a new branch, held to 2 processors and 4 GB. There may be one container for every two of
+  Docker's processors, less one. Cards, terminals and the detail view are what they are for worktrees.
+- A **Containers** tab stands where the Worktrees tab was. Closing an instance removes its container when
+  nothing in it would be lost. One that holds uncommitted changes, or commits that are not pushed, is stopped
+  and kept, and can be given a new session or removed from that tab.
+- A setting names the ports of a container that can be reached from this computer. An instance's detail view
+  lists the address of each.
+- This way needs Docker Desktop, and has been tried on Windows. Worktrees work as before and need nothing of
+  it.
+
+**Instances**
+
+- A session's pull request button no longer waits for the end of a turn. The app looks for the pull request
+  when a session is resumed, and about every half minute while a session that has none yet is at work.
+  Before, a session resumed after a restart of the app had no button until its next turn ended, and one that
+  opened its pull request early in a long turn had none until the end of that turn.
+
 ## 0.6.4 (2026-11-13)
 
 **Instances**

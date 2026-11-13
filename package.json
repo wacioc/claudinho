@@ -9,6 +9,7 @@
     "start": "electron .",
     "test": "node test.js",
     "check:cpu": "node cpu-check.js",
+    "check:box": "node box-check.js",
     "predist": "node -e \"for (const a of ['arm64', 'x64']) try { fs.chmodSync('node_modules/node-pty/prebuilds/darwin-' + a + '/spawn-helper', 0o755) } catch {}\"",
     "dist": "electron-builder --publish never",
     "check:pack": "node pack-check.js"
@@ -21,6 +22,8 @@
       "preload.js",
       "lib.js",
       "cpu.js",
+      "containers.js",
+      "container/**",
       "renderer/**",
       "!**/*.pdb"
     ],

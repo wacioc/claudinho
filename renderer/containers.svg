@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Containers: a box of its own for every session, each with the same ports. Drawn for claudinho, in its
+       colours. It is not Docker's logo, which Docker's trademark guidelines keep for Docker's own use. -->
+  <path d="M14 206H226" stroke="#3a4452" stroke-width="3"/>
+  <g stroke="#59c2ff" stroke-width="4" fill="#0b0e14">
+    <rect x="22" y="142" width="92" height="56" rx="6"/>
+    <rect x="126" y="142" width="92" height="56" rx="6"/>
+    <rect x="74" y="78" width="92" height="56" rx="6"/>
+  </g>
+  <g stroke="#59c2ff" stroke-width="3" opacity=".45">
+    <path d="M38 154V186M50 154V186M62 154V186M74 154V186M86 154V186"/>
+    <path d="M142 154V186M154 154V186M166 154V186M178 154V186M190 154V186"/>
+    <path d="M90 90V122M102 90V122M114 90V122M126 90V122M138 90V122"/>
+  </g>
+  <!-- the same two ports on every box -->
+  <g fill="#e6b450">
+    <circle cx="101" cy="158" r="4"/><circle cx="101" cy="174" r="4"/>
+    <circle cx="205" cy="158" r="4"/><circle cx="205" cy="174" r="4"/>
+    <circle cx="153" cy="94" r="4"/><circle cx="153" cy="110" r="4"/>
+  </g>
+  <!-- the session at work in each -->
+  <g stroke="#7fd962" stroke-width="4">
+    <path d="M104 54l10 8-10 8M122 70h14"/>
+  </g>
+</svg>

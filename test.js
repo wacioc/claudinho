@@ -226,6 +226,30 @@ assert.deepStrictEqual(settings.hooks.UserPromptSubmit, [{ hooks: [{ type: 'http
 // every tool call reports when it has run, to an address of its own and with a short limit
 assert.deepStrictEqual(settings.hooks.PostToolUse, [{ matcher: '*', hooks: [{ type: 'http', url: 'http://127.0.0.1:1/t/i/after', timeout: 5 }] }]);
 assert.strictEqual(settings.hooks.PostToolUseFailure, settings.hooks.PostToolUse);
+// a session in a container: every hook is the same request, sent by curl from a command hook, with the same limits
+const boxed = lib.instanceSettings({ statusFile: '/claudinho/status.json', hookUrl: 'http://host.docker.internal:1/t/i', curl: true });
+assert.strictEqual(boxed.statusLine.command, "cat > '/claudinho/status.json'");
+assert.deepStrictEqual(boxed.hooks.PostToolUse, [{ matcher: '*', hooks: [{ type: 'command', timeout: 5, command: "curl -sS --max-time 5 -X POST -H 'Content-Type: application/json' --data-binary @- 'http://host.docker.internal:1/t/i/after' || true" }] }]);
+assert.deepStrictEqual(boxed.hooks.Stop[0].hooks.map(h => [h.type, h.timeout]), [['command', 7200]]);
+assert.ok(Object.values(boxed.hooks).flat().flatMap(g => g.hooks).every(h => h.type === 'command' && h.command.includes("'http://host.docker.internal:1/t/i")), 'no http hook is left');
+
+// containers: how many there may be, which number is free, where the clone goes
+assert.deepStrictEqual([16, 12, 8, 5, 4, 2, 1].map(lib.boxLimit), [7, 5, 3, 1, 1, 1, 1]);   // a pair of processors each, one pair left over, never none
+assert.strictEqual(lib.freeSlot([1, 3], 7), 2);
+assert.strictEqual(lib.freeSlot([], 7), 1);
+assert.strictEqual(lib.freeSlot([2, 1], 2), null);
+assert.strictEqual(lib.boxWork('my repo'), '/work/my-repo');
+assert.strictEqual(lib.boxWork('.hidden'), '/work/hidden');
+assert.strictEqual(lib.boxWork('日本'), '/work/repo');
+// the ports setting, however it was typed: numbers, each once, none that is no port
+assert.deepStrictEqual(lib.portList('3000, 5173,8000  8080, x, 70000, 0, 3000'), [3000, 5173, 8000, 8080]);
+assert.deepStrictEqual(lib.portList(''), []);
+assert.deepStrictEqual(lib.parsePorts('8000/tcp -> 127.0.0.1:51759\r\n5173/tcp -> 127.0.0.1:51760\n9/udp -> 127.0.0.1:1\n'), [{ port: 8000, host: 51759 }, { port: 5173, host: 51760 }]);
+// docker stats: processors in use, memory with its ceiling in Docker's units, processes
+const stats = lib.parseBoxStats('claudinho-slot-1\t152.34%\t185.3MiB / 4GiB\t42\r\nclaudinho-slot-2\t0.00%\t0B / 0B\t0\n\n');
+assert.deepStrictEqual(stats.get('claudinho-slot-1'), { cpus: 1.5234, mem: Math.round(185.3 * 2 ** 20), memLimit: 4 * 2 ** 30, count: 42 });
+assert.deepStrictEqual(stats.get('claudinho-slot-2'), { cpus: 0, mem: 0, memLimit: 0, count: 0 });
+assert.strictEqual(stats.size, 2);
 
 // the record of input requests
 const tea = { hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_1', tool_input: { questions: [

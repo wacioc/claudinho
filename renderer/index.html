@@ -16,6 +16,10 @@
   <span id="repo-name" class="repo"></span>
   <button id="btn-open">Open folder…</button>
   <button id="btn-clone">Clone from GitHub…</button>
+  <select id="mode" title="Where sessions work: in worktrees on this computer, or each in a Docker container of its own. Each way has its own sessions, and the window shows those of the one chosen here.">
+    <option value="worktree">🌳 Worktrees</option>
+    <option value="docker">🐳 Docker</option>
+  </select>
   <span class="spacer"></span>
   <span id="account"></span>
   <span id="usage"></span>
@@ -27,6 +31,7 @@
 <nav>
   <button class="tab active" data-view="instances">Instances <span id="n-instances"></span></button>
   <button class="tab" data-view="worktrees">Worktrees <span id="n-worktrees"></span></button>
+  <button class="tab" data-view="boxes" hidden>Containers <span id="n-boxes"></span></button>
   <button class="tab" data-view="issues">Issues <span id="n-issues"></span></button>
   <button class="tab" data-view="prs">Pull requests <span id="n-prs"></span></button>
   <button class="tab" data-view="config">.claude</button>
@@ -38,8 +43,9 @@
       <button id="btn-new">+ New instance</button>
       <button id="btn-worktree">+ New worktree…</button>
       <button id="btn-resume-all" class="primary" hidden>Resume all interrupted</button>
-      <label title="Sessions that were started in a terminal or another app show up as status-only cards. This takes them out of the view."><input type="checkbox" id="hide-outside"> Hide sessions started outside claudinho</label>
+      <label id="outside-filter" title="Sessions that were started in a terminal or another app show up as status-only cards. This takes them out of the view."><input type="checkbox" id="hide-outside"> Hide sessions started outside claudinho</label>
       <span id="n-outside" class="hint"></span>
+      <span id="docker-note" class="chip" hidden></span>
       <span id="queue" class="chips"></span>
     </div>
     <aside id="sessions"></aside>
@@ -56,6 +62,13 @@
       <span class="hint">Every worktree under .claude/worktrees. Closing an instance removes its worktree; one that is still here can be removed by hand.</span>
     </div>
     <div id="worktree-list"></div>
+  </section>
+  <section id="view-boxes" hidden>
+    <div class="toolbar">
+      <button id="btn-refresh-boxes">↻ Refresh</button>
+      <span class="hint">Every container that sessions work in, on this computer. Closing an instance removes its container; one that is still here was kept for what it holds, and can be removed by hand.</span>
+    </div>
+    <div id="box-list"></div>
   </section>
   <section id="view-issues" hidden>
     <div class="toolbar">
@@ -85,6 +98,7 @@
 <menu id="ctx" hidden></menu>
 <div id="notes" hidden></div>
 <dialog id="dlg"></dialog>
+<dialog id="pick"></dialog>
 <div id="toast" hidden></div>
 <datalist id="worktrees"></datalist>
 <datalist id="groups"></datalist>

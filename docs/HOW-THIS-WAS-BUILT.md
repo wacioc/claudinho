@@ -1276,8 +1276,140 @@ the session started the ordinary program alone.
 |---|---|---|
 | The first run of the live check waited for a file that never came. | The command and Enter had gone to the terminal in one write, which Claude Code takes as pasted text: the command stood in the input box. | Enter as a write of its own, after a pause, as this file's section on testing already said. |
 
-## 15. Still open
+## 15. The tenth round: two ways of working, and sessions in containers
 
+On 13 November, after 0.6.4. It began as a question:
+
+> When dealing with multiple worktrees, one of the main problems is with the ports, since each worktree uses
+> the same port if you don't do some extra work. That makes worktrees that need to spin up the same services
+> overlap each other. Would it be possible to have each worktree spawn in it's own docker container so it can
+> use the same ports in there safely, isolated from all other worktrees that are running in separate docker
+> containers?
+
+It was tried by hand before anything was built, a step at a time and each step on the owner's word: a Docker
+inside a container, one container with a real session, three at once, three that each built and started the
+same two services on the same two ports. Then came the request:
+
+> I want to have 2 different operating modes that the claudinho user can pick from the start if he's a new
+> user first starting the app:
+> 1. Worktrees (as it works now)
+> 2. Docker Containers (the solution we tested in this thread and worked)
+
+with its particulars: two square pictures side by side to choose from at the first start, a list to change
+between the two afterwards, each way showing its own sessions only, no "New worktree" button with containers,
+terminals and detail view as they are, as many containers as cores less one, each with one core's two threads,
+and 3 to 4 GB of memory for each. With it, a defect:
+
+> even if there is a PR created that is linked to an issue and the worktree is checkout out on the branch that
+> has an open PR, I don't see the clickable button with the #PR as there is for the # issue.
+
+### What the trial had measured
+
+On the owner's PC: Windows 11, Docker Desktop 29.9 on WSL 2, which gives Docker 16 processors and 30 GB.
+
+| Question | Measured |
+|---|---|
+| Does a Docker inside a container work, and what does it cost? | Yes, in a privileged container, with the start script of Docker's own `docker:dind` image. It is up in one to two seconds and takes 44 MB idle. |
+| What does a session with its services use? | 450 to 700 MB: Claude Code, a database, a development server. The image is 1.7 GB and shared. Each container's Docker keeps its own images, in a volume. |
+| Do the same ports work in several containers at once? | Three sessions each built a FastAPI server on port 8000 and a Vite front end on port 5173 and started them, at the same time. Each answered with its own container's name, inside and from Windows, through the ports Docker had given them. |
+| Can sessions share one login? | Three at once ran on one volume with Claude Code's configuration and login, without a login error. Each container's `claude agents --json` listed its own session and no other. |
+| Do the app's hooks arrive? | Not as HTTP hooks. Claude Code refuses one whose host resolves to a private address (`HOOK_BLOCKED_ADDRESS`; loopback is let through). Sent by `curl` from a command hook, every one arrived. |
+| Does it hold up? | Three containers ran for 25 minutes with a recorder beside them: Docker answered all 1,489 probes, the slowest in a third of a second. |
+
+Docker Desktop did vanish twice during the trial. That was not the containers: it was the defect of section
+14, "Closing a card took Docker Desktop with it", which the trial brought to light.
+
+### How it was read, and why
+
+| Decision | Why |
+|---|---|
+| The way of working is a setting with no default. Whoever has none is asked at the start, and the question cannot be put aside. | A first start has nothing to fall back to. It also asks an owner of an older version, once: the other way would otherwise go unnoticed, and one condition is simpler than telling a new owner from an old one. |
+| Each way keeps its own sessions. Those of the other way are hidden, not stopped. | Asked for. A session does not care which list is on show, so its card goes on, and its notifications still come. Going to one from a notification, or from a row of another tab, changes the list. |
+| A container is made when a session starts and removed when its card is closed. There is no pool made ahead. | The owner's first sketch was a pool made at the first start. A container is up in two seconds, so a pool gains nothing, and seven idle ones hold memory. What is worth keeping is kept per number, in a volume: the images its Docker pulled. The limit on their number is the owner's. |
+| The limit is worked out from Docker's processors, not the machine's: one container for every two, less one. Each is held to two processors and 4 GB. | The owner's numbers: a core with its two threads each, one left over, 3 to 4 GB. On Windows Docker has all processors; on a Mac it has fewer, and it is Docker's that are shared out. Without a ceiling one container could take all of Docker's memory. |
+| A container holds a clone of the folder, not a mounted worktree. The folder is mounted read-only and cloned inside, on a new branch from the default branch as GitHub has it, which is what `claude -w` does. | A worktree mounted from Windows does not work for git inside: its `.git` file names a path of the other system. Files mounted from Windows are also slow. The price is that work leaves a container only by `git push`, so this way needs a GitHub remote, and removing a container can lose work. |
+| The two logins are made inside a container, by the owner, and kept in volumes. Where GitHub's is missing, the card runs `gh auth login` before anything else. | A copied Claude Code login is reported to break when its token is renewed. The app copies no credential from this computer. Claude Code asks for its own login in the terminal by itself. |
+| The owner's Claude Code configuration is copied in at each start: the files and folders the home editor lists, `hooks`, and scripts lying directly in the folder. | The same lists that keep the editor away from credentials and conversations. Status lines and hooks call scripts from that folder. Plugins are installed by Claude Code itself from what `settings.json` names. |
+| Hooks go by `curl` from command hooks, and a `curl` that fails counts as no answer. | See the trial. With the app gone, `curl` fails, and a hook that ends with code 2 blocks the tool call it was asked about. |
+| The terminal is `docker exec -it` in the same pseudo-terminal as every other card. | Measured through `node-pty` on Windows: a real terminal of the size asked for, a resize reaches it, colours and non-ASCII text pass both ways. So the cards did not have to become plain boxes. |
+| A container is stopped or removed when its card is closed, and `pkill claude` runs in one before a session is resumed in it. | Measured: ending the terminal on this side does not end the program inside. After a hard stop of the app, the session before was still running in its container. |
+| A session's status is `claude agents --json` run inside its container with every poll, together with the branch of its clone. | It is what the app reads for every other session, and costs 0.13 seconds of one processor a time. The branch is needed for the pull request, which is then asked for by name from this computer (`gh pr view <branch>`). |
+| The local diff is read inside the container, and the environment shown is the container's. | The detail view was to stay what it is. The one difference is the CPU weight, which a container does not have. |
+| Closing removes a container when its clone holds nothing that is nowhere else; otherwise it is stopped and kept, with a record of what it held. The Containers tab lists them, and a kept one can be given a new session. | The same rule as for a worktree, with "pushed" in the place of "on another branch". A stopped container cannot be asked what it holds, hence the record. A new session is the only way to the work in a kept one. |
+| The ports of a container that reach this computer are a setting, and Docker picks the port here. | Ports are given when a container is made, and the same port cannot be given to seven. The detail view lists each address. |
+| The image is built by the app, from a recipe in the repository. Its tag is worked out from the recipe and from the version of Claude Code on this computer. | The package of Claude Code does not update itself. With the version as a build argument of the last layer, a new version here builds that layer again, which installs the newest. |
+| The picture for containers is not Docker's logo. | Asked for was the logo, adapted to the app's style. Docker's trademark guidelines say its logos may not be modified, and need written approval as a design feature of another product. The picture is the app's own, and the name is written out. |
+| A test copy can be told other names for its containers (`CLAUDINHO_BOX`). | A test must never take, stop or remove a container of the copy in use. |
+
+Not built: Docker Engine alone on Linux, where `host.docker.internal` does not exist by itself; a ceiling per
+container that follows the app's CPU settings; an image per repository.
+
+### The pull request button
+
+The app looked for a session's pull request in two places only: when a turn ended, and when the Diff tab was
+opened. A session resumed after a restart of the app starts without a turn, so it had no button, although its
+issue button, which comes from the saved record, was there. The owner had installed four versions that day,
+each a restart. The same held for a session that opened its pull request early in a long turn.
+
+Now the app also looks when a session is resumed, and whenever a tool call of a session without a known pull
+request has run, at most once in half a minute. Tool calls already report to the app, so nothing new is
+listened to. A session whose pull request is known is not asked about again until its turn ends.
+
+### How it was verified
+
+`test.js` has asserts for the new helpers: the limit, the free number, the ports setting, Docker's listings,
+and that no HTTP hook is left in a container session's settings.
+
+`box-check.js` (`npm run check:box`) makes one real container the way the app does, with this repository as
+its folder, and starts no session. Its 19 verdicts: the ceilings, the labels, the clone on a new branch at
+GitHub's default branch with GitHub as its remote, the folder readable and not writable, Docker with Compose
+inside, what counts as work that is nowhere else, a hook's request reaching a server on 127.0.0.1 and its
+answer coming back, a hook that says nothing when the app is gone, a status line's file read on this
+computer, a port answering from this computer, Docker's reading of memory, and stop, start and remove.
+
+`pack-check.js` got one more verdict, for what a packaged copy has to hold for this: the recipe of the image,
+and the two pictures of the first question, which a fresh data folder brings on screen. It makes no container.
+
+Live, in a test copy on the test repository, with containers of its own names:
+
+| What | Result |
+|---|---|
+| The first start | The question with its two square pictures, side by side and the same size. Escape did not close it. One click set the way, and the list in the header changed it back. |
+| A session in a new container | The container was there after 2 seconds, Claude Code at work after 13, its turn over after 17. The terminal showed Claude Code's own screen with its symbols. The first prompt and the end of the turn arrived through `curl`. Model, cost, context and branch were on the card, CPU and memory with the 4 GB ceiling, and four ports. |
+| Its detail view | The local diff showed a new file, read inside the container. The environment was the container's. |
+| Closed with an uncommitted file | Kept and stopped. The Containers tab said what it held, and its Remove dialog named the loss. |
+| A new session in the kept container, at the "auto" input level | It asked a question; the app answered it, and the session read the answer back. |
+| A pull request from inside | Pushed and opened by the session. The card had its button, the action for a draft, and "Diff (git)" with the file. Closed after that, the container was removed. |
+| Both ways at once | A worktree session and a container session. Each list showed its own card and counted it alone; the detail view's list of sessions held its own kind; going to the other kind's session changed the list. |
+| The button during a turn, with worktrees | A session opened its pull request and went on for 55 seconds. The button was on its card 22 seconds before the turn ended. |
+| After a hard stop of the app | The container had run on, Claude Code in it. Each session was offered for resuming under its own way. The worktree session had its pull request button 4 seconds after the resume, with no turn. The container session went on in its container, in the same conversation, with one Claude Code in it. |
+| A session whose container was removed behind its back | Resumed, it said that its container was gone and started again in a new one, from its first prompt, on a branch of the same name. |
+| A full house | Six stand-ins and two issues sent off, two at once. The first took the seventh place. The second waited, its chip saying for a free container, and started in the place of a stand-in that was removed. A session started by hand meanwhile said on its card that all seven were taken. |
+
+The sign-in for GitHub was run against an empty volume up to its first question, and stopped there: the test
+makes no login.
+
+### What went wrong
+
+| Symptom | Cause | What changed |
+|---|---|---|
+| Symbols from a container came out garbled in the first terminal test. | The test, not the terminal: its own escape sequences had been turned into other characters before they were sent. Text that was read from a file passed. | Nothing in the app. A wrapper that set the console's code page was tried and dropped. |
+| In the first live run the pull request was on the card only when the turn ended. | The look was allowed once a minute, and the whole turn was shorter. | Once in half a minute. |
+| The note that counts the containers was up to 15 seconds behind. | Docker was asked on a timer only. | It is asked again when a container is made or removed. |
+
+Not verified: macOS, and Docker Desktop's Linux edition; a first sign-in to Claude Code and to GitHub made in
+the app's card by a new owner; a login being renewed while several sessions run; a container reaching its
+memory ceiling; the image built on a machine that has none of its layers; the packaged app, whose check
+starts no container.
+
+## 16. Still open
+
+- Sessions in containers: what section 15 lists as not verified. Docker Engine alone on Linux is not served.
+  The ceilings are the same for every container and are not settings. A container's ports are fixed when it
+  is made. A kept container can be given a new session, not its old conversation. The image is one for all
+  repositories, and sessions cannot install system packages in it.
+- A pull request's later fate on GitHub (merged or closed there) reaches a card only when the session's next
+  turn ends.
 - The Diff tab has GitHub's default view and no other, and shows no diff where GitHub's list of files gives
   none (section 14). A side-by-side view and filling the gaps from the worktree with git are what would come
   next. Its colours know nothing of what stands above a hunk. Its drawing is not spread over time: 20,000
@@ -1328,8 +1460,15 @@ the session started the ordinary program alone.
 - A flag placed before the `.` on the command line makes the app open its own source folder (see the table
   above). The app could find the folder argument more carefully.
 
-## 16. Continuing the work
+## 17. Continuing the work
 
+- **Sessions in containers** are tested live in the clone of the test repository, with the test copy started
+  under `CLAUDINHO_BOX=<a name>` so that its containers have names of their own. The two volumes with the
+  logins are shared with the copy in use, so the test sessions are logged in; those volumes are never removed
+  by a test. `npm run check:box` checks a container without a session. A full house is made with
+  `docker create --name <name>-slot-N <the image> true`, which takes a number and starts nothing.
+- **A test that writes a script through a shell** should look at what arrived. In this session a doubled
+  backslash came out single, which turned `\342` in a JavaScript string into one character.
 - **Windows** is the development machine. `npm run check:cpu` runs the job-object mechanism directly.
 - **Linux** was a WSL distribution (Ubuntu 24.04, systemd 255). The default mechanism there is the kernel one;
   `CLAUDINHO_CPU=throttle` forces pause-and-resume, the mechanism macOS uses.
@@ -1404,7 +1543,7 @@ the session started the ordinary program alone.
 - This repository has no `docs/PROCESS.md` on purpose. The app, like the owner's helper, tells an agent to
   follow that file when it exists, and this record is a history, not a process to follow.
 
-## 17. Sources
+## 18. Sources
 
 The owner's rule for the session was to name the documentation before building on it. These are the pages the
 work relied on.
@@ -1425,6 +1564,24 @@ work relied on.
 - <https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options>
 - <https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart>
 - <https://signpath.org/terms>
+
+**Sessions in containers**
+
+- <https://docs.docker.com/engine/containers/resource_constraints/> for `--memory`, `--cpus`, and what happens
+  at the memory ceiling
+- <https://docs.docker.com/reference/cli/docker/container/stats/>, `.../container/exec/`, `.../container/port/`,
+  `.../container/ls/` and <https://docs.docker.com/reference/cli/docker/buildx/build/>
+- <https://hub.docker.com/_/docker> for a Docker inside a container, and
+  <https://docs.docker.com/engine/install/debian/> for the engine's packages
+- <https://docs.docker.com/desktop/features/networking/> for `host.docker.internal` and published ports
+- <https://www.docker.com/legal/trademark-guidelines/> for what may be done with Docker's logo
+- Claude Code: `worktrees` (the base of a new worktree, `.worktreeinclude`), `hooks` (command hooks, exit codes,
+  the answer on standard output), `setup` (the package repository and its key), `authentication`, `devcontainer`
+- <https://cli.github.com/manual/gh_pr_view> (a pull request by its branch's name) and
+  <https://cli.github.com/manual/gh_auth_login>
+- Measured, not documented: that an HTTP hook to a private address is refused, that the terminal's end on this
+  side leaves the program in the container running, and that `claude agents --json` in a container lists that
+  container's sessions although the configuration folder is shared.
 
 **The Diff tab**: <https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files> for the list of a pull
 request's files, whose answer was also read from a real pull request;

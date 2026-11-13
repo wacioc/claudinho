@@ -1,6 +1,6 @@
 /* global api, Terminal, FitAddon */
-// Renderer: five views (instances, worktrees, issues, pull requests, .claude) drawn from the state the main
-// process pushes.
+// Renderer: the views (instances, worktrees or containers, issues, pull requests, .claude) drawn from the state
+// the main process pushes.
 
 const $ = s => document.querySelector(s);
 
@@ -21,6 +21,11 @@ function h(spec, props, ...kids) {
 }
 
 let state = { instances: [], external: [], queue: [], settings: {}, repo: null };
+// The two ways of working: sessions in worktrees on this computer, or each in a Docker container of its own.
+// Each way has its own sessions, and the window shows those of the one chosen in the header.
+const docker = () => state.settings.mode === 'docker';
+const inMode = x => !!x.box === docker();   // x: an instance, an interrupted session or a queued issue
+const iconOf = x => (x.box ? '🐳' : x.worktree ? '🌳' : '📁');
 const terms = new Map();     // instance id -> { term, fit, card, wrap, host, p, inst }
 const backlog = new Map();   // PTY output that arrived before its terminal existed
 let detailId = null, openWhenReady = null, shownRepo;
@@ -67,7 +72,9 @@ function procChips(u, limit) {
       className: `chip${u.cpu >= 0.5 || (limited && u.cpu >= 0.8 * limit) ? ' warn' : ''}`,
       title: `Share of all ${state.cores} cores used by this session and the processes it started. Peak ${pct(Math.max(...u.hist))} in the last ${u.hist.length * 2} s.${limited ? ` Held to ${pct(limit)} right now.` : ''}`,
     }, `cpu ${pct(u.cpu)}${limited ? ` of ${pct(limit)}` : ''} ${spark(u.hist.slice(-12))}`),
-    h('span.chip', { title: `Memory held by ${u.count} process${u.count === 1 ? '' : 'es'}` }, `mem ${fmtBytes(u.mem)}`),
+    // memLimit: the ceiling of a session's container. Within a tenth of it is worth a glance.
+    h('span', { className: `chip${u.memLimit && u.mem > 0.9 * u.memLimit ? ' warn' : ''}`, title: `Memory held by ${u.count} process${u.count === 1 ? '' : 'es'}${u.memLimit ? `. Its container may use ${fmtBytes(u.memLimit)}.` : ''}` },
+      `mem ${fmtBytes(u.mem)}${u.memLimit ? ` of ${fmtBytes(u.memLimit)}` : ''}`),
   ];
 }
 function renderProcs(el, u, limit) {
@@ -77,7 +84,7 @@ function renderProcs(el, u, limit) {
       h('dt', 'CPU'), h('dd', `${pct(u.cpu)} of ${state.cores} cores${limit < 0.995 ? `, held to ${pct(limit)}` : ''}`),
       h('dt', 'Peak'), h('dd', `${pct(Math.max(...u.hist))} in the last ${u.hist.length * 2} s`),
       h('dt', 'History'), h('dd', spark(u.hist)),
-      h('dt', 'Memory'), h('dd', `${fmtBytes(u.mem)} in ${u.count} process${u.count === 1 ? '' : 'es'}`)),
+      h('dt', 'Memory'), h('dd', `${fmtBytes(u.mem)}${u.memLimit ? ` of ${fmtBytes(u.memLimit)}` : ''} in ${u.count} process${u.count === 1 ? '' : 'es'}`)),
     h('table', u.top.map(p => h('tr', h('td', p.n > 1 ? `${p.name} ×${p.n}` : p.name), h('td.num', pct(p.cpu)), h('td.num', fmtBytes(p.mem)))),
       u.more > 0 && h('tr', h('td', { colSpan: 3 }, `and ${u.more} more`))));
 }
@@ -197,7 +204,7 @@ function openNotes() {
       $('#notes').hidden = true;
       if (n.kind === 'update') updateClaude();
       else if (n.kind === 'app') updateApp();
-      else if (terms.has(n.inst)) { show('instances'); openDetail(n.inst); }
+      else goTo(n.inst);
     },
   }, h('span.mark', NOTE_MARKS[n.kind]), h('div', n.label && h('b', `${n.label} `), n.text, h('div.hint', new Date(n.at).toLocaleTimeString()))))
     : [h('div.empty', 'Nothing yet. A session that asks for input, or is done, shows up here.')]));
@@ -268,7 +275,22 @@ function renderTop() {
   $('#btn-update').textContent = cc.updating ? '⬆ updating…' : `⬆ ${cc.latest}`;
   $('#btn-update').title = `Claude Code ${cc.latest} is out. Press to run \`claude update\`. Sessions that are running keep the version they started with.`;
   renderBell();
-  $('#btn-new').disabled = !r || !state.claudeFound;
+  // The way of working that is chosen, and what goes with it: with containers there is no worktree to make, the
+  // Containers tab stands where the Worktrees tab was, and a note says how Docker is doing.
+  const box = docker(), d = state.docker || {};
+  if (document.activeElement !== $('#mode')) $('#mode').value = box ? 'docker' : 'worktree';
+  $('#btn-worktree').hidden = box;
+  $('#outside-filter').hidden = box;
+  document.querySelector('.tab[data-view=worktrees]').hidden = box;
+  document.querySelector('.tab[data-view=boxes]').hidden = !box;
+  const note = $('#docker-note');
+  note.hidden = !box;
+  note.className = `chip${box && d.ok === false ? ' warn' : ''}`;
+  note.textContent = d.building ? 'building the image for containers…' : d.ok === false ? 'Docker does not answer' : d.ok ? `${d.used} of ${d.limit} containers in use` : 'asking Docker…';
+  note.title = d.building || (d.ok === false ? `${d.error}\nSessions in containers need Docker Desktop to be running.` : !d.ok ? ''
+    : `Each session works in a container of its own, which may use ${d.boxCpus} processors and ${d.boxGb} GB. Docker has ${d.cpus} processors, which makes ${d.limit} containers at most.`);
+  $('#btn-new').disabled = !r || !state.claudeFound || (box && (!d.ok || !r.github));
+  $('#btn-new').title = !box ? '' : !d.ok ? 'Docker does not answer.' : r && !r.github ? 'A session in a container works on a clone and pushes its work: that needs a folder with a GitHub remote.' : 'Starts a session in a new container.';
   $('#btn-worktree').disabled = !r || !r.isGit || !state.claudeFound;
   if (!r) return $('#setup').replaceChildren();
   $('#setup').replaceChildren(h('span.chip', r.github ? `GitHub ${r.github.owner}/${r.github.name}` : r.isGit ? 'git, no GitHub remote' : 'plain folder'));
@@ -374,6 +396,9 @@ function infoRows(i) {
   return [
     ['Status', statusOf(i).text],
     ['Still running', i.background && i.background.detail.split('\n').map(line => h('div', line))],
+    ['Container', i.box && (i.box.name || 'being made')],
+    // Inside, every container has the same ports. Each of these has a port of its own on this computer.
+    ['Ports', i.box && i.box.ports.length > 0 && i.box.ports.map(p => h('div', h('a', { title: 'Opens it in the browser', onclick: () => call('openUrl', `http://localhost:${p.host}/`) }, `localhost:${p.host}`), ` is its port ${p.port}`))],
     ['Folder', i.cwd],
     ['Branch', s.branch],
     ['Model', [s.model || i.model, s.effort || i.effort].filter(Boolean).join(' · ')],
@@ -417,8 +442,8 @@ function updateCard(t, inst, order) {
   t.inst = inst;
   t.p.tabs.children[1].textContent = inst.pr ? 'Diff (git)' : 'Diff (local)';   // the pull request as GitHub has it, or the folder's own diff until there is one
   const st = statusOf(inst), s = inst.status || {};
-  t.p.title.textContent = `${inst.worktree ? '🌳' : '📁'} ${inst.label}`;
-  t.p.title.title = inst.cwd;
+  t.p.title.textContent = `${iconOf(inst)} ${inst.label}`;
+  t.p.title.title = inst.box ? `${inst.box.name || 'a container'}: ${inst.cwd}` : inst.cwd;
   t.p.group.textContent = inst.group || '';
   t.p.group.hidden = !inst.group;
   t.p.group.title = `Group: ${inst.group}`;
@@ -451,6 +476,7 @@ function updateCard(t, inst, order) {
     t.p.prLink.title = `${inst.merge ? `${inst.merge}\n` : ''}Pull request #${inst.pr.number}: open it on GitHub`;
   }
   t.p.chips.replaceChildren(...[
+    inst.box && (inst.box.n ? `container ${inst.box.n}` : 'container…'),
     [s.model || inst.model || 'default model', s.effort || inst.effort].filter(Boolean).join(' · '),
     s.ctxPct != null ? `ctx ${Math.round(s.ctxPct)}% of ${fmtTokens(s.ctxSize)}` : 'ctx –',
     s.cost != null ? `$${s.cost.toFixed(2)}` : '$ –',
@@ -463,6 +489,7 @@ function updateCard(t, inst, order) {
   ].filter(Boolean).map(c => (typeof c === 'string' ? h('span.chip', c) : c)), ...procChips(inst.procs, inst.limit), t.p.up);
   renderProcs(t.p.procs, inst.procs, inst.limit);
   if (document.activeElement !== t.p.weight) t.p.weight.value = inst.weight;
+  t.p.weight.parentNode.hidden = !!inst.box;   // a container has its two processors, whatever the others do
   renderPending(t, inst);
   if (document.activeElement !== t.p.level) t.p.level.value = inst.level;
   if (document.activeElement !== t.p.merge) t.p.merge.value = inst.autonomy;
@@ -527,7 +554,7 @@ let shownSessions = '';
 function renderSessions() {
   if (!detailId) return;
   const groups = groupNames();
-  const rows = state.instances.map(inst => ({ inst, st: statusOf(inst), order: inst.group ? groups.indexOf(inst.group) + 1 : 0 })).sort((a, b) => a.order - b.order);
+  const rows = state.instances.filter(inMode).map(inst => ({ inst, st: statusOf(inst), order: inst.group ? groups.indexOf(inst.group) + 1 : 0 })).sort((a, b) => a.order - b.order);
   const key = JSON.stringify([detailId, rows.map(r => [r.inst.id, r.inst.label, r.inst.group, r.st, !!r.inst.done, r.inst.session.name])]);
   if (key === shownSessions) return;   // unchanged: leave the rows alone, a click may be under way
   shownSessions = key;
@@ -535,12 +562,22 @@ function renderSessions() {
   const twice = new Set(rows.map(r => r.inst.label).filter((label, i, all) => all.indexOf(label) !== i));
   $('#sessions').replaceChildren(...rows.map(({ inst, st }) => {
     const row = h('div', { className: `srow${inst.id === detailId ? ' active' : ''}${st.cls === 'wait' ? ' attention' : ''}`, title: `${inst.cwd}\n${st.text}`, onclick: () => switchTo(inst.id) },
-      h('div.name', inst.done && h('span.tick', '✓ '), `${inst.worktree ? '🌳' : '📁'} ${inst.label}`),
+      h('div.name', inst.done && h('span.tick', '✓ '), `${iconOf(inst)} ${inst.label}`),
       twice.has(inst.label) && inst.session.name && h('div.hint', inst.session.name),
       h('span', { className: `badge ${st.cls}` }, st.text));
     stripe(row, inst.group);
     return row;
   }));
+}
+// Shows an instance, from a notification or a row of another tab. One that belongs to the other way of working
+// is shown once the window has changed to it.
+async function goTo(id) {
+  const t = terms.get(id);
+  if (!t) return;
+  show('instances');
+  if (inMode(t.inst)) return openDetail(id);
+  openWhenReady = id;
+  await call('setSettings', { mode: t.inst.box ? 'docker' : 'worktree' });
 }
 function switchTo(id) {
   const from = terms.get(detailId);
@@ -647,14 +684,19 @@ function diffTable(hunks) {
   ])));
 }
 // What removing a worktree would throw away, in words ('' = nothing). w: a row from the main process.
+// The same for a container (w.box): there, a commit is safe once it is pushed, and one that is stopped without
+// a record of what it held (w.changed is not known) is taken to hold something.
 function lossOf(w) {
   if (w.leftover) return 'everything in this folder, which git no longer knows as a worktree';
   if (w.error) return `whatever is in it (its state could not be read: ${w.error})`;
-  return [w.changed && plural(w.changed, 'uncommitted change'), w.unique && `${plural(w.unique, 'commit')} that ${w.unique === 1 ? 'is' : 'are'} on no other branch or remote`].filter(Boolean).join(' and ');
+  if (w.box && w.changed == null) return 'whatever is in it (it is stopped, and what it holds is not on record)';
+  return [w.changed && plural(w.changed, 'uncommitted change'), w.unique && `${plural(w.unique, 'commit')} that ${w.unique === 1 ? 'is' : 'are'} ${w.box ? 'not pushed' : 'on no other branch or remote'}`].filter(Boolean).join(' and ');
 }
 const NOTHING_LOST = 'Nothing is lost: it has no uncommitted changes, and its commits are on another branch or on a remote.';
-const removedText = done => `Removed the worktree ${done.name}${done.branch ? ` and its branch ${done.branch}` : ''}.`;
-const keptText = w => `The worktree ${w.name} was kept, because removing it would now discard ${lossOf(w)}. It can be removed from the Worktrees tab.`;
+const NOTHING_LOST_BOX = 'Nothing is lost: it has no uncommitted changes, and its commits are pushed.';
+const removedText = done => (done.box ? `Removed the container ${done.box}${done.name ? ` of ${done.name}` : ''}.` : `Removed the worktree ${done.name}${done.branch ? ` and its branch ${done.branch}` : ''}.`);
+const keptText = w => (w.box ? `The container ${w.box} was stopped and kept, because removing it would now discard ${lossOf(w)}. It is on the Containers tab.`
+  : `The worktree ${w.name} was kept, because removing it would now discard ${lossOf(w)}. It can be removed from the Worktrees tab.`);
 
 // Closing an instance stops Claude Code and removes the instance's worktree. It asks first while Claude Code
 // is still running, and whenever work would go with the worktree.
@@ -664,35 +706,40 @@ async function closeInstance(id) {
   if (!t || closing.has(id)) return;
   closing.add(id);
   try {
-    const inst = t.inst, wt = (await call('closeInfo', id)).worktree;
+    // wt: the worktree the instance works in, or the container, which is asked about and removed the same way.
+    const inst = t.inst, info = await call('closeInfo', id), wt = info.worktree || info.box, box = !!info.box;
     const loss = wt ? lossOf(wt) : '', removable = wt && !wt.shared;
     let remove = removable && !loss;
     if (!inst.exited || (removable && loss)) {
       const v = await formDialog(`Close ${inst.label}?`, [
-        !inst.exited && { type: 'static', label: 'Claude Code', value: `Still running${statusOf(inst).cls === 'busy' ? ', in the middle of a turn' : ''}. Closing stops it; its conversation stays available to \`claude --resume\`.` },
+        !inst.exited && { type: 'static', label: 'Claude Code', value: inst.box && !wt ? 'Its container is still being made. Closing stops that.'
+          : `Still running${statusOf(inst).cls === 'busy' ? ', in the middle of a turn' : ''}. Closing stops it${inst.box ? '.' : '; its conversation stays available to `claude --resume`.'}` },
         wt && wt.shared && { type: 'static', label: 'Worktree', value: 'Stays where it is: another session is running in it.' },
-        removable && { key: 'remove', label: 'Remove the worktree', type: 'checkbox', value: !loss,
-          hint: [`Deletes .claude/worktrees/${wt.name}${wt.branch ? ` and its branch ${wt.branch}` : ''}. `, loss ? h('span.loss', `That discards ${loss}.`) : NOTHING_LOST] },
+        removable && { key: 'remove', label: box ? 'Remove the container' : 'Remove the worktree', type: 'checkbox', value: !loss,
+          hint: box ? [`Deletes ${wt.box} with the clone in it. `, loss ? h('span.loss', `That discards ${loss}.`) : NOTHING_LOST_BOX, ' Left unticked, the container is stopped and kept: it is on the Containers tab.']
+            : [`Deletes .claude/worktrees/${wt.name}${wt.branch ? ` and its branch ${wt.branch}` : ''}. `, loss ? h('span.loss', `That discards ${loss}.`) : NOTHING_LOST] },
       ], 'Close');
       if (!v) return;
       remove = !!v.remove;
     }
     const done = await call('close', id, remove ? (loss ? 'force' : 'safe') : undefined);
     if (done) toast(done.removed ? removedText(done) : keptText(done.kept));
+    else if (box) toast(`The container ${wt.box} was stopped and kept. It is on the Containers tab.`);
     if (!$('#view-worktrees').hidden) loadWorktrees();
+    if (!$('#view-boxes').hidden) loadBoxes();
   } finally { closing.delete(id); }
 }
 
 // Sessions that were open when the app last stopped (a power cut, a crash, or simply quitting).
 let shownResumable = '';
 function renderResumable() {
-  const list = state.resumable || [], key = JSON.stringify(list);
+  const list = (state.resumable || []).filter(inMode), key = JSON.stringify(list);
   $('#btn-resume-all').hidden = list.length < 2;
   if (key === shownResumable) return;   // unchanged: leave the buttons alone, a click may be under way
   shownResumable = key;
   $('#resumable').replaceChildren(...list.map(r => {
     const card = h('article.card.ext',
-      h('div.head', h('span.title', { title: r.dir }, `${r.worktree ? '🌳' : '📁'} ${r.label}`), r.group && groupChip(r.group), h('span.badge.off', 'interrupted'), h('span.spacer'),
+      h('div.head', h('span.title', { title: r.dir }, `${iconOf(r)} ${r.label}`), r.group && groupChip(r.group), h('span.badge.off', 'interrupted'), h('span.spacer'),
         h('button.primary', { onclick: () => call('resume', r.id) }, 'Resume'),
         h('button', { title: 'Take it off this list. Its conversation stays available to `claude --resume`.', onclick: () => call('forget', r.id) }, 'Forget')),
       h('div.meta', [
@@ -717,17 +764,23 @@ function renderInstances() {
   }
   // Cards in no group come first, then group after group by name.
   const groups = groupNames();
-  for (const inst of state.instances) updateCard(terms.get(inst.id) || createCard(inst), inst, inst.group ? groups.indexOf(inst.group) + 1 : 0);
+  for (const inst of state.instances) {
+    const t = terms.get(inst.id) || createCard(inst);
+    updateCard(t, inst, inst.group ? groups.indexOf(inst.group) + 1 : 0);
+    t.card.hidden = !inMode(inst);   // of the other way of working: it goes on, out of sight
+  }
+  if (detailId && terms.has(detailId) && !inMode(terms.get(detailId).inst)) closeDetail();
   renderSessions();
   // The names offered where a group is typed. Rebuilt only when they change: the list may be open under the cursor.
   const names = [...new Set([...state.instances, ...(state.resumable || []), ...state.queue].map(x => x.group).filter(Boolean))].sort();
   if (names.join('\n') !== shownGroups) { shownGroups = names.join('\n'); $('#groups').replaceChildren(...names.map(n => h('option', { value: n }))); }
-  if (openWhenReady && terms.has(openWhenReady)) { openDetail(openWhenReady); openWhenReady = null; }
+  if (openWhenReady && terms.has(openWhenReady) && inMode(terms.get(openWhenReady).inst)) { openDetail(openWhenReady); openWhenReady = null; }
   renderResumable();
 
-  // Sessions started outside the app, unless the filter hides them.
-  const outside = prefs.hideOutside ? [] : state.external;
-  $('#n-outside').textContent = prefs.hideOutside && state.external.length ? `${plural(state.external.length, 'session')} hidden` : '';
+  // Sessions started outside the app, unless the filter hides them. They run on this computer, so they are
+  // shown with the worktrees.
+  const outside = prefs.hideOutside || docker() ? [] : state.external;
+  $('#n-outside').textContent = prefs.hideOutside && !docker() && state.external.length ? `${plural(state.external.length, 'session')} hidden` : '';
   $('#external').replaceChildren(...outside.map(e => {
     const st = statusOf({ pending: [], session: e });
     return h('article.card.ext', { className: `card ext${st.cls === 'wait' ? ' attention' : ''}` },
@@ -735,28 +788,32 @@ function renderInstances() {
       h('div.meta', [e.name, e.kind, e.startedAt && `up ${fmtDur(Date.now() - e.startedAt)}`].filter(Boolean).map(c => h('span.chip', c)), procChips(e.procs, 1)),
       h('div.note', 'Started outside claudinho: status only, no terminal.'));
   }));
-  // Worktrees are made one at a time: while a new one is still starting, the queue waits for it.
+  // Worktrees are made one at a time, and so are containers: while a new one is still starting, the queue waits.
   const first = state.instances.find(i => i.starting), after = first && `, after ${first.issue ? `#${first.issue}` : first.label} has started`;
-  $('#queue').replaceChildren(...state.queue.map(j => h('span.chip.warn', { title: `${j.title}${j.group ? `\nGroup: ${j.group}` : ''}` },
-    `queued #${j.number}${j.waitingOn.length ? `, waiting on ${j.waitingOn.map(n => (n === '?' ? 'GitHub' : `#${n}`)).join(' ')}` : after || ''}`,
+  $('#queue').replaceChildren(...state.queue.filter(inMode).map(j => h('span.chip.warn', { title: `${j.title}${j.group ? `\nGroup: ${j.group}` : ''}` },
+    `queued #${j.number}${j.waitingOn.length ? `, waiting on ${j.waitingOn.map(n => (n === '?' ? 'GitHub' : n === 'box' ? 'a free container' : `#${n}`)).join(' ')}` : after || ''}`,
     h('button', { title: 'Remove from the queue', onclick: () => call('unqueue', j.number) }, '✕'))));
-  const total = state.instances.length + outside.length;
-  const waiting = [...state.instances, ...outside.map(e => ({ pending: [], session: e }))].filter(i => statusOf(i).cls === 'wait').length;
+  const mine = state.instances.filter(inMode), total = mine.length + outside.length;
+  const waiting = [...mine, ...outside.map(e => ({ pending: [], session: e }))].filter(i => statusOf(i).cls === 'wait').length;
   $('#n-instances').textContent = `${total || ''}${waiting ? ` ⚠${waiting}` : ''}`;
-  $('#empty').textContent = total || (state.resumable || []).length ? '' : !state.repo ? 'Open a folder or clone a GitHub repo to get started.'
-    : 'No Claude Code instance is running in this folder. Start one above, or send one after an issue from the Issues tab.';
+  $('#empty').textContent = total || (state.resumable || []).filter(inMode).length ? '' : !state.repo ? 'Open a folder or clone a GitHub repo to get started.'
+    : docker() ? 'No Claude Code instance is running in a container. Start one above, or send one after an issue from the Issues tab.'
+      : 'No Claude Code instance is running in this folder. Start one above, or send one after an issue from the Issues tab.';
 }
 
+// With containers chosen, every new instance gets a container of its own, and its name is its branch's.
 async function newInstance(worktree) {
-  const v = await formDialog(worktree ? 'New worktree' : `New instance in ${state.repo.name}`, [
-    worktree && { key: 'worktree', label: 'Worktree name', type: 'text', list: 'worktrees', placeholder: 'blank = generated', pattern: '[A-Za-z0-9._\\-]{1,64}', hint: 'Created with `claude -w` under .claude/worktrees. An existing name reopens that worktree.' },
+  const box = docker();
+  const v = await formDialog(box ? `New instance in a container, for ${state.repo.name}` : worktree ? 'New worktree' : `New instance in ${state.repo.name}`, [
+    box && { key: 'worktree', label: 'Name', type: 'text', placeholder: 'blank = generated', pattern: '[A-Za-z0-9][A-Za-z0-9._\\-]{0,63}', hint: 'The session works in a new container, on a clone of this folder and a new branch of this name, made from the default branch on GitHub.' },
+    worktree && !box && { key: 'worktree', label: 'Worktree name', type: 'text', list: 'worktrees', placeholder: 'blank = generated', pattern: '[A-Za-z0-9._\\-]{1,64}', hint: 'Created with `claude -w` under .claude/worktrees. An existing name reopens that worktree.' },
     ...launchFields(),
     autonomyField(),
     { key: 'prompt', label: 'First prompt (optional)', type: 'textarea', rows: 3 },
   ], 'Start');
   if (!v) return;
   savePrefs(v);
-  openWhenReady = await call('spawn', { ...v, worktree: worktree ? v.worktree || true : undefined });
+  openWhenReady = await call('spawn', { ...v, worktree: worktree || box ? v.worktree || true : undefined, box });
 }
 
 // ---------- worktrees ----------
@@ -780,7 +837,7 @@ function renderWorktrees() {
   $('#n-worktrees').textContent = worktrees.length || '';
   if (!worktrees.length) return $('#worktree-list').replaceChildren(h('div.empty', 'No worktrees under .claude/worktrees. "+ New worktree…" on the Instances tab makes one, and so does every issue sent to Claude Code.'));
   const rows = worktrees.map(w => {
-    const inst = state.instances.find(i => !i.exited && under(w.path, i.cwd));
+    const inst = state.instances.find(i => !i.exited && !i.box && under(w.path, i.cwd));   // a container's folder is not on this computer
     const outside = !inst && state.external.some(e => under(w.path, e.cwd));
     return { w, inst, outside, paused: !inst && !outside && (state.resumable || []).some(r => under(w.path, r.dir)) };
   });
@@ -798,7 +855,7 @@ function renderWorktrees() {
         h('td', w.branch || (w.leftover ? '' : 'detached')),
         h('td', { className: what ? 'loss' : '' }, what || 'clean'),
         h('td', subject, when && h('span.hint', ` · ${when}`)),
-        h('td', inst ? h('a', { title: 'Show this instance', onclick: () => { show('instances'); openDetail(inst.id); } }, statusOf(inst).text)
+        h('td', inst ? h('a', { title: 'Show this instance', onclick: () => goTo(inst.id) }, statusOf(inst).text)
           : outside ? 'running outside the app' : paused ? 'interrupted' : '–'),
         h('td', h('button', { disabled: !!inst || outside, title: inst || outside ? 'A session is running in it. Closing the instance removes its worktree.' : '', onclick: () => removeWorktree(w) }, 'Remove')));
     }))));
@@ -814,6 +871,89 @@ async function removeWorktree(w) {
   if (!v) return;
   if (done) toast(done.removed ? removedText(done) : keptText(done.kept));
   loadWorktrees();
+}
+
+// ---------- containers ----------
+
+let boxRows = null, boxesUsed = -1;   // rows from the main process; which session is open in each comes from the live state
+
+async function loadBoxes() {
+  const list = $('#box-list');
+  if (!boxRows) list.replaceChildren(h('div.empty', 'Asking Docker…'));
+  try { boxRows = await call('boxes'); } catch { boxRows = null; $('#n-boxes').textContent = ''; return list.replaceChildren(h('div.empty', 'Docker does not answer. Sessions in containers need Docker Desktop to be running.')); }
+  renderBoxes();
+}
+
+let shownBoxes = '';
+function renderBoxes() {
+  if (!boxRows || $('#view-boxes').hidden) return;
+  $('#n-boxes').textContent = boxRows.length || '';
+  if (!boxRows.length) return $('#box-list').replaceChildren(h('div.empty', 'No containers. "+ New instance" on the Instances tab makes one, and so does every issue sent to Claude Code.'));
+  const rows = boxRows.map(b => ({ b, inst: state.instances.find(i => i.id === b.inst) }));
+  const key = JSON.stringify(rows.map(r => [r.b, r.inst && statusOf(r.inst).text]));
+  if (key === shownBoxes && $('#box-list table')) return;   // unchanged: leave the buttons alone, a click may be under way
+  shownBoxes = key;
+  $('#box-list').replaceChildren(h('table',
+    h('thead', h('tr', ['Container', 'Session', 'Folder', 'Branch', 'State', 'Last commit', 'Running', ''].map(c => h('th', c)))),
+    h('tbody', rows.map(({ b, inst }) => {
+      const [when, subject] = (b.last || '').split('\t');
+      // name: what the app wrote on the container when it made it. One without is not this version's.
+      const what = !b.name ? 'not made by this version of the app' : b.changed == null && !b.error ? 'stopped, and what it holds is not on record' : b.error ? `unreadable: ${b.error}`
+        : [b.changed && plural(b.changed, 'uncommitted change'), b.unique && `${plural(b.unique, 'commit')} not pushed`].filter(Boolean).join(', ');
+      return h('tr',
+        h('td', `🐳 ${b.box}`),
+        h('td', b.name || '–'),
+        h('td', { title: b.root || '' }, (b.root || '–').split(/[\\/]/).pop()),
+        h('td', b.branch || ''),
+        h('td', { className: what ? 'loss' : '' }, what || 'clean'),
+        h('td', subject, when && h('span.hint', ` · ${when}`)),
+        h('td', inst ? h('a', { title: 'Show this instance', onclick: () => goTo(inst.id) }, statusOf(inst).text) : b.running ? 'running, without a session' : 'stopped'),
+        h('td', !inst && b.name && h('button', { title: 'Starts a new Claude Code session in this container, on the clone as it was left.', onclick: () => startInBox(b) }, 'Start a session'), ' ',
+          h('button', { disabled: !!inst, title: inst ? 'A session is open in it. Closing the instance removes its container.' : '', onclick: () => removeBox(b) }, 'Remove')));
+    }))));
+}
+
+async function removeBox(b) {
+  const loss = lossOf({ ...b, box: true });
+  let done;
+  const v = await formDialog(`Remove the container ${b.box}?`, [
+    { type: 'static', label: 'Deletes', value: [b.box, b.name && `with its clone of ${(b.root || '').split(/[\\/]/).pop()}, the session ${b.name}`].filter(Boolean) },
+    { type: 'static', label: 'Lost with it', value: loss ? h('span.loss', loss) : NOTHING_LOST_BOX },
+  ], loss ? 'Remove and discard' : 'Remove', async () => { done = await api.call('removeBox', b.box, !!loss); });
+  if (!v) return;
+  if (done) toast(done.removed ? removedText(done) : keptText(done.kept));
+  loadBoxes();
+}
+
+// A container that was kept holds work that is nowhere else. A new session in it is the way to that work.
+async function startInBox(b) {
+  const v = await formDialog(`Start a session in ${b.box}`, [
+    { type: 'static', label: 'Container', value: `Kept from the session ${b.name}. Its clone is as that session left it.` },
+    ...launchFields(),
+    autonomyField(),
+    { key: 'prompt', label: 'First prompt (optional)', type: 'textarea', rows: 3 },
+  ], 'Start');
+  if (!v) return;
+  savePrefs(v);
+  openWhenReady = await call('spawn', { ...v, box: b.box });
+  show('instances');
+}
+
+// ---------- the first choice ----------
+
+// Asked once, of an owner who has not chosen yet: which of the two ways of working to start with. There is no
+// default to fall back to, so the question stays until one is picked. The header's list changes it later.
+function pickMode() {
+  const dlg = $('#pick');
+  if (state.settings.mode || dlg.open || !state.version) return;   // chosen, already asking, or the first state is not in yet
+  const way = (value, picture, title, text) => h('button.way', { onclick: async () => { await call('setSettings', { mode: value }); dlg.close(); } },
+    h('img', { src: picture, alt: '' }), h('b', title), h('span', text));
+  dlg.replaceChildren(h('h2', 'How should Claude Code sessions work?'), h('div.ways',
+    way('worktree', 'worktrees.svg', 'Worktrees', 'The simplest: every session works in a git worktree of its own, the way Claude Code does natively. The sessions share this computer, so running their apps side by side takes giving each one its own ports.'),
+    way('docker', 'containers.svg', 'Docker containers', 'The best isolation: every session works in a container of its own, so each can run the app and its services on the same ports with nothing to set up. That takes Docker Desktop, and more memory and disk.')),
+  h('div.hint', 'Both stay available. The list at the top of the window changes between them at any time, and each keeps its own sessions.'));
+  dlg.oncancel = e => e.preventDefault();   // Esc
+  dlg.showModal();
 }
 
 // ---------- issues ----------
@@ -877,6 +1017,10 @@ const batchName = picked => { const n = picked.map(i => `#${i.number}`); return 
 async function tackle(picked) {
   // Whatever the order of the list: issues sent together start with the lowest number, the way a plan is numbered.
   picked = picked.slice().sort((a, b) => a.number - b.number);
+  // With containers chosen, each issue's session works in a container of its own, and as many run at once as
+  // there are containers.
+  const box = docker(), most = box ? Math.max(1, (state.docker || {}).limit || 1) : 4;
+  if (box && !(state.docker || {}).ok) return toast('Docker does not answer. Sessions in containers need Docker Desktop to be running.');
   const multi = picked.length > 1;
   const v = await formDialog(multi ? `Tackle ${picked.length} issues` : `Tackle #${picked[0].number}`, [
     { type: 'static', label: multi ? 'Issues' : 'Issue', value: picked.map(i => {
@@ -884,12 +1028,12 @@ async function tackle(picked) {
       return `#${i.number} ${i.title}${open.length ? `  [starts once ${open.join(' ')} is completed]` : i.blocked ? '  [labelled blocked]' : ''}`;
     }) },
     ...launchFields(),
-    multi && { key: 'parallel', label: 'Agents running at once', type: 'number', min: 1, max: 4, value: Math.min(4, picked.length), hint: 'One instance and worktree per issue; the rest queue (max 4).' },
+    multi && { key: 'parallel', label: 'Agents running at once', type: 'number', min: 1, max: most, value: Math.min(most, picked.length), hint: `One instance and ${box ? 'container' : 'worktree'} per issue; the rest queue (max ${most}).` },
     autonomyField(),
     multi && { key: 'group', label: 'Group', type: 'text', list: 'groups', maxLength: 40, required: true, value: batchName(picked),
       hint: 'Issues started together are a group: their cards carry this name and its colour. An existing name adds them to that group.' },
     { key: 'template', label: 'Prompt', type: 'textarea', rows: 3, value: state.repo.template, required: true, hint: PROMPT_HINT + ' This is the default prompt, changed under ⚙; an edit here counts for this start only.' },
-  ], 'Start', v => api.call('dispatch', { ...v, issues: picked.map(i => ({ number: i.number, title: i.title, url: i.url })) }));
+  ], 'Start', v => api.call('dispatch', { ...v, box, issues: picked.map(i => ({ number: i.number, title: i.title, url: i.url })) }));
   if (!v) return;
   savePrefs(v);
   show('instances');
@@ -929,7 +1073,7 @@ function renderPrs() {
         h('td', pr.branch, h('span.hint', ` → ${pr.base}`)),
         h('td', { className: c.state === 'failing' ? 'loss' : c.state === 'passing' ? 'good' : '' }, c.state === 'failing' ? `${c.failing} of ${c.total} failing` : c.state === 'none' ? '–' : c.state),
         h('td', { className: pr.review === 'CHANGES_REQUESTED' ? 'loss' : pr.review === 'APPROVED' ? 'good' : '' }, REVIEWS[pr.review] || '–'),
-        h('td', inst ? [h('a', { title: 'Show this instance', onclick: () => { show('instances'); openDetail(inst.id); } }, statusOf(inst).text), inst.group && [' ', groupChip(inst.group)]] : '–'),
+        h('td', inst ? [h('a', { title: 'Show this instance', onclick: () => goTo(inst.id) }, statusOf(inst).text), inst.group && [' ', groupChip(inst.group)]] : '–'),
         h('td.when', new Date(pr.updatedAt).toLocaleDateString()));
     }))));
 }
@@ -1024,19 +1168,26 @@ async function generate(prompt) {
 // ---------- wiring ----------
 
 function show(view) {
-  for (const v of ['instances', 'worktrees', 'issues', 'prs', 'config']) $(`#view-${v}`).hidden = v !== view;
+  for (const v of ['instances', 'worktrees', 'boxes', 'issues', 'prs', 'config']) $(`#view-${v}`).hidden = v !== view;
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   if (view === 'instances') terms.forEach(layoutSoon);
   if (view === 'worktrees') loadWorktrees();
+  if (view === 'boxes') loadBoxes();
   if (view === 'issues' && issuesFor !== (state.repo && state.repo.path)) loadIssues();
   if (view === 'prs') loadPrs();
   if (view === 'config') loadConfig();
 }
 
 function render() {
+  pickMode();
   renderTop();
+  if (document.querySelector('.tab.active').hidden) show('instances');   // the other way of working was chosen: its tab is not this one
   renderInstances();
   renderWorktrees();                                // who is at work in each one may have changed
+  // The containers the same, and read anew when one has come or gone.
+  const used = (state.docker || {}).used;
+  if (used !== boxesUsed && !$('#view-boxes').hidden) loadBoxes(); else renderBoxes();
+  boxesUsed = used;
   renderPrs();                                      // and on each pull request
   const p = state.repo && state.repo.path;
   if (p === shownRepo) return;
@@ -1050,8 +1201,10 @@ function render() {
 document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => show(b.dataset.view)));
 $('#btn-new').onclick = () => newInstance(false);
 $('#btn-worktree').onclick = () => newInstance(true);
-$('#btn-resume-all').onclick = async () => { for (const r of state.resumable.slice()) await call('resume', r.id); };
+$('#btn-resume-all').onclick = async () => { for (const r of state.resumable.filter(inMode)) await call('resume', r.id); };
 $('#btn-refresh-worktrees').onclick = loadWorktrees;
+$('#btn-refresh-boxes').onclick = loadBoxes;
+$('#mode').onchange = e => call('setSettings', { mode: e.target.value });
 $('#btn-refresh-prs').onclick = loadPrs;
 $('#btn-bell').onclick = e => { e.stopPropagation(); if ($('#notes').hidden) openNotes(); else $('#notes').hidden = true; };
 $('#btn-update').onclick = updateClaude;
@@ -1086,6 +1239,8 @@ $('#btn-settings').onclick = async () => {
     { key: 'cpuShare', label: 'Share the CPU between instances by weight', type: 'checkbox', value: state.settings.cpuShare,
       hint: 'When instances compete, each gets CPU in proportion to its weight (set per instance in its detail view). An instance that needs less leaves the rest to the others.' },
     { type: 'static', label: 'Enforced by', value: CPU_MECHANISMS[state.cpuMechanism] || `Not available here${state.cpuError ? `: ${state.cpuError}` : ''}.` },
+    { key: 'boxPorts', label: 'Ports of a container to reach from this computer', type: 'text', value: state.settings.boxPorts, placeholder: 'none', pattern: '[0-9, ]*',
+      hint: 'For sessions in Docker containers. Inside, every container has the same ports. Each port named here gets a port of its own on this computer, shown in the instance\'s detail view, so that what a session runs can be opened in the browser. It counts for containers made from now on.' },
   ], 'Save', v => api.call('setSettings', v));
 };
 

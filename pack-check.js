@@ -4,6 +4,8 @@
 //   - the terminal library loads from the package, with the helper programs it ships
 //   - the app comes up, shows its version and opens a folder
 //   - the Diff tab's syntax colours: the highlighter and its style sheet are packages of their own
+//   - what sessions in containers need from the package: the recipe of their image, and the two pictures of the
+//     question a first start asks. No container is made here.
 //   - on macOS and Linux: an instance runs in a terminal. A stand-in plays Claude Code, so nothing here touches
 //     the subscription. On Windows node-pty needs a real .exe, so that part is tried by hand with the real one.
 // The executable is claudinho.exe, claudinho.app/Contents/MacOS/claudinho, or the AppImage file.
@@ -112,6 +114,9 @@ async function asApp() {
     const runs = await ev(`api.call('diffColours', 'a.js', [{ header: '@@ -0,0 +1 @@', lines: [{ type: '+', new: 1, text: 'const a = 1;' }] }])`);
     const colour = await ev(`(() => { const s = document.body.appendChild(Object.assign(document.createElement('span'), { className: 'hljs-keyword' })); const c = getComputedStyle(s).color; s.remove(); return c; })()`);
     report(JSON.stringify(runs[0][0]) === '["hljs-keyword","const"]' && colour === 'rgb(255, 123, 114)', 'colours a diff', `${JSON.stringify(runs[0].slice(0, 2))}, a keyword in ${colour}`);
+    // A fresh data folder has no way of working chosen yet, so the question is on screen with its two pictures.
+    const pictures = await ev(`new Promise(done => { let n = 0; const look = () => { const i = [...document.querySelectorAll('#pick img')]; if ((i.length === 2 && i.every(x => x.complete)) || ++n > 40) done(i.map(x => x.getAttribute('src') + ' ' + x.naturalWidth)); else setTimeout(look, 250); }; look(); })`);
+    report(state.docker.recipe === true && pictures.length === 2 && pictures.every(p => !p.endsWith(' 0')), 'has what containers need', `recipe ${state.docker.recipe}, pictures ${JSON.stringify(pictures)}`);
 
     if (!WIN) {
       const id = await ev(`api.call('spawn', { level: 'manual' })`);

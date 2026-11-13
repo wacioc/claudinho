@@ -10,6 +10,7 @@ const pty = require('node-pty');
 const { autoUpdater } = require('electron-updater');
 const lib = require('./lib');
 const cpu = require('./cpu');
+const boxes = require('./containers');
 
 // A GUI launch on macOS/Linux does not inherit the login shell's PATH, so claude/gh/git would not be found.
 if (process.platform !== 'win32') {
@@ -37,9 +38,10 @@ const runInput = (cmd, args, input, opts) => new Promise((resolve, reject) => {
   child.stdin.end(input);
 });
 
-function findClaude() {
+// Where a program is: `claude`, and `docker` for the sessions that run in containers.
+function findExe(name) {
   try {
-    const found = execFileSync(process.platform === 'win32' ? 'where.exe' : 'which', ['claude'], { encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
+    const found = execFileSync(process.platform === 'win32' ? 'where.exe' : 'which', [name], { encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
     // ponytail: node-pty starts real executables only, so on Windows this needs claude.exe (the native
     // install); an npm .cmd shim is not supported. Add a cmd.exe wrapper with argument escaping if needed.
     return process.platform === 'win32' ? found.find(f => /\.exe$/i.test(f)) : found[0];
@@ -50,7 +52,9 @@ function findClaude() {
 
 const dataDir = app.getPath('userData');
 const stateFile = path.join(dataDir, 'state.json');
-let saved = { repoPath: null, usage: null, templates: {}, sessions: [], settings: { mergeMethod: 'squash', timedMinutes: 5, cpuCeiling: 100, cpuShare: false } };
+// settings.mode: 'worktree' or 'docker', where sessions are started (see spawnInstance). Not there until the
+// owner has picked one, which the window asks for.
+let saved = { repoPath: null, usage: null, templates: {}, sessions: [], settings: { mergeMethod: 'squash', timedMinutes: 5, cpuCeiling: 100, cpuShare: false, boxPorts: '3000, 5173, 8000, 8080' } };
 try {
   const s = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   saved = { ...saved, ...s, settings: { ...saved.settings, ...s.settings } };
@@ -69,7 +73,7 @@ const save = () => {
   written = text;
 };
 
-let win, claudeBin, hookPort;
+let win, claudeBin, dockerBin, hookPort;
 const hookToken = crypto.randomBytes(16).toString('hex');
 let repo = null;          // the folder the app is pointed at
 let account = null;       // `claude auth status`
@@ -88,7 +92,13 @@ const procUsage = new Map();   // root pid -> CPU and memory of that session's p
 const send = (channel, ...args) => { if (win && !win.isDestroyed()) win.webContents.send(channel, ...args); };
 let pushTimer;
 const push = () => { clearTimeout(pushTimer); pushTimer = setTimeout(() => send('state', snapshot()), 30); };
-const sessionOf = inst => sessions.find(s => s.pid === inst.pid);
+// A session in a container is not on that list: its own container is asked (see pollBox).
+const sessionOf = inst => (inst.box ? inst.boxSession : sessions.find(s => s.pid === inst.pid));
+// Where on this computer `gh` is run for a session. One in a container has no folder here: its `cwd` is a path
+// inside the container, and GitHub is asked from the folder it was cloned from.
+const hostDir = inst => (inst.box ? inst.root : inst.cwd);
+// A card's title: for a session in a container its own name, else the worktree's or the folder's (lib.labelFor).
+const labelOf = (inst, worktrees) => (inst.box ? { worktree: null, label: inst.name } : lib.labelFor(inst.root, inst.cwd, worktrees));
 const configDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {}; } };
 
@@ -108,25 +118,29 @@ function snapshot() {
   const worktrees = repo ? repo.worktrees : [];
   return {
     version: app.getVersion(), claudeFound: !!claudeBin, repo, account, usage: saved.usage, settings: saved.settings, cores: CORES,
-    cpuMechanism: cpu.mechanism, cpuError: cpu.error,
+    cpuMechanism: cpu.mechanism, cpuError: cpu.error, docker: { ...dock, boxCpus: lib.BOX_CPUS, boxGb: lib.BOX_MEMORY_GB, recipe: boxes.recipe },
     notifications: notifications.slice(-100),
     // latest: only when it is newer than what is installed
     claude: { version: claudeCode.version, latest: lib.newerVersion(claudeCode.latest, claudeCode.version) ? claudeCode.latest : null, updating: claudeCode.updating },
     update: selfUpdate.latest ? { ...selfUpdate } : null,   // a newer release of the app itself
     // Not the ones whose conversation is live again somewhere (resumed by hand in a terminal, say).
     resumable: interrupted.filter(r => !sessions.some(s => s.sessionId && s.sessionId === r.sessionId)).map(r => ({
-      id: r.id, label: r.worktree || path.basename(r.root), worktree: r.worktree, dir: r.worktree ? path.join(r.root, '.claude', 'worktrees', r.worktree) : r.root,
+      id: r.id, label: r.box ? r.name : r.worktree || path.basename(r.root), worktree: r.worktree, box: !!r.box,
+      dir: r.box ? r.box.name || 'a container' : r.worktree ? path.join(r.root, '.claude', 'worktrees', r.worktree) : r.root,
       issue: r.issue, issueUrl: issueLink(r), model: r.model, effort: r.effort, level: r.level, autonomy: lib.autonomyOf(r), group: r.group || null, savedAt: r.savedAt,
-      conversation: !!r.transcript && fs.existsSync(r.transcript),
+      // A conversation in a container is in a volume, which is not looked into from here: startBox does.
+      conversation: r.box ? !!r.sessionId : !!r.transcript && fs.existsSync(r.transcript),
     })),
     instances: [...instances.values()].map(i => {
       const s = sessionOf(i) || {};
       return {
         id: i.id, kind: i.kind, issue: i.issue, issueUrl: issueLink(i), model: i.model, effort: i.effort, level: i.level, autonomy: i.autonomy, untold: untold(i),
-        startedAt: i.startedAt, exited: i.exited, exitCode: i.exitCode, cwd: i.cwd, ...lib.labelFor(i.root, i.cwd, worktrees),
+        startedAt: i.startedAt, exited: i.exited, exitCode: i.exitCode, cwd: i.cwd, ...labelOf(i, worktrees),
+        // Its container: the number, and the ports of it that have a port on this computer.
+        box: i.box && { name: i.box.name, n: boxes.numberOf(i.box.name), ports: i.ports || [] },
         status: i.status, session: { status: s.status || s.state, waitingFor: s.waitingFor, name: s.name },
-        pending: i.pending.map(p => p.view), pr: i.pr, merge: i.merge, procs: i.exited ? undefined : procUsage.get(i.pid),
-        weight: i.weight, limit: i.limited && !i.exited ? cpu.limit(i.id) : 1, group: i.group, starting: i.starting && !i.exited,
+        pending: i.pending.map(p => p.view), pr: i.pr, merge: i.merge, procs: i.exited ? undefined : i.box ? i.usage : procUsage.get(i.pid),
+        weight: i.weight, limit: i.box ? lib.BOX_CPUS / CORES : i.limited && !i.exited ? cpu.limit(i.id) : 1, group: i.group, starting: i.starting && !i.exited,
         done: i.done && !i.exited, background: i.exited ? null : i.background, auditRev: i.auditRev,
       };
     }),
@@ -134,7 +148,7 @@ function snapshot() {
       id: s.id || String(s.pid), name: s.name, kind: s.kind, cwd: s.cwd, startedAt: s.startedAt, status: s.status || s.state,
       waitingFor: s.waitingFor, procs: procUsage.get(s.pid), ...lib.labelFor(repo.path, s.cwd, worktrees),
     })),
-    queue: queue.map(j => ({ number: j.number, title: j.title, waitingOn: j.waitingOn, group: j.group })),
+    queue: queue.map(j => ({ number: j.number, title: j.title, waitingOn: j.waitingOn, group: j.group, box: !!j.box })),
   };
 }
 
@@ -148,32 +162,43 @@ function userStatusLine() { return readJson(path.join(configDir(), 'settings.jso
 // autonomy: who merges its pull request (see lib.AUTONOMY). autoMerge: what an older record has in its place.
 // mayMerge: the session has been told that it may merge its pull request itself (see mergeNote).
 // issue, issueUrl: the number of the issue it was sent after, and that issue's page on GitHub.
-function spawnInstance({ cwd, worktree, resume, transcript, model, effort, prompt, level = 'manual', autonomy, autoMerge, mayMerge = false, kind = 'instance', issue = null, issueUrl = null, pooled = false, weight = 'normal', group = null, audit = [] }) {
+// box: the session works in a Docker container instead of a worktree (see containers.js). `true` asks for a
+// new one, which `worktree` then names, as it names its branch. { name, key, work } is a container that
+// exists: of a session that is resumed, or one that was kept when its card was closed.
+function spawnInstance({ cwd, worktree, box = null, resume, transcript, model, effort, prompt, level = 'manual', autonomy, autoMerge, mayMerge = false, kind = 'instance', issue = null, issueUrl = null, pooled = false, weight = 'normal', group = null, audit = [] }) {
   if (!claudeBin) throw new Error('Claude Code CLI (claude) was not found on PATH.');
   const root = cwd || repo.path;
   const id = crypto.randomBytes(4).toString('hex');
-  if (worktree === true) worktree = `wt-${id}`;
-  const wt = worktree ? path.join(root, '.claude', 'worktrees', worktree) : null;   // where `claude -w` puts it
-  const dir = path.join(dataDir, 'instances', id);
+  if (worktree === true) worktree = `${box ? 'box' : 'wt'}-${id}`;
+  if (box === true) box = { name: null, key: id, work: lib.boxWork(path.basename(root)) };
+  const wt = worktree && !box ? path.join(root, '.claude', 'worktrees', worktree) : null;   // where `claude -w` puts it
+  // A container sees its instance's folder as /claudinho. The container outlives the app, so its folder goes
+  // by a key that stays when the session is resumed, and is kept for as long as the container is.
+  const dir = box ? path.join(dataDir, 'boxes', box.key) : path.join(dataDir, 'instances', id);
   fs.mkdirSync(dir, { recursive: true });
   const settingsFile = path.join(dir, 'settings.json'), statusFile = path.join(dir, 'status.json');
-  fs.writeFileSync(settingsFile, JSON.stringify(lib.instanceSettings({
-    statusFile, hookUrl: `http://127.0.0.1:${hookPort}/${hookToken}/${id}`, userStatusLine: userStatusLine(),
-  })));
+  fs.rmSync(statusFile, { force: true });   // in a container's folder: what the session before this one left
+  fs.writeFileSync(settingsFile, JSON.stringify(lib.instanceSettings(box
+    ? { statusFile: '/claudinho/status.json', hookUrl: `http://host.docker.internal:${hookPort}/${hookToken}/${id}`, userStatusLine: userStatusLine(), curl: true }
+    : { statusFile, hookUrl: `http://127.0.0.1:${hookPort}/${hookToken}/${id}`, userStatusLine: userStatusLine() })));
   const env = lib.childEnv(process.env);
   const limits = { ceiling: saved.settings.cpuCeiling / 100, weight: lib.WEIGHTS[weight] };
-  const [file, args] = cpu.command(id, claudeBin, lib.claudeArgs({ settingsFile, model, effort, worktree, prompt, resume }), limits);
-  // A new session is taken into its worktree by `claude -w`; a resumed one is started inside it.
-  const proc = pty.spawn(file, args, { name: 'xterm-256color', cols: 110, rows: 30, cwd: resume && wt ? wt : root, env });
-  // On Windows this puts the new process into its job before it can start anything of its own.
-  const limited = cpu.attach(id, proc.pid, limits);
+  let proc = null, limited = false;
+  if (!box) {
+    const [file, args] = cpu.command(id, claudeBin, lib.claudeArgs({ settingsFile, model, effort, worktree, prompt, resume }), limits);
+    // A new session is taken into its worktree by `claude -w`; a resumed one is started inside it.
+    proc = pty.spawn(file, args, { name: 'xterm-256color', cols: 110, rows: 30, cwd: resume && wt ? wt : root, env });
+    // On Windows this puts the new process into its job before it can start anything of its own.
+    limited = cpu.attach(id, proc.pid, limits);
+  }
   const inst = {
     id, kind, issue, issueUrl, pooled, model, effort, level, autonomy: lib.autonomyOf({ autonomy, autoMerge }), mayMerge: !!mayMerge,
-    root, wt, prompt, proc, env, dir, statusFile, pid: proc.pid, startedAt: Date.now(),
-    cwd: wt || root, sessionId: resume || null, transcript: transcript || null, group: lib.groupName(group),
+    root, wt, box, name: box ? worktree : null, prompt, proc, env, dir, statusFile, pid: proc && proc.pid, startedAt: Date.now(),
+    cwd: box ? box.work : wt || root, sessionId: resume || null, transcript: transcript || null, group: lib.groupName(group),
     // A new worktree with a first prompt: until that prompt has gone in, the session is still running its
-    // SessionStart hooks, where a repository sets a fresh worktree up (see onHook and pump).
-    starting: !!(wt && prompt && !resume),
+    // SessionStart hooks, where a repository sets a fresh worktree up (see onHook and pump). A new container
+    // the same, from the moment it is asked for.
+    starting: !!((wt || box) && prompt && !resume),
     // done: its last turn has ended with nothing it started still running, and no prompt has gone in since.
     // background: what was still running when its last turn ended (see onStop). audit: every input request (see onHook).
     done: false, background: null, audit: Array.isArray(audit) ? audit : [], auditRev: 0,
@@ -183,16 +208,163 @@ function spawnInstance({ cwd, worktree, resume, transcript, model, effort, promp
     said: null, asked: [], lastPrompt: null, reviewing: null,
   };
   instances.set(id, inst);
-  proc.onData(d => send('pty-data', id, d));
-  proc.onExit(({ exitCode }) => {
-    inst.exited = true; inst.exitCode = exitCode; inst.exitedAt = Date.now();
-    inst.pending.slice().forEach(p => p.settle('terminal'));
-    cpu.detach(id);
-    push(); pump();
-  });
+  if (proc) attach(inst, proc); else startBox(inst, { model, effort, prompt, resume });
+  if (resume) lookForPr(inst);   // its branch may have had a pull request for days
   saveSessions(); push();
   syncSampler();
   return id;
+}
+
+// An instance's terminal: what it prints goes to its card, and when it ends the instance has ended.
+function attach(inst, proc) {
+  inst.proc = proc; inst.pid = proc.pid;
+  proc.onData(d => send('pty-data', inst.id, d));
+  proc.onExit(({ exitCode }) => {
+    inst.exited = true; inst.exitCode = exitCode; inst.exitedAt = Date.now();
+    inst.pending.slice().forEach(p => p.settle('terminal'));
+    cpu.detach(inst.id);
+    push(); pump();
+  });
+}
+
+// ---------- sessions in containers ----------
+
+// Docker, as the window shows it: whether it answers, and how many containers there may be and are.
+const dock = { ok: null, error: null, limit: 0, used: 0, building: null, at: 0 };
+async function checkDocker() {
+  dock.at = Date.now();
+  try { Object.assign(dock, await boxes.info(), { ok: true, error: null }); dock.used = (await boxes.list()).length; }
+  catch (e) { Object.assign(dock, { ok: false, error: dockerBin ? e.message.split('\n')[0] : 'Docker was not found on PATH.' }); }
+  push();
+}
+// Whether a container is still to be had. Without an answer from Docker: no.
+const freeBox = () => Promise.all([boxes.info(), boxes.list()]).then(([d, rows]) => rows.length < d.limit, () => false);
+
+// One container is made at a time, so that no two sessions take the same number.
+let boxLine = Promise.resolve();
+function makeBox(inst, image) {
+  const made = boxLine.then(async () => {
+    const { limit } = await boxes.info();
+    const n = lib.freeSlot((await boxes.list()).map(r => r.n), limit);
+    if (!n) throw new Error(`All ${limit} containers are taken. Close a session, or remove a container that was kept: they are on the Containers tab.`);
+    return boxes.create({ n, image, root: inst.root, name: inst.name, work: inst.box.work, key: inst.box.key, dir: inst.dir, ports: lib.portList(saved.settings.boxPorts) });
+  });
+  boxLine = made.catch(() => {});
+  return made;
+}
+
+// A session in a container. The container is made and filled, or started again where the session has one
+// already, and then Claude Code is started in it, in the card's terminal. Until then the card says what is
+// going on, and why it failed if it did.
+async function startBox(inst, { model, effort, prompt, resume }) {
+  const b = inst.box, id = inst.id;
+  const say = text => send('pty-data', id, `\x1b[2m${text}\x1b[0m\r\n`);
+  const open = () => instances.get(id) === inst;   // its card has not been closed meanwhile
+  const term = argv => pty.spawn(dockerBin, argv, { name: 'xterm-256color', cols: inst.cols || 110, rows: inst.rows || 30, cwd: inst.root, env: { ...inst.env, DOCKER_CLI_HINTS: 'false' } });
+  // Started again from its first prompt, a session knows of merging what that prompt says (see rpc.resume).
+  const again = () => { resume = undefined; inst.sessionId = null; inst.mayMerge = lib.toldToMerge(prompt); inst.starting = !!prompt; };
+  try {
+    if (!dockerBin) throw new Error('Docker was not found on PATH. Sessions in containers need Docker Desktop.');
+    if (b.name && !await boxes.exists(b.name)) {
+      say(`${b.name} is gone, and what was in it. This session starts again in a new container.`);
+      b.name = null; again();
+    }
+    if (b.name) {
+      await boxes.start(b.name);
+      await boxes.ready(b.name);
+      // The terminal on this side ending does not end Claude Code inside (measured with Docker 29.9): after a
+      // crash of the app the session before this one may still be running there.
+      await boxes.inBox(b.name, ['pkill', '-x', 'claude']).catch(() => { /* none was */ });
+      if (resume && !await boxes.inBox(b.name, ['test', '-f', inst.transcript || '/nowhere']).then(() => true, () => false)) again();   // Claude Code had saved no conversation yet
+    } else {
+      const github = lib.parseGitHub(await git(['remote', 'get-url', 'origin'], inst.root).catch(() => ''));
+      if (!github) throw new Error('This folder has no GitHub remote. A session in a container works on a clone of the folder, and its work leaves the container by `git push`.');
+      say('Getting a container ready…');
+      const image = await boxes.image(claudeCode.version || 'latest', line => { dock.building = line; say(line); push(); }).finally(() => { dock.building = null; push(); });
+      inst.fresh = true;   // until its session has started, nothing in it is worth keeping (see closeBox)
+      b.name = await makeBox(inst, image);
+      if (!open()) { await boxes.remove(b.name).catch(() => {}); return; }   // closed before it had a container to close
+      saveSessions(); checkDocker();
+      await boxes.ready(b.name);
+      if (!await boxes.signedIn(b.name)) {
+        say('GitHub has no login in the containers yet. Sign in here, once for all of them: press Enter, open the address it then shows in your browser, and type the code in there.');
+        await new Promise(resolve => {
+          inst.proc = term(boxes.terminal(b.name, null, ['gh', 'auth', 'login', '--hostname', 'github.com', '--git-protocol', 'https', '--web']));
+          inst.proc.onData(d => send('pty-data', id, d));
+          inst.proc.onExit(() => { inst.proc = null; resolve(); });
+        });
+      }
+      const identity = [];
+      for (const key of ['user.name', 'user.email']) { const v = await git(['config', key], inst.root).catch(() => ''); if (v) identity.push([key, v]); }
+      await boxes.fill(b.name, { root: inst.root, work: b.work, branch: inst.name, origin: `https://github.com/${github.owner}/${github.name}.git`, identity, configDir: configDir(), say });
+    }
+    inst.ports = await boxes.ports(b.name);
+    if (!open()) return;
+    inst.fresh = false;
+    attach(inst, term(boxes.terminal(b.name, b.work, ['claude', ...lib.claudeArgs({ settingsFile: '/claudinho/settings.json', model, effort, prompt, resume })])));
+    push();
+  } catch (e) {
+    if (!open()) return;   // closed while it was being set up: closeBox has dealt with the container
+    send('pty-data', id, `\x1b[31m${e.message}\x1b[0m\r\n`);
+    inst.exited = true; inst.exitCode = 1; inst.exitedAt = Date.now(); inst.starting = false;
+    push(); pump();
+  }
+}
+
+// A session in a container is not on this computer's list of sessions: its own container is asked, and at the
+// same time which branch its clone is on, for the pull request that goes with it.
+async function pollBox(inst) {
+  let out;
+  try { out = await boxes.inBox(inst.box.name, ['sh', '-c', 'git branch --show-current 2>/dev/null; claude agents --json'], { cwd: inst.box.work, timeout: 10000 }); } catch { return; }   // keep what was read last
+  const at = out.indexOf('[');   // a branch's name cannot hold one
+  let list = [];
+  try { list = JSON.parse(out.slice(at)); } catch { return; }
+  inst.boxSession = list.find(s => s.sessionId && s.sessionId === inst.sessionId) || list.find(s => s.cwd === inst.box.work) || list[0] || null;
+  const branch = out.slice(0, at).trim() || null;
+  if (branch !== inst.branch) { inst.branch = branch; inst.prLooked = 0; lookForPr(inst); }
+}
+
+// CPU and memory of the containers, for the cards. `docker stats` takes two seconds to answer.
+let sampling = false;
+async function sampleBoxes() {
+  const live = [...instances.values()].filter(i => i.box && i.pid && !i.exited);
+  if (sampling || !live.length) return;
+  sampling = true;
+  try {
+    const stats = await boxes.stats(live.map(i => i.box.name));
+    for (const i of live) {
+      const u = stats.get(i.box.name);
+      if (u) i.usage = { cpu: u.cpus / CORES, mem: u.mem, memLimit: u.memLimit, count: u.count, top: [], more: 0, hist: [...((i.usage || {}).hist || []), u.cpus / CORES].slice(-20) };
+    }
+    push();
+  } catch { /* Docker did not answer: the cards keep the last reading */ }
+  sampling = false;
+}
+
+// The folder under the app's data that a container sees as /claudinho. The key is read from the container's
+// label, which is not the app's own word: only what the app writes there is taken for a folder's name.
+const boxDir = key => (/^[0-9a-f]{8}$/.test(key || '') ? path.join(dataDir, 'boxes', key) : null);
+// What a container's clone holds that is nowhere else. r: a row of boxes.list(). Nothing is known of a
+// container that is stopped and has no record, or that this app did not make.
+async function boxHeld(r) {
+  if (r.running && r.work) return boxes.state(r.box, r.work);
+  const { branch, changed, unique, last, error } = boxDir(r.key) ? readJson(path.join(boxDir(r.key), 'kept.json')) : {};
+  return { branch, changed, unique, last, error };
+}
+
+// Closing a session in a container, with `remove` as for a worktree. A container that is not removed is stopped:
+// it keeps what is in it, runs nothing, and is on the Containers tab with what it held when it was stopped.
+// Returns { removed, name, box }, or { kept: row } when removing it was not safe.
+async function closeBox(inst, remove) {
+  const b = inst.box;
+  if (!b.name) return;   // not made yet: startBox removes it as soon as it is
+  const gone = () => { fs.rmSync(inst.dir, { recursive: true, force: true }); return { removed: true, name: inst.name, box: b.name }; };
+  if (inst.fresh) { await boxes.remove(b.name); return gone(); }   // still being filled: nothing of the session's is in it
+  const row = { name: inst.name, box: b.name, ...await boxes.state(b.name, b.work) };
+  if (remove === 'force' || (remove && !row.error && !row.changed && !row.unique)) { await boxes.remove(b.name); return gone(); }
+  await boxes.stop([b.name]);
+  fs.writeFileSync(path.join(inst.dir, 'kept.json'), JSON.stringify(row));
+  return remove ? { kept: row } : undefined;
 }
 
 // remove: 'safe' also removes the instance's worktree if nothing in it would be lost; 'force' removes it
@@ -201,8 +373,9 @@ async function closeInstance(id, remove) {
   const inst = instances.get(id);
   if (!inst) return;
   instances.delete(id);
-  const gone = inst.exited ? null : new Promise(resolve => { inst.proc.onExit(resolve); setTimeout(resolve, 5000); });
+  const gone = inst.exited || !inst.proc ? null : new Promise(resolve => { inst.proc.onExit(resolve); setTimeout(resolve, 5000); });
   if (gone) { try { inst.proc.kill(); } catch { /* already gone */ } }
+  if (inst.box) { saveSessions(); push(); return closeBox(inst, remove).finally(() => { checkDocker(); pump(); }); }   // a queued issue may be waiting for its container
   // With its worktree going too, nothing the instance started may stay behind in it (see cpu.stop). What serves
   // the whole machine is left running all the same (see lib.sparedPids), and named should it hold the folder.
   const procs = lastProcs || new Map();
@@ -229,7 +402,7 @@ function readStatus(inst) {
     cost: cost.total_cost_usd, added: cost.total_lines_added, removed: cost.total_lines_removed,
     ctxPct: cw.used_percentage, ctxSize: cw.context_window_size,
     ctxTokens: (cu.input_tokens || 0) + (cu.cache_creation_input_tokens || 0) + (cu.cache_read_input_tokens || 0),
-    branch: st.worktree && st.worktree.branch,
+    branch: inst.box ? inst.branch : st.worktree && st.worktree.branch,
   };
   // The conversation this instance is in now (it changes with /clear and /resume), and where Claude Code keeps it.
   if (st.session_id) { inst.sessionId = st.session_id; inst.transcript = st.transcript_path || null; }
@@ -251,7 +424,10 @@ function dropAnswered(inst) {
 
 async function tick() {
   if (claudeBin) { try { sessions = JSON.parse(await run(claudeBin, ['agents', '--json'])); } catch { /* keep the last list */ } }
+  await Promise.all([...instances.values()].filter(i => i.box && i.pid && !i.exited).map(pollBox));
   for (const inst of instances.values()) if (!inst.exited) { readStatus(inst); dropAnswered(inst); }
+  sampleBoxes();
+  if (saved.settings.mode === 'docker' && Date.now() - dock.at > 15000) checkDocker();
   push();
   syncSampler();
   // `claude agents` costs a process start each time: ease off when nothing runs here and nobody is looking.
@@ -265,7 +441,7 @@ async function tick() {
 // on top of that: which instances were open, where, and with which settings. That is written out every ten
 // seconds, and whenever an instance comes or goes.
 const sessionRecord = i => ({
-  id: i.id, root: i.root, worktree: i.wt && path.basename(i.wt), kind: i.kind, issue: i.issue, issueUrl: i.issueUrl, pooled: i.pooled, model: i.model, effort: i.effort,
+  id: i.id, root: i.root, worktree: i.wt && path.basename(i.wt), box: i.box, name: i.name, kind: i.kind, issue: i.issue, issueUrl: i.issueUrl, pooled: i.pooled, model: i.model, effort: i.effort,
   level: i.level, autonomy: i.autonomy, mayMerge: i.mayMerge, weight: i.weight, group: i.group, prompt: i.prompt, sessionId: i.sessionId, transcript: i.transcript, savedAt: Date.now(),
   audit: i.audit,
 });
@@ -285,7 +461,7 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { re
 
 // Sessions at work inside a folder: this app's instances and every other live Claude Code session.
 function sessionsIn(dir, skipPid) {
-  const all = [...[...instances.values()].filter(i => !i.exited), ...sessions];
+  const all = [...[...instances.values()].filter(i => !i.exited && !i.box), ...sessions];   // a container's paths are not this computer's
   return all.filter(s => s.pid && s.pid !== skipPid && s.cwd && lib.isInside(dir, s.cwd) && alive(s.pid));
 }
 
@@ -340,7 +516,7 @@ let sampler = null, samplerFailed = false, lastProcs = null, lastSampleAt = 0;
 function onSample(lines) {
   const now = Date.now(), procs = lib.parseProcs(lines);
   const seconds = lastProcs ? (now - lastSampleAt) / 1000 : 0;
-  const mine = new Map([...instances.values()].filter(i => !i.exited).map(i => [i.pid, i.id]));
+  const mine = new Map([...instances.values()].filter(i => !i.exited && !i.box).map(i => [i.pid, i.id]));   // a container is measured by Docker (see sampleBoxes)
   const roots = [...mine.keys()].concat(externalSessions().map(s => s.pid).filter(Boolean));
   for (const pid of roots) {
     const u = lib.treeUsage(procs, pid, lastProcs, seconds);
@@ -365,13 +541,13 @@ function onSample(lines) {
 // CPU ceiling and weighted sharing (see cpu.js): once a second, and with each process listing.
 const cpuSettings = () => ({ ceiling: saved.settings.cpuCeiling / 100, share: saved.settings.cpuShare });
 function balanceCpu(listing) {
-  cpu.balance(cpuSettings(), new Map([...instances.values()].filter(i => !i.exited).map(i => [i.id, lib.WEIGHTS[i.weight]])), listing === true);
+  cpu.balance(cpuSettings(), new Map([...instances.values()].filter(i => !i.exited && !i.box).map(i => [i.id, lib.WEIGHTS[i.weight]])), listing === true);
 }
 setInterval(balanceCpu, 1000);
 
 // The lister (see lib.samplerCommand) runs only while there is a session to measure.
 function syncSampler() {
-  const wanted = [...instances.values()].some(i => !i.exited) || externalSessions().length > 0;
+  const wanted = [...instances.values()].some(i => !i.exited && !i.box) || externalSessions().length > 0;
   if (!wanted) { if (sampler) sampler.kill(); return; }
   if (sampler || samplerFailed) return;
   const [cmd, args] = lib.samplerCommand(process.platform, process.pid);
@@ -400,6 +576,7 @@ function startHookServer() {
       // Every tool call of the session reports here when it has run (see lib.instanceSettings). Its body, which
       // holds the tool's whole result, is only worth reading while an input request is still without an answer,
       // or while the session is owed a note (see mergeNote).
+      if (tail === 'after') lookForPr(inst);
       if (tail === 'after' && !inst.audit.some(e => !e.picked) && !untold(inst)) { req.resume(); res.writeHead(200); return res.end(); }
       let body = '';
       req.on('data', c => { body += c; });
@@ -539,7 +716,7 @@ function closeAudit(inst) {
 function notify(kind, text, inst) {
   notifications.push({
     id: crypto.randomBytes(4).toString('hex'), at: Date.now(), kind, text, seen: false,
-    inst: inst ? inst.id : null, label: inst ? lib.labelFor(inst.root, inst.cwd, repo ? repo.worktrees : []).label : null,
+    inst: inst ? inst.id : null, label: inst ? labelOf(inst, repo ? repo.worktrees : []).label : null,
   });
   notifications.splice(0, Math.max(0, notifications.length - 200));
   push();
@@ -582,11 +759,25 @@ async function checkPr(inst, gone, canAsk) {
 // still a draft, and whether it is open, merged or closed. Null when the branch has none.
 async function readPr(inst) {
   let pr = null;
-  try { pr = JSON.parse(await run('gh', ['pr', 'view', '--json', 'number,state,url,isDraft,title,body,additions,deletions'], inst.cwd, GH_WAIT)); } catch { /* no PR on this branch */ }
+  // gh reads the branch from the folder. A session in a container has no folder here, so its branch is named.
+  if (inst.box && !inst.branch) return null;   // its container has not said yet which one it is on
+  try { pr = JSON.parse(await run('gh', ['pr', 'view', ...(inst.box ? [inst.branch] : []), '--json', 'number,state,url,isDraft,title,body,additions,deletions'], hostDir(inst), GH_WAIT)); } catch { /* no PR on this branch */ }
   if (!pr) return null;
   inst.pr = { number: pr.number, url: pr.url, draft: !!pr.isDraft, state: pr.state };
   if (pr.state === 'MERGED' && !/^merged/.test(inst.merge || '')) inst.merge = 'merged';
   return pr;
+}
+
+// A card has its pull request button once the pull request is known, and readPr is otherwise asked only when a
+// turn ends or the Diff tab is opened. So a session that is resumed, which starts without a turn, is looked
+// up when it starts, and one at work whenever a tool call of its has run: its pull request may just have been
+// opened, turns before its turn ends.
+// ponytail: one look in half a minute per session, and none once a pull request is known: what becomes of it later
+// (merged or closed on GitHub) shows when the next turn ends. Look on a timer if a card must follow that too.
+function lookForPr(inst) {
+  if (inst.pr || inst.exited || Date.now() - (inst.prLooked || 0) < 30000) return;
+  inst.prLooked = Date.now();
+  readPr(inst).then(pr => { if (pr) push(); });
 }
 
 // What a session's folder holds beyond the default branch, for a branch that has no pull request yet: the
@@ -599,8 +790,9 @@ async function readPr(inst) {
 // repository's default is called something else and its clone does not say so.
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';   // git's name for a folder with nothing in it
 const NEW_FILES = 200, NEW_FILE_BYTES = 1024 * 1024, NEW_BYTES = 8 * 1024 * 1024;   // unknown files: how many are listed, how large a one is read, and how much in all
-async function localDiff(dir) {
-  const git = args => run('git', ['-c', 'core.quotePath=false', ...args], dir, 30000);
+// box: the folder is inside that container, and git and the files are read there.
+async function localDiff(dir, box) {
+  const git = args => (box ? boxes.inBox(box, ['git', '-c', 'core.quotePath=false', ...args], { cwd: dir, timeout: 30000 }) : run('git', ['-c', 'core.quotePath=false', ...args], dir, 30000));
   const has = ref => git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).then(() => true, () => false);
   if (!await git(['rev-parse', '--is-inside-work-tree']).then(s => s.trim() === 'true', () => false)) return { local: true, git: false, additions: 0, deletions: 0, files: [] };
   // against: what the folder is compared with. A branch's name, 'HEAD' where no default branch was found (then
@@ -622,6 +814,15 @@ async function localDiff(dir) {
   let read = 0;
   for (const f of others.slice(0, NEW_FILES)) {
     let buf = null;
+    // ponytail: one `docker exec` for each unknown file of a container, a tenth of a second apiece. Read them
+    // in one go, as a tar, if sessions leave hundreds.
+    if (box) {
+      if (read < NEW_BYTES) buf = await boxes.inBox(box, ['sh', '-c', `[ -f "$1" ] || exit 3; [ "$(stat -c %s "$1")" -le ${NEW_FILE_BYTES} ] && cat "$1"`, 'sh', f], { cwd: dir, encoding: 'buffer', timeout: 30000 }).catch(e => e.code);
+      if (buf === 3) continue;   // gone since it was listed
+      if (!Buffer.isBuffer(buf)) buf = null; else read += buf.length;
+      rows.push(lib.untrackedRow(f, buf));
+      continue;
+    }
     try {
       const st = await fs.promises.stat(path.join(dir, f));
       if (!st.isFile()) continue;
@@ -672,10 +873,10 @@ async function mergeWhenReady(inst, pr, gone = () => false, canAsk = true) {
   const n = String(pr.number);
   let problem;
   try {
-    if (pr.isDraft) await run('gh', ['pr', 'ready', n], inst.cwd, GH_WAIT);
+    if (pr.isDraft) await run('gh', ['pr', 'ready', n], hostDir(inst), GH_WAIT);
     state('waiting for checks');
-    problem = await lib.waitForChecks(async () => JSON.parse(await run('gh', ['pr', 'view', n, '--json', 'statusCheckRollup'], inst.cwd, GH_WAIT)).statusCheckRollup, { stale });
-    if (!problem) await run('gh', ['pr', 'merge', n, `--${saved.settings.mergeMethod}`], inst.cwd, GH_WAIT);
+    problem = await lib.waitForChecks(async () => JSON.parse(await run('gh', ['pr', 'view', n, '--json', 'statusCheckRollup'], hostDir(inst), GH_WAIT)).statusCheckRollup, { stale });
+    if (!problem) await run('gh', ['pr', 'merge', n, `--${saved.settings.mergeMethod}`], hostDir(inst), GH_WAIT);
   } catch (e) { problem = { why: e.message, owner: false }; }
   await readPr(inst);   // what the card says of the pull request: no longer a draft, and merged or not
   if (!problem) return state(v.message ? `merged: ${v.message}` : 'merged');
@@ -691,7 +892,7 @@ async function mergeWhenReady(inst, pr, gone = () => false, canAsk = true) {
 // instances do, and in the app's own folder, so that no project's settings, hooks or CLAUDE.md come into it.
 async function review(inst, pr) {
   let issue = null;
-  if (inst.issue) { try { issue = JSON.parse(await run('gh', ['issue', 'view', String(inst.issue), '--json', 'number,title,body'], inst.cwd, GH_WAIT)); } catch { /* judged without it */ } }
+  if (inst.issue) { try { issue = JSON.parse(await run('gh', ['issue', 'view', String(inst.issue), '--json', 'number,title,body'], hostDir(inst), GH_WAIT)); } catch { /* judged without it */ } }
   const out = await runInput(claudeBin, [
     '-p', '--model', REVIEW_MODEL, '--output-format', 'json', '--json-schema', JSON.stringify(lib.REVIEW_SCHEMA), '--tools', '',
     '--system-prompt', lib.REVIEW_SYSTEM, '--no-session-persistence', '--strict-mcp-config', '--disable-slash-commands',
@@ -760,13 +961,14 @@ async function pump() {
       if ([...instances.values()].some(i => i.starting && !i.exited)) break;
       const active = [...instances.values()].filter(i => i.pooled && !i.exited && !i.finished).length;
       if (job.pooled && active >= poolLimit) continue;
+      if (job.box && !await freeBox()) { job.waitingOn = ['box']; continue; }   // every container is taken
       try {
         job.waitingOn = lib.openBlockers(JSON.parse(await run('gh', ['api', `repos/{owner}/{repo}/issues/${job.number}/dependencies/blocked_by`], job.root)));
       } catch { job.waitingOn = ['?']; }   // gh failed: like claude_worktree, wait and retry
       if (job.waitingOn.length || !queue.includes(job)) continue;
       queue.splice(queue.indexOf(job), 1);
       spawnInstance({
-        cwd: job.root, worktree: lib.worktreeName(job.number, job.title), model: job.model, effort: job.effort, level: job.level,
+        cwd: job.root, worktree: lib.worktreeName(job.number, job.title), box: job.box || null, model: job.model, effort: job.effort, level: job.level,
         autonomy: job.autonomy, mayMerge: job.autonomy === 'semi', issue: job.number, issueUrl: job.url, pooled: job.pooled, group: job.group,
         prompt: lib.issuePrompt(job.template, job, job.autonomy, saved.settings.mergeMethod),
       });
@@ -815,15 +1017,26 @@ const rpc = {
     return openRepo(dest);
   },
 
-  spawn(o) {
+  // box: true for a session in a new container, or the name of a container that was kept, to start one in it.
+  async spawn(o) {
     // Semi-auto with a first prompt: the sentence goes into that prompt, as it does for an issue (see mergeNote).
     const semi = o.autonomy === 'semi' && !!o.prompt;
     const prompt = semi ? `${o.prompt}\n\n${lib.mergeInstruction('semi', saved.settings.mergeMethod)}` : o.prompt;
-    return spawnInstance({ worktree: o.worktree, model: o.model, effort: o.effort, prompt, level: o.level, autonomy: o.autonomy, mayMerge: semi, kind: o.kind });
+    const launch = { worktree: o.worktree, box: o.box === true || null, model: o.model, effort: o.effort, prompt, level: o.level, autonomy: o.autonomy, mayMerge: semi, kind: o.kind };
+    if (typeof o.box === 'string') {
+      const kept = (await boxes.list()).find(r => r.box === o.box);
+      if (!kept || !boxDir(kept.key) || !kept.work) throw new Error(`${o.box} is not a container this app made.`);
+      if ([...instances.values()].some(i => i.box && i.box.name === kept.box)) throw new Error(`A session is already open in ${kept.box}.`);
+      Object.assign(launch, { cwd: kept.root, worktree: kept.name, box: { name: kept.box, key: kept.key, work: kept.work } });
+    }
+    return spawnInstance(launch);
   },
   // What closing would do to the instance's worktree, for the dialog that asks first.
   async closeInfo(id) {
     const inst = instances.get(id);
+    // Its container, with what the clone in it holds. None while it is still being made or filled: that one
+    // goes without a question.
+    if (inst && inst.box) return { worktree: null, box: inst.box.name && !inst.fresh ? { name: inst.name, box: inst.box.name, ...await boxes.state(inst.box.name, inst.box.work) } : null };
     const [row] = inst && inst.wt ? await worktreeRows(inst.root, inst.wt).catch(() => []) : [];
     return { worktree: row ? { ...row, shared: sessionsIn(inst.wt, inst.pid).length > 0 } : null };
   },
@@ -834,16 +1047,37 @@ const rpc = {
     if (!lib.isInside(base, dir) || lib.samePath(base, dir)) throw new Error('Not a worktree of this folder.');
     return removeWorktree(repo.path, dir, force === true);
   },
+  // Every container of this app, for the Containers tab: whose it is, and what its clone holds that is nowhere
+  // else. A running one is asked. For one the app stopped, what it held then is on record (see closeBox).
+  async boxes() {
+    return Promise.all((await boxes.list()).map(async r => {
+      const inst = [...instances.values()].find(i => i.box && i.box.name === r.box);
+      return { box: r.box, n: r.n, running: r.running, root: r.root, name: r.name, inst: inst ? inst.id : null, ...await boxHeld(r) };
+    }));
+  },
+  // Removes a container from that tab. Without `force` only when it is known that nothing would be lost with it.
+  async removeBox(name, force) {
+    const r = (await boxes.list()).find(x => x.box === name);
+    if (!r) return;
+    if ([...instances.values()].some(i => i.box && i.box.name === name)) throw new Error('A session is open in that container. Closing its card removes it.');
+    const row = { name: r.name, box: name, ...await boxHeld(r) };
+    if (force !== true && (row.changed == null || row.error || row.changed || row.unique)) return { kept: row };
+    await boxes.remove(name);
+    if (boxDir(r.key)) fs.rmSync(boxDir(r.key), { recursive: true, force: true });
+    checkDocker(); pump();   // a queued issue may have been waiting for it
+    return { removed: true, name: r.name, box: name };
+  },
   resume(id) {
     const r = interrupted.find(x => x.id === id);
     if (!r) return;
     // Its conversation, if Claude Code has one on disk; otherwise it starts again the way it was started.
-    const resume = r.sessionId && r.transcript && fs.existsSync(r.transcript) ? r.sessionId : undefined;
+    // One in a container has it in a volume: startBox looks there, as it looks for the container itself.
+    const resume = r.box ? r.sessionId || undefined : r.sessionId && r.transcript && fs.existsSync(r.transcript) ? r.sessionId : undefined;
     const dir = resume && r.worktree ? path.join(r.root, '.claude', 'worktrees', r.worktree) : r.root;
     if (!fs.existsSync(dir)) throw new Error(`${dir} no longer exists.`);
     // Started again, it knows of merging what its first prompt says, whatever its card was set to since: where
     // the two differ, it is owed a note (see mergeNote).
-    const started = spawnInstance({ ...r, cwd: r.root, resume, mayMerge: resume ? r.mayMerge : lib.toldToMerge(r.prompt) });
+    const started = spawnInstance({ ...r, cwd: r.root, worktree: r.box ? r.name : r.worktree, resume, mayMerge: resume ? r.mayMerge : lib.toldToMerge(r.prompt) });
     interrupted = interrupted.filter(x => x !== r);
     saveSessions(); push();
     return started;
@@ -869,7 +1103,7 @@ const rpc = {
     const inst = instances.get(id);
     if (!inst || !inst.pr) return;
     const n = String(inst.pr.number);
-    try { await run('gh', action === 'ready' ? ['pr', 'ready', n] : ['pr', 'merge', n, `--${saved.settings.mergeMethod}`], inst.cwd, GH_WAIT); }
+    try { await run('gh', action === 'ready' ? ['pr', 'ready', n] : ['pr', 'merge', n, `--${saved.settings.mergeMethod}`], hostDir(inst), GH_WAIT); }
     finally { await readPr(inst); push(); }
   },
   // What the Diff tab shows. Where the instance's branch has a pull request: that pull request with its files
@@ -883,11 +1117,11 @@ const rpc = {
     const inst = instances.get(id);
     if (!inst) return null;
     const pr = await readPr(inst);   // the branch may have got its pull request since the last turn ended
-    if (!pr) return inst.pr ? null : localDiff(inst.cwd);
+    if (!pr) return inst.pr ? null : inst.box ? localDiff(inst.box.work, inst.box.name) : localDiff(inst.cwd);
     push();
     const rows = [];
     for (let page = 1; page <= 30; page++) {
-      const more = JSON.parse(await run('gh', ['api', `repos/{owner}/{repo}/pulls/${pr.number}/files?per_page=100&page=${page}`], inst.cwd, GH_WAIT));
+      const more = JSON.parse(await run('gh', ['api', `repos/{owner}/{repo}/pulls/${pr.number}/files?per_page=100&page=${page}`], hostDir(inst), GH_WAIT));
       rows.push(...more);
       if (more.length < 100) break;
     }
@@ -940,9 +1174,14 @@ const rpc = {
     selfUpdate.state = 'downloading'; push();
     autoUpdater.downloadUpdate().catch(() => { /* reported through the 'error' event */ });
   },
-  env(id) {
+  async env(id) {
     const inst = instances.get(id);
     if (!inst) return [];
+    // In a container: what a program started there finds. The variables of this computer do not reach it.
+    if (inst.box) {
+      const out = inst.box.name && inst.pid ? await boxes.inBox(inst.box.name, ['env'], { cwd: inst.box.work }).catch(() => '') : '';
+      return out.split('\n').filter(l => l.includes('=')).map(l => ({ name: l.slice(0, l.indexOf('=')), value: l.slice(l.indexOf('=') + 1), source: 'process' })).sort((a, b) => a.name.localeCompare(b.name));
+    }
     // What the process was started with, plus the `env` blocks Claude Code applies from settings files.
     const fromSettings = Object.assign({}, ...[path.join(configDir(), 'settings.json'), path.join(inst.cwd, '.claude', 'settings.json'), path.join(inst.cwd, '.claude', 'settings.local.json')].map(f => readJson(f).env || {}));
     return Object.entries({ ...inst.env, ...fromSettings }).map(([name, value]) => ({ name, value: String(value), source: name in fromSettings ? 'settings' : 'process' }))
@@ -963,16 +1202,17 @@ const rpc = {
     }
     return out.sort(lib.byNumber);
   },
-  dispatch({ issues, model, effort, level, parallel, autonomy, template, group }) {
+  // box: each issue's session works in a container of its own instead of a worktree.
+  dispatch({ issues, model, effort, level, parallel, autonomy, template, group, box }) {
     if (!claudeBin) throw new Error('Claude Code CLI (claude) was not found on PATH.');
     lib.issuePrompt(template, issues[0]);   // a prompt that cannot be filled in is refused here, before anything is queued
     const pooled = issues.length > 1;
     group = lib.groupName(group);
     if (pooled && !group) throw new Error('Issues started together are a group: give it a name.');
-    if (pooled) poolLimit = Math.min(4, Math.max(1, Number(parallel) || 1));
+    if (pooled) poolLimit = Math.min(box ? Math.max(1, dock.limit) : 4, Math.max(1, Number(parallel) || 1));
     for (const is of issues) {
       if (queue.some(j => j.number === is.number)) continue;
-      queue.push({ number: is.number, title: is.title, url: is.url, root: repo.path, model, effort, level, autonomy, template, pooled, group, waitingOn: [] });
+      queue.push({ number: is.number, title: is.title, url: is.url, root: repo.path, model, effort, level, autonomy, template, pooled, group, box: !!box, waitingOn: [] });
     }
     pump();
   },
@@ -1013,20 +1253,28 @@ const rpc = {
     if (patch.timedMinutes) saved.settings.timedMinutes = Math.min(60, Math.max(1, Number(patch.timedMinutes) || 5));
     if (patch.cpuCeiling) saved.settings.cpuCeiling = Math.min(100, Math.max(5, Math.round(Number(patch.cpuCeiling)) || 100));
     if (typeof patch.cpuShare === 'boolean') saved.settings.cpuShare = patch.cpuShare;
+    if (typeof patch.boxPorts === 'string') saved.settings.boxPorts = lib.portList(patch.boxPorts).join(', ');
+    if (['worktree', 'docker'].includes(patch.mode)) { saved.settings.mode = patch.mode; if (patch.mode === 'docker') checkDocker(); }
     balanceCpu();
     save(); push();
   },
   clipRead: () => clipboard.readText(),
   clipWrite: text => clipboard.writeText(String(text)),
-  openUrl: url => { if (/^https:\/\//.test(url)) shell.openExternal(url); },
+  // https, or a port of this computer that stands for a container's port.
+  openUrl: url => { if (/^https:\/\//.test(url) || /^http:\/\/localhost:\d+\/$/.test(url)) shell.openExternal(url); },
 };
 
 ipcMain.handle('rpc', (_e, name, ...args) => {
   if (!Object.hasOwn(rpc, name)) throw new Error(`Unknown call: ${name}`);
   return rpc[name](...args);
 });
-ipcMain.on('pty-write', (_e, id, data) => { const i = instances.get(id); if (i && !i.exited) i.proc.write(data); });
-ipcMain.on('pty-resize', (_e, id, cols, rows) => { const i = instances.get(id); if (i && !i.exited) { try { i.proc.resize(cols, rows); } catch { /* exited meanwhile */ } } });
+ipcMain.on('pty-write', (_e, id, data) => { const i = instances.get(id); if (i && !i.exited && i.proc) i.proc.write(data); });
+ipcMain.on('pty-resize', (_e, id, cols, rows) => {
+  const i = instances.get(id);
+  if (!i || i.exited) return;
+  i.cols = cols; i.rows = rows;   // for a terminal that is started later (see startBox)
+  if (i.proc) { try { i.proc.resize(cols, rows); } catch { /* exited meanwhile */ } }
+});
 
 // ---------- window ----------
 
@@ -1053,7 +1301,8 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  claudeBin = findClaude();
+  claudeBin = findExe('claude');
+  dockerBin = findExe('docker');
   await startHookServer();
   createWindow();
   if (claudeBin) run(claudeBin, ['auth', 'status']).then(out => { account = JSON.parse(out); push(); }, () => {});
@@ -1069,7 +1318,9 @@ app.on('window-all-closed', () => {
   saveSessions();   // before anything is stopped: what is open now is what the next start offers to resume
   if (sampler) sampler.kill();
   cpu.shutdown();   // lifts every limit; nothing stays paused or capped behind us
-  for (const inst of instances.values()) if (!inst.exited) { try { inst.proc.kill(); } catch { /* already gone */ } }
+  for (const inst of instances.values()) if (!inst.exited && inst.proc) { try { inst.proc.kill(); } catch { /* already gone */ } }
+  // A container goes on without its terminal. Stopped, it runs nothing and keeps what is in it for the resume.
+  boxes.stopBehind([...instances.values()].filter(i => i.box && i.box.name && !i.exited).map(i => i.box.name));
   save();
   fs.rmSync(path.join(dataDir, 'instances'), { recursive: true, force: true });
   if (tray) tray.destroy();   // or its icon stays in the tray until the mouse passes over it

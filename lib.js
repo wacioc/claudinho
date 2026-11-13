@@ -506,11 +506,20 @@ function statusLineCommand(file, original) {
   return original ? `tee ${quoted} | ( ${original} )` : `cat > ${quoted}`;
 }
 
+// A hook for a session in a container (see containers.js). From there the app's hook server is another machine,
+// and Claude Code refuses an http hook whose host resolves to a private address (measured on 2.1.323:
+// HOOK_BLOCKED_ADDRESS; only loopback is let through). The same request is then sent by curl, from a hook of the
+// command kind: what the server answers is what curl prints, and that is the hook's answer. With the app gone,
+// curl fails; "|| true" makes that no answer at all, as it is for an http hook that cannot connect.
+const viaCurl = h => ({ type: 'command', timeout: h.timeout || 30, command: `curl -sS --max-time ${h.timeout || 30} -X POST -H 'Content-Type: application/json' --data-binary @- '${h.url}' || true` });
+
 // Per-instance settings passed with --settings: they sit above user/project settings for that session only.
-function instanceSettings({ statusFile, hookUrl, userStatusLine }) {
-  const hook = [{ type: 'http', url: hookUrl, timeout: 7200 }]; // a "timed" request may be held for up to an hour
+// curl: the session runs in a container, and its hooks are sent by curl.
+function instanceSettings({ statusFile, hookUrl, userStatusLine, curl = false }) {
+  const http = h => (curl ? viaCurl(h) : h);
+  const hook = [http({ type: 'http', url: hookUrl, timeout: 7200 })]; // a "timed" request may be held for up to an hour
   // Every tool call reports here when it has run. Five seconds at most: nothing may hold a session's tools up.
-  const after = [{ matcher: '*', hooks: [{ type: 'http', url: `${hookUrl}/after`, timeout: 5 }] }];
+  const after = [{ matcher: '*', hooks: [http({ type: 'http', url: `${hookUrl}/after`, timeout: 5 })] }];
   return {
     statusLine: { ...userStatusLine, type: 'command', command: statusLineCommand(statusFile, userStatusLine && userStatusLine.command) },
     hooks: {
@@ -520,7 +529,7 @@ function instanceSettings({ statusFile, hookUrl, userStatusLine }) {
       // The first prompt going in is the one sign that the session's SessionStart hooks are done: Claude Code
       // holds a prompt back until they have finished, and reports nothing else when they do. (An http hook
       // cannot be put on SessionStart itself, and hooks of one event run side by side in no set order.)
-      UserPromptSubmit: [{ hooks: [{ type: 'http', url: hookUrl }] }],
+      UserPromptSubmit: [{ hooks: [http({ type: 'http', url: hookUrl })] }],
       // An input request answered in the terminal is reported by no hook. What was picked shows only in what
       // the tool call did next: a question's result holds the answers, and a tool that ran had been approved.
       PostToolUse: after,
@@ -552,6 +561,42 @@ function childEnv(env) {
   const nested = Object.keys(env).some(k => k.toUpperCase() === 'CLAUDECODE');
   const out = { ...env, COLORTERM: 'truecolor' };
   for (const k of Object.keys(out)) if (API_AUTH.includes(k.toUpperCase()) || (nested && HOST_SESSION.test(k))) delete out[k];
+  return out;
+}
+
+// ---------- sessions in Docker containers (see containers.js) ----------
+
+// What every container may use at most: two of Docker's processors, which is one core with its two threads on
+// most machines, and four gigabytes. Measured with a session and its services inside: 0.5 to 0.7 GB.
+// ponytail: the same for every container. Make them settings if a project's services need more.
+const BOX_CPUS = 2, BOX_MEMORY_GB = 4;
+// How many containers there may be: one for every pair of the processors Docker has, less the pair that is left
+// to the rest of the computer.
+const boxLimit = cpus => Math.max(1, Math.floor(cpus / BOX_CPUS) - 1);
+// The lowest of the numbers 1..limit that no container has, or null when all are taken.
+function freeSlot(taken, limit) {
+  for (let n = 1; n <= limit; n++) if (!taken.includes(n)) return n;
+  return null;
+}
+// Where a container keeps its clone of the folder.
+const boxWork = folder => `/work/${String(folder).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+/, '') || 'repo'}`;
+// The ports of a container that get a port on this computer: what the setting holds, as numbers.
+const portList = text => [...new Set(String(text || '').split(/\D+/).map(Number).filter(p => Number.isInteger(p) && p > 0 && p < 65536))].slice(0, 20);
+// `docker port <container>`: one line for each of them, "8000/tcp -> 127.0.0.1:51759".
+const parsePorts = text => [...String(text).matchAll(/^(\d+)\/tcp -> 127\.0\.0\.1:(\d+)\s*$/gm)].map(m => ({ port: Number(m[1]), host: Number(m[2]) }));
+
+// `docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.PIDs}}"`: for each container
+// how many processors it is using (1.5 is one and a half), its memory with the ceiling, and its processes.
+const UNITS = { B: 1, kB: 1e3, MB: 1e6, GB: 1e9, TB: 1e12, KiB: 2 ** 10, MiB: 2 ** 20, GiB: 2 ** 30, TiB: 2 ** 40 };
+const bytesOf = text => { const m = /^([\d.]+)\s*([A-Za-z]+)$/.exec(String(text).trim()); return m && UNITS[m[2]] ? Math.round(Number(m[1]) * UNITS[m[2]]) : 0; };
+function parseBoxStats(text) {
+  const out = new Map();
+  for (const line of String(text).split(/\r?\n/)) {
+    const [name, cpu, mem, pids] = line.split('\t');
+    if (!name || mem == null) continue;
+    const [used, limit] = mem.split(' / ');
+    out.set(name, { cpus: (parseFloat(cpu) || 0) / 100, mem: bytesOf(used), memLimit: bytesOf(limit || ''), count: Number(pids) || 0 });
+  }
   return out;
 }
 
@@ -862,7 +907,8 @@ module.exports = {
   REVIEW_SYSTEM, REVIEW_SCHEMA, reviewPrompt, reviewVerdict, waitForChecks,
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,
   auditEntries, auditPick, toolKey, parseVersion, newerVersion,
-  childEnv, isInside, realPath, samePath, parseWorktrees, labelFor, scanConfig, configPath, ROOT_FILES, scanHome, homePath,
+  BOX_CPUS, BOX_MEMORY_GB, boxLimit, freeSlot, boxWork, portList, parsePorts, parseBoxStats,
+  childEnv, isInside, realPath, samePath, parseWorktrees, labelFor, scanConfig, configPath, ROOT_FILES, HOME_FILES, HOME_DIRS, scanHome, homePath,
   SAMPLE_SECONDS, samplerCommand, cpuSeconds, parseProcs, treeOf, treeUsage, sparedPids, byName,
   WEIGHTS, MIN_SHARE, shareCpu, scopeUnit, scopeProps, scopeCommand, throttleTargets, nextDuty,
 };

@@ -1,7 +1,7 @@
 # claudinho
 
 A desktop monitor for the Claude Code instances running in a repo: a wall of live terminals, the repo's GitHub
-issues with one-click dispatch into worktrees, and an editor for the `.claude` setup.
+issues with one-click dispatch into worktrees or Docker containers, and an editor for the `.claude` setup.
 
 It drives your own `claude` CLI, so everything runs on your Claude Code subscription. No API key is used, and
 `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` are removed from the instances it starts so they cannot switch to
@@ -13,6 +13,8 @@ The app drives programs that have to be installed already, whichever way you run
 
 - Claude Code CLI on `PATH`, logged in (`claude`, then `/login`). On Windows it must be the native install (`claude.exe`).
 - `git`, and the GitHub CLI `gh` (logged in) for issues, clone and PR merging.
+- Docker Desktop, running, if sessions are to work in Docker containers (see
+  [Worktrees or Docker containers](#worktrees-or-docker-containers)). Worktrees need nothing of it.
 - Windows: Git for Windows. Claude Code runs status lines through Git Bash, which is how cost, context and usage reach the app.
 - Linux: kernel CPU limits need systemd 252 or later (Ubuntu 24.04, Debian 12, Fedora 40); older systems fall
   back to pausing and resuming.
@@ -47,6 +49,7 @@ npm start                      # reopens the last folder
 npm start -- /path/to/repo     # or open a specific folder
 npm test                       # self-check for the logic in lib.js
 npm run check:cpu              # real-load check of the CPU limits; keeps every core busy for three to four minutes
+npm run check:box              # makes one container the way the app does and checks it; needs Docker Desktop, starts no session
 ```
 
 The first `npm install` downloads the Electron binary.
@@ -57,13 +60,53 @@ The first `npm install` downloads the Electron binary.
 |---|---|
 | **Instances** | Every Claude Code instance as a live terminal, titled with its worktree (or the folder name), with model, context window, API-equivalent cost, uptime, and the CPU and memory used by it and everything it started. Click one for the full terminal, a per-process breakdown, its environment variables, its autonomy and the input level, on a second tab the diff of its pull request, or of its folder while there is none yet, and beside it the list of all sessions to go from one to the next. A session that was sent after an issue, and one whose branch has a pull request, carry a button for each that opens it on GitHub. Sessions that belong to a group carry its name and colour, and one whose turn has ended a green outline and checkmark. Sessions started outside the app appear as status-only cards, which a filter can hide, and sessions that were open when the app last stopped appear as cards with a Resume button. |
 | **Worktrees** | Every worktree under `.claude/worktrees`: its branch, whether it holds uncommitted changes or commits that exist nowhere else, its last commit, and the session at work in it. Each can be removed from here. |
+| **Containers** | With Docker chosen, in the place of Worktrees: every container that sessions work in on this computer, with its session, its folder and branch, whether its clone holds uncommitted changes or commits that are not pushed, and whether it is running. A container that was kept can be given a new session, or removed. |
 | **Issues** | Open issues by default, in number order with the highest first, with the issues blocking each one. Select one or many, right-click, "Tackle with Claude Code". |
 | **Pull requests** | The repository's open pull requests in number order with the highest first, drafts and those ready for review: branch, checks, review state, and the session at work on each. A click on a title opens it on GitHub. |
 | **.claude** | Everything under `.claude` and `.github` of the open folder, and your own configuration from the home folder (`~/.claude`): `CLAUDE.md`, `settings.json`, agents, skills, commands, rules. All of it is editable inline. Saving a file of the open folder offers to commit and push. "New skill" and "New agent" generate one from a prompt in a terminal, where Claude can ask follow-up questions. |
 
 The header shows the app's version, the logged-in account, the 5-hour and 7-day usage as last reported by
 Claude Code, the version of Claude Code that is installed, and the bell. When a newer version of the app or of
-Claude Code is out, a button to install it appears beside the version it replaces.
+Claude Code is out, a button to install it appears beside the version it replaces. A list in the header says
+where sessions work: in worktrees, or in Docker containers.
+
+### Worktrees or Docker containers
+
+There are two ways for sessions to work. The first start asks which one to begin with, and the list in the
+header changes between them at any time. Each way has its own sessions: the window shows those of the one that
+is chosen, and the others go on out of sight.
+
+| | Worktrees | Docker containers |
+|---|---|---|
+| Where a session works | In a git worktree under `.claude/worktrees`, made by `claude -w`. | In a container of its own, on a clone of the folder, on a new branch made from GitHub's default branch. |
+| Services and ports | All sessions share this computer. Two that start the same service on the same port get in each other's way, unless each worktree is given ports of its own. | Each container has a Docker of its own inside, so every session can run the same services on the same ports. |
+| What it takes | Nothing beyond the requirements. | Docker Desktop, running. About 2 GB of disk for the image, what each container's services pull, and memory for each container while it runs. |
+| How many at once | As many as you start. | One for every two of Docker's processors, less one: 7 where Docker has 16. Each may use 2 processors and 4 GB. |
+| Where the work is | On this computer, in the worktree. | In the container, until it is pushed. |
+
+With Docker chosen:
+
+- **+ New instance** starts a session in a new container, and there is no worktree to make. Issues sent from
+  the Issues tab get a container each, and wait in the queue while all containers are taken.
+- The cards and the detail view are the same. The terminal is Claude Code's own, running in the container. A
+  card names its container, and its CPU and memory are the container's, as Docker reports them.
+- The first container needs an image, which the app builds by itself: once, and again when Claude Code on this
+  computer has a new version, so that containers run that version too. The first build downloads several
+  hundred megabytes and takes some minutes; the card shows it going.
+- Logins are made inside a container, once, and kept in Docker volumes that all containers share. Claude Code
+  asks for its login in the first session's terminal (`/login`), and where GitHub has none yet, the card runs
+  `gh auth login` before anything else. Nothing is copied from the logins of this computer.
+- Your own Claude Code configuration is copied into the containers at each start: `CLAUDE.md`,
+  `settings.json`, `keybindings.json`, agents, commands, output styles, rules, skills, hooks, and the scripts
+  that lie directly in that folder. Files named by `.worktreeinclude` are copied into the clone, as Claude Code
+  copies them into a worktree.
+- Inside, every container has the same ports. To open what a session runs in your browser, name the ports
+  under ⚙ ("Ports of a container to reach from this computer"; 3000, 5173, 8000 and 8080 to begin with). Each
+  gets a port of its own on this computer, listed in the instance's detail view. A change counts for
+  containers made afterwards.
+- The **Containers** tab stands where the Worktrees tab was.
+
+A session's work leaves its container by `git push`, so this way needs a folder with a GitHub remote.
 
 ### Notifications
 
@@ -143,6 +186,11 @@ An instance that has already ended, in a worktree with nothing to lose, closes w
 on the remote, and a pull request made from it, are never touched. A worktree that stays behind (kept on
 purpose, or left by a session that crashed) can be removed from the Worktrees tab.
 
+A session in a container is closed the same way, and the question is about its container. It is removed, with
+the clone in it, when nothing would be lost: no uncommitted changes, and no commits that are not pushed.
+Otherwise "Remove the container" is left unticked. A container that is not removed is stopped and kept on the
+Containers tab, where it can be removed, or given a new session that commits and pushes what it holds.
+
 ### Resuming after the app stops
 
 Claude Code saves every conversation as it goes. The app adds what it knows on top: every 10 seconds, and
@@ -153,6 +201,9 @@ The next time the app starts, whatever was open is back on the Instances tab as 
 the app was quit, crashed, or lost power. **Resume** continues that conversation in its worktree with its
 settings; **Forget** drops the card and leaves the conversation to `claude --resume`. An instance that had not
 exchanged a message yet has no conversation to continue and is started again the way it was started.
+
+A session in a container is resumed in its container. Quitting the app stops the containers of its sessions,
+and a resume starts the container again. If the container is gone, the session starts again in a new one.
 
 ### Groups
 
@@ -220,8 +271,12 @@ worktree is created only when the session in the previous one has finished its `
 then that card says "starting", and the queued issues say which one they are waiting for. How many agents then
 work at once is still the number you choose.
 
+With Docker containers chosen, each issue gets a container instead of a worktree, named after the issue the
+same way, and so is its branch. Containers are made one at a time too. An issue waits in the queue while
+every container is taken.
+
 Several issues are started lowest number first, whatever the order of the list. For them you also choose how many
-agents run at once (max 4) and the group's name (see [Groups](#groups)). For one issue or several you choose
+agents run at once (max 4; with containers, as many as there may be) and the group's name (see [Groups](#groups)). For one issue or several you choose
 the autonomy (next section).
 
 ### Autonomy: who merges
@@ -342,6 +397,14 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
 ## How it works
 
 - Each instance is `claude` in a pseudo-terminal (`node-pty`), drawn with `xterm.js`.
+- A session in a container is `docker exec -it … claude` in the same kind of pseudo-terminal. Its container is
+  made with `docker run --privileged --cpus 2 --memory 4g` from an image built from `container/Dockerfile`:
+  Debian with Python, Node.js, git, gh, Docker's engine with Compose, and Claude Code from Anthropic's package
+  repository. The open folder is mounted read-only and cloned inside.
+- From a container, the app's hook server is another machine, and Claude Code refuses an HTTP hook to a
+  private address. Those sessions send the same requests with `curl`, from command hooks, to
+  `host.docker.internal`. Their status comes from `claude agents --json` run inside each container, their CPU
+  and memory from `docker stats`, and their pull request from `gh pr view <branch>` on this computer.
 - Each instance gets its own `--settings` file. It wraps your status line so the JSON Claude Code feeds it (cost,
   context, rate limits) is also saved for the app, and it adds HTTP hooks pointing at a local server inside the app:
   `PreToolUse` on `AskUserQuestion` and `PermissionRequest` for the input levels, `Stop` to notice a finished turn.
@@ -433,6 +496,31 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   wins; give a second copy its own `--user-data-dir`.
 - Sessions started elsewhere are status-only: a terminal cannot be attached to them, and they cannot be put
   into a group.
+- Sessions in Docker containers have been run on Windows with Docker Desktop, and nowhere else. Docker
+  Desktop on macOS should behave the same and has not been tried. On Linux with Docker Engine alone the hooks
+  do not reach the app: `host.docker.internal` is Docker Desktop's.
+- A session's container is privileged, which the Docker inside it needs. That keeps sessions out of each
+  other's way: ports, services, processes and files. It is not a wall against a session that sets out to leave
+  its container.
+- A container's work exists only in it until it is pushed. Removing a container removes its clone. The app
+  asks first, as for a worktree, and keeps a container that holds something; Docker's own clean-up commands
+  do not ask.
+- The logins of the containers are their own, in the Docker volumes `claudinho-claude` and `claudinho-gh`.
+  Removing those volumes signs the containers out. A setting of yours that names a path or a program of this
+  computer points nowhere inside a container: a status line or a hook written for Windows does not run there.
+- Every container has the same ceiling, 2 processors and 4 GB. The CPU ceiling and the CPU weights under ⚙ do
+  not apply to it. When a container reaches its memory ceiling, the kernel ends a process in it, which may be
+  a service or Claude Code itself.
+- The ports that reach this computer are set when a container is made. A service on another port is reached
+  from inside only: the session can test it, your browser cannot open it. The numbers on this computer change
+  when a container is started again.
+- The image holds what most projects start from. What a project needs beyond it comes from pip, npm, or a
+  container of the Docker inside: sessions do not run as root, so they cannot `apt-get install`.
+- A new version of Claude Code on this computer makes the next container wait for the image to be built
+  again, about a minute. Sessions in containers that are already running keep the version they started with.
+- Quitting the app stops the containers of its sessions, and a resume does not start again what those
+  sessions had running inside. If the app is stopped hard, the containers run on until their sessions are
+  resumed or they are removed.
 - Windows 11 puts a new tray icon among the hidden ones. Drag it onto the taskbar, or switch it on under
   Settings, Personalization, Taskbar, "Other system tray icons", to have the number in view. On Linux a tray
   icon needs a desktop that shows them. The tray icon has not been tried on macOS or Linux.
@@ -470,7 +558,9 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
 - A session's issue button knows where to go from the issue it was sent after. A session on record from 0.6.0
   or older has only the issue's number: its button leads to the open folder's repository, and where the
   session belongs to another folder there is no button, only the number. A pull request button shows what the
-  app knew of the pull request when it last read it: at the end of a turn, or when the Diff tab was opened.
+  app knew of the pull request when it last read it. It looks when a session is resumed, about every half
+  minute while a session that has none yet is at work, at the end of a turn, and when the Diff tab is opened.
+  What becomes of a pull request on GitHub after that shows at the end of the next turn.
 - The Diff tab has GitHub's default view and no other: one column, no side-by-side view, no marking of the
   changed words inside a line, no unfolding of the lines between two hunks, no hiding of whitespace changes.
   Its colours are worked out hunk by hunk, where GitHub colours whole files: a hunk that starts inside a
