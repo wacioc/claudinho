@@ -24,7 +24,9 @@ let state = { instances: [], external: [], queue: [], settings: {}, repo: null }
 // The two ways of working: sessions in worktrees on this computer, or each in a Docker container of its own.
 // Each way has its own sessions, and the window shows those of the one chosen in the header.
 const docker = () => state.settings.mode === 'docker';
-const inMode = x => !!x.box === docker();   // x: an instance, an interrupted session or a queued issue
+// x: an instance, an interrupted session or a queued issue. A generator (a session that writes a skill, an
+// agent or the folder's mise.toml) works on the folder itself and is shown either way.
+const inMode = x => x.kind === 'generator' || !!x.box === docker();
 const iconOf = x => (x.box ? '🐳' : x.worktree ? '🌳' : '📁');
 const terms = new Map();     // instance id -> { term, fit, card, wrap, host, p, inst }
 const backlog = new Map();   // PTY output that arrived before its terminal existed
@@ -293,13 +295,30 @@ function renderTop() {
   $('#btn-new').title = !box ? '' : !d.ok ? 'Docker does not answer.' : r && !r.github ? 'A session in a container works on a clone and pushes its work: that needs a folder with a GitHub remote.' : 'Starts a session in a new container.';
   $('#btn-worktree').disabled = !r || !r.isGit || !state.claudeFound;
   if (!r) return $('#setup').replaceChildren();
-  $('#setup').replaceChildren(h('span.chip', r.github ? `GitHub ${r.github.owner}/${r.github.name}` : r.isGit ? 'git, no GitHub remote' : 'plain folder'));
+  $('#setup').replaceChildren(...totalChips(), h('span.chip', r.github ? `GitHub ${r.github.owner}/${r.github.name}` : r.isGit ? 'git, no GitHub remote' : 'plain folder'));
   $('#worktrees').replaceChildren(...r.worktrees.filter(w => !w.main).map(w => h('option', { value: w.path.split(/[\\/]/).pop() })));
+}
+
+// What everything the app runs takes, in three figures: the CPU and the memory of all its sessions right now,
+// on this computer and in containers, and the disk their worktrees and containers hold. The disk takes seconds
+// to measure, so it is measured every ten minutes, and says when.
+function totalChips() {
+  const t = state.totals;
+  if (!t) return [];
+  const d = t.disk, b = d.boxes, total = (b ? b.containers + b.volumes + b.image : 0) + (d.worktrees || 0);
+  return [
+    h('span.chip', { title: `CPU of all the sessions claudinho runs, with everything they started, as a share of this computer's ${state.cores} cores.\nOn this computer ${pct(t.cpu - t.boxCpu)}, in containers ${pct(t.boxCpu)}.` }, `cpu ${pct(t.cpu)}`),
+    h('span.chip', { title: `Memory of all the sessions claudinho runs, with everything they started.\nOn this computer ${fmtBytes(t.mem - t.boxMem)}, in containers ${fmtBytes(t.boxMem)}${t.dockerMem ? ` of the ${fmtBytes(t.dockerMem)} that Docker has` : ''}.` }, `mem ${fmtBytes(t.mem)}`),
+    h('span.chip', { title: !d.at ? 'The disk is being measured.' : [
+      d.worktrees == null ? 'This folder has no worktrees.' : `The worktrees of this folder: ${fmtBytes(d.worktrees)}${d.capped ? ' or more; not all of it was counted' : ''}.`,
+      b ? `In Docker: what the containers wrote themselves ${fmtBytes(b.containers)}, their volumes ${fmtBytes(b.volumes)} (each one's own Docker with its images, the download caches, the logins), their image ${fmtBytes(b.image)}.` : 'Nothing of Docker: containers were never chosen here, or Docker does not answer.',
+      `Measured at ${new Date(d.at).toLocaleTimeString()}, and again every ten minutes.`].join('\n') }, d.at ? `disk ${fmtBytes(total)}` : 'disk …'),
+  ];
 }
 
 // ---------- instances ----------
 
-const THEME = { background: '#0b0e14', foreground: '#c9d1d9', cursor: '#e6b450', selectionBackground: '#3a4a63' };
+const THEME ={ background: '#0b0e14', foreground: '#c9d1d9', cursor: '#e6b450', selectionBackground: '#3a4a63' };
 const IS_MAC = navigator.platform.startsWith('Mac');
 
 function statusOf(i) {
@@ -803,10 +822,21 @@ function renderInstances() {
       : 'No Claude Code instance is running in this folder. Start one above, or send one after an issue from the Issues tab.';
 }
 
+// Before a session starts in a container: which tools its image will hold. The folder names them in a
+// mise.toml (or .tool-versions). Without one a container has the standard tools only, which is said here, with
+// a way to have the file written. It is a warning, not a stop: some folders need nothing more.
+function toolsField() {
+  const t = state.repo.tools || { files: [], names: [] };
+  if (t.files.length) return { type: 'static', label: 'Tools in the container', value: `${t.names.join(', ') || 'none named'}, as ${t.files.join(' and ')} of this folder say${t.files.length === 1 ? 's' : ''}. They are part of the image, which is built again when that file changes: the first container after a change waits for it.` };
+  return { type: 'static', label: 'Tools in the container', value: [h('span.loss', 'This folder has no mise.toml, so a container holds the standard tools only: git, gh, Python, Node.js, Docker, and the libraries a headless browser needs. What else the project runs with (just, uv, Flutter, another Node.js) will be missing.'),
+    h('div', h('button', { type: 'button', onclick: () => { $('#dlg').close(); $('#dlg').oncancel(); newTools(); } }, 'Have Claude Code write a mise.toml…'))] };
+}
+
 // With containers chosen, every new instance gets a container of its own, and its name is its branch's.
 async function newInstance(worktree) {
   const box = docker();
   const v = await formDialog(box ? `New instance in a container, for ${state.repo.name}` : worktree ? 'New worktree' : `New instance in ${state.repo.name}`, [
+    box && toolsField(),
     box && { key: 'worktree', label: 'Name', type: 'text', placeholder: 'blank = generated', pattern: '[A-Za-z0-9][A-Za-z0-9._\\-]{0,63}', hint: 'The session works in a new container, on a clone of this folder and a new branch of this name, made from the default branch on GitHub.' },
     worktree && !box && { key: 'worktree', label: 'Worktree name', type: 'text', list: 'worktrees', placeholder: 'blank = generated', pattern: '[A-Za-z0-9._\\-]{1,64}', hint: 'Created with `claude -w` under .claude/worktrees. An existing name reopens that worktree.' },
     ...launchFields(),
@@ -986,6 +1016,8 @@ function renderIssues() {
         else { selected.clear(); selected.add(is.number); lastIdx = idx; }
         renderIssues();
       },
+      // A double click is the short way to the same dialog, for this one issue.
+      ondblclick: () => tackle([is]),
       oncontextmenu: e => {
         e.preventDefault();
         if (!selected.has(is.number)) { selected.clear(); selected.add(is.number); lastIdx = idx; renderIssues(); }
@@ -1029,6 +1061,7 @@ async function tackle(picked) {
       const open = i.blockedBy.filter(b => !b.done).map(b => `#${b.number}`);
       return `#${i.number} ${i.title}${open.length ? `  [starts once ${open.join(' ')} is completed]` : i.blocked ? '  [labelled blocked]' : ''}`;
     }) },
+    box && toolsField(),
     ...launchFields(),
     multi && { key: 'parallel', label: 'Agents running at once', type: 'number', min: 1, max: most, value: Math.min(most, picked.length), hint: `One instance and ${box ? 'container' : 'worktree'} per issue; the rest queue (max ${most}).` },
     autonomyField(),
@@ -1162,6 +1195,21 @@ async function newAgent() {
   ], 'Create');
   if (v) generate(`Create a new Claude Code subagent for this project at .claude/agents/<short-kebab-case-name>.md, with YAML frontmatter (name, description, model: ${v.model}${v.effort ? `, effort: ${v.effort}` : ''}) followed by the agent's system prompt. ${FOLLOW_UP}\n\nWhat the agent should do:\n${v.text}`);
 }
+// The folder's mise.toml: which tools, in which versions, a container of this folder is built with. Claude
+// Code reads what the folder already says about that, writes the file, and the owner commits it. From then on
+// the image follows the file.
+const STANDARD_TOOLS = 'git, gh, jq, curl, sudo, Docker with Compose, Python 3.13 with pip, Node.js 26 with npm, and the system libraries of a headless Chromium (not the browser itself)';
+function newTools() {
+  return generate(`Write a mise.toml at the root of this repository. It is read by mise (https://mise.jdx.dev/configuration.html) when the container image for this repository is built: every tool it names is installed into that image, and Claude Code sessions then work in containers made from it.
+
+Find out which command-line tools and language runtimes a developer needs to run this project's checks, tests and builds, and in which versions. Read what the repository itself says: the CI workflows under .github/workflows (set-up actions and their versions, and what the steps run), a justfile or Makefile, lockfiles and manifests (pyproject.toml, uv.lock, package.json, pubspec.yaml, go.mod, Cargo.toml and the like), version files (.nvmrc, .python-version, .fvmrc, rust-toolchain.toml), and the README. Do not guess beyond that.
+
+The image already has: ${STANDARD_TOOLS}. Leave those out, unless the project asks for another version of Python or Node.js than that.
+
+Write only a [tools] table, one tool a line, with the names of mise's registry (run \`mise registry\` if mise is installed here, otherwise use the common names: node, python, go, rust, java, ruby, bun, deno, pnpm, uv, just, flutter, dart, terraform). Give every tool a version the repository states. Where it states none, pin the current stable version as major.minor, and never write "latest". Put a short comment above a tool where its version comes from.
+
+Then stop, and say in a few lines: which tools you named and where each version came from, and what the project needs that a mise.toml cannot name (system packages, browsers, services), so that the owner knows what is left for the project's own set-up. Do not install anything, and do not change any other file.`);
+}
 async function generate(prompt) {
   openWhenReady = await call('spawn', { kind: 'generator', prompt, level: 'manual' });
   show('instances');
@@ -1231,9 +1279,13 @@ const CPU_MECHANISMS = {
   throttle: 'Pausing and resuming processes in short cycles, because this system gives ordinary apps no kernel CPU limit. Right on average; takes a few seconds to settle.',
 };
 $('#btn-settings').onclick = async () => {
-  await formDialog('Settings', [
+  const had = state.repo && state.repo.include;
+  const d = state.docker || {};
+  const v = await formDialog('Settings', [
     state.repo && { key: 'template', label: `Default prompt for issue worktrees in ${state.repo.name}`, type: 'textarea', rows: 4, value: state.repo.template,
       hint: `What Claude Code is told when an instance is started for a GitHub issue. ${PROMPT_HINT} Kept per folder; clear it to get the built-in prompt back.` },
+    state.repo && state.repo.isGit && { key: 'include', label: `Local files to copy into a new container or worktree of ${state.repo.name}`, type: 'textarea', rows: 3, value: state.repo.include, placeholder: '.env\n.env.*\nconfig/local.json',
+      hint: 'One pattern a line, in .gitignore syntax, anywhere in the folder. A file that matches and that git ignores, a .env for one, is not part of a clone or a new worktree: named here, it is copied from this folder into each new one. This is the folder\'s .worktreeinclude file, which Claude Code reads for a worktree and claudinho for a container.' },
     { key: 'mergeMethod', label: 'Auto-merge method', type: 'select', value: state.settings.mergeMethod, options: [['squash', 'Squash'], ['merge', 'Merge commit'], ['rebase', 'Rebase']] },
     { key: 'timedMinutes', label: 'Timed input: minutes to wait', type: 'number', min: 1, max: 60, value: state.settings.timedMinutes, hint: 'How long the "timed" level waits for you before taking the recommended option.' },
     { key: 'cpuCeiling', label: 'CPU ceiling per instance (%)', type: 'number', min: 5, max: 100, value: state.settings.cpuCeiling,
@@ -1243,7 +1295,10 @@ $('#btn-settings').onclick = async () => {
     { type: 'static', label: 'Enforced by', value: CPU_MECHANISMS[state.cpuMechanism] || `Not available here${state.cpuError ? `: ${state.cpuError}` : ''}.` },
     { key: 'boxPorts', label: 'Ports of a container to reach from this computer', type: 'text', value: state.settings.boxPorts, placeholder: 'none', pattern: '[0-9, ]*',
       hint: 'For sessions in Docker containers. Inside, every container has the same ports. Each port named here gets a port of its own on this computer, shown in the instance\'s detail view, so that what a session runs can be opened in the browser. It counts for containers made from now on.' },
+    { key: 'boxMemoryGb', label: 'Memory ceiling of a container (GB)', type: 'number', min: 1, max: 64, value: state.settings.boxMemoryGb,
+      hint: `The most one container may use, with the session and everything it runs inside. Past it, the system ends a program in that container. It counts for the containers there are as well. A ceiling is not set aside${d.mem && d.limit ? `: Docker has ${fmtBytes(d.mem)} for all ${d.limit} containers, which is ${fmtBytes(d.mem / d.limit)} each if all of them fill up at once` : ''}.` },
   ], 'Save', v => api.call('setSettings', v));
+  if (v && state.repo && v.include != null && v.include !== (had || '')) offerCommit('Update .worktreeinclude');   // it is a file of the folder
 };
 
 api.on('pty-data', (id, data) => {

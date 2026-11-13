@@ -18,6 +18,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
 const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
 
 (async () => {
+  let image = null;
   const box = boxes.nameOf(1), work = lib.boxWork('claudinho'), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claudinho-check-'));
   const inside = (argv, opts) => boxes.inBox(box, argv, { cwd: work, ...opts }).then(s => s.trim());
   const inspect = format => boxes.docker(['inspect', box, '--format', format]).then(s => s.trim());
@@ -27,18 +28,31 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
     await boxes.remove(box).catch(() => { /* none left from a check that was stopped */ });
     let t = Date.now();
     const version = lib.parseVersion(execFileSync('claude', ['--version'], { encoding: 'utf8' }));
-    const image = await boxes.image(version, line => { if (/^#\d+ \[/.test(line)) console.log(`     ${line.slice(0, 110)}`); });
+    // A folder that names one small tool, and the image that is built for it.
+    const tools = path.join(dir, 'tools');
+    fs.mkdirSync(tools);
+    fs.writeFileSync(path.join(tools, 'mise.toml'), '[tools]\njust = "1.36.0"\n');
+    image = await boxes.image(version, tools, line => { if (/^#\d+ \[/.test(line)) console.log(`     ${line.slice(0, 110)}`); });
     console.log(`image ${image} (${secs(t)})`);
+    t = Date.now();
+    check(await boxes.image(version, tools) === image && Date.now() - t < 5000, `asked for again with nothing changed, it is there at once (${secs(t)})`);
+    // Which image a folder gets is worked out from its file: another file, another Claude Code or no file is
+    // another image, and the same file again is the same one.
+    const tagNow = () => boxes.tagOf(version, boxes.toolFiles(tools));
+    fs.writeFileSync(path.join(tools, 'mise.toml'), '[tools]\njust = "1.36.0"\n# a change\n');
+    const changed = tagNow();
+    fs.writeFileSync(path.join(tools, 'mise.toml'), '[tools]\njust = "1.36.0"\n');
+    check(changed !== image && tagNow() === image && boxes.tagOf('0.0.0', boxes.toolFiles(tools)) !== image && boxes.tagOf(version, []) !== image, 'a changed file, another Claude Code, or no file at all each ask for another image');
 
     console.log('\na container, made and filled as for a session');
     t = Date.now();
     const github = lib.parseGitHub(execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: __dirname, encoding: 'utf8' }).trim());
-    await boxes.create({ n: 1, image, root: __dirname, name: 'box-check', work, key: 'c0ffee00', dir, ports: [8000] });
+    await boxes.create({ n: 1, image, root: __dirname, name: 'box-check', work, key: 'c0ffee00', dir, ports: [8000], memoryGb: 3 });
     await boxes.ready(box);
     const made = secs(t);
     await boxes.fill(box, { root: __dirname, work, branch: 'box-check', origin: `https://github.com/${github.owner}/${github.name}.git`, identity: [['user.name', 'box-check'], ['user.email', 'box-check@example.invalid']], configDir: path.join(dir, 'no-config'), say: line => console.log(`     ${line}`) });
     console.log(`  made and its Docker up after ${made}, filled after ${secs(t)}`);
-    check(await inspect('{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.Privileged}}') === `${lib.BOX_CPUS}000000000 ${lib.BOX_MEMORY_GB * 2 ** 30} true`, `held to ${lib.BOX_CPUS} processors and ${lib.BOX_MEMORY_GB} GB`);
+    check(await inspect('{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.Privileged}}') === `${lib.BOX_CPUS}000000000 ${3 * 2 ** 30} true`, `held to ${lib.BOX_CPUS} processors and the 3 GB it was made with`);
     const row = (await boxes.list()).find(r => r.box === box);
     check(row && row.running && row.name === 'box-check' && row.work === work && row.key === 'c0ffee00' && lib.samePath(row.root, __dirname), 'on the list, with what was written on it');
     check(await inside(['git', 'branch', '--show-current']) === 'box-check', 'its clone is on the new branch');
@@ -47,6 +61,9 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
     check(await inside(['sh', '-c', 'touch /src/x 2>&1; test -f package.json && echo there']).then(s => /Read-only/.test(s) && /there$/.test(s)), 'the folder on this computer is there to read, and cannot be written to');
     check(/^\d+\.\d+/.test(await inside(['docker', 'compose', 'version', '--short'])) && /^\d+\./.test(await inside(['docker', 'info', '--format', '{{.ServerVersion}}'])), 'a Docker of its own inside, with Compose');
     check(lib.parseVersion(await inside(['claude', '--version'])) !== null && /^v\d+/.test(await inside(['node', '--version'])) && /^Python 3/.test(await inside(['python', '--version'])), `Claude Code ${lib.parseVersion(await inside(['claude', '--version']))}, Node.js and Python are in it`);
+    check(await inside(['just', '--version']) === 'just 1.36.0', 'the tool the folder names is in the image, and found from inside the clone without any set-up');
+    check(await inside(['sudo', '-n', 'id', '-u']) === '0', 'the session\'s user may become root, for what a project\'s set-up installs');
+    check(Number(await inside(['sh', '-c', 'ldconfig -p | grep -c -E "libnss3|libatk-1|libgbm"'])) >= 3 && /^\d{4}\./.test(await inside(['mise', '--version'])), 'the libraries of a headless Chromium are there, and mise');
 
     console.log('\nwhat it holds that is nowhere else');
     let s = await boxes.state(box, work);
@@ -93,7 +110,12 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
     for (let k = 0; k < 20 && code !== 200; k++) { code = await fetch(`http://localhost:${p.host}/package.json`).then(r => r.status, () => 0); if (code !== 200) await wait(300); }
     check(p.port === 8000 && code === 200, `its port 8000 answers at localhost:${p.host}`);
     const stats = (await boxes.stats([box])).get(box);
-    check(stats && stats.mem > 0 && stats.memLimit === lib.BOX_MEMORY_GB * 2 ** 30 && stats.count > 0, `Docker's reading: ${stats && `${Math.round(stats.mem / 2 ** 20)} MB of ${stats.memLimit / 2 ** 30} GB, ${stats.count} processes`}`);
+    check(stats && stats.mem > 0 && stats.memLimit === 3 * 2 ** 30 && stats.count > 0, `Docker's reading: ${stats && `${Math.round(stats.mem / 2 ** 20)} MB of ${stats.memLimit / 2 ** 30} GB, ${stats.count} processes`}`);
+
+    await boxes.resize([box], 5);
+    check((await boxes.stats([box])).get(box).memLimit === 5 * 2 ** 30, 'its memory ceiling can be raised while it runs');
+    const took = await boxes.disk();
+    check(took.image > 2 ** 30 && took.containers > 0 && took.volumes > 0, `what it takes on the disk is read: image ${(took.image / 1e9).toFixed(2)} GB, all volumes ${(took.volumes / 1e9).toFixed(2)} GB, this container's own layer ${(took.containers / 1e6).toFixed(0)} MB`);
 
     console.log('\nstopped, started again, removed');
     await boxes.stop([box]);
@@ -106,6 +128,7 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
   } finally {
     await boxes.remove(box).catch(() => {});
     await boxes.docker(['volume', 'rm', `${box}-docker`]).catch(() => {});   // the check's own: the app keeps a container's volume
+    if (image) await boxes.docker(['rmi', image]).catch(() => {});           // and its image, which no folder of the owner's uses
     fs.rmSync(dir, { recursive: true, force: true });
   }
   console.log(failed ? `\n${failed} check(s) FAILED` : '\nall checks passed');

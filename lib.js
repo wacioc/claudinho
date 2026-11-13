@@ -567,9 +567,11 @@ function childEnv(env) {
 // ---------- sessions in Docker containers (see containers.js) ----------
 
 // What every container may use at most: two of Docker's processors, which is one core with its two threads on
-// most machines, and four gigabytes. Measured with a session and its services inside: 0.5 to 0.7 GB.
-// ponytail: the same for every container. Make them settings if a project's services need more.
-const BOX_CPUS = 2, BOX_MEMORY_GB = 4;
+// most machines, and eight gigabytes unless the owner's setting says otherwise. A small project's session with
+// its services was measured at 0.5 to 0.7 GB; a project with a mobile toolchain and a browser under test did
+// not fit into the four gigabytes this began with.
+// ponytail: the same for every container, and the processors are not a setting.
+const BOX_CPUS = 2, BOX_MEMORY_GB = 8;
 // How many containers there may be: one for every pair of the processors Docker has, less the pair that is left
 // to the rest of the computer.
 const boxLimit = cpus => Math.max(1, Math.floor(cpus / BOX_CPUS) - 1);
@@ -582,6 +584,31 @@ function freeSlot(taken, limit) {
 const boxWork = folder => `/work/${String(folder).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+/, '') || 'repo'}`;
 // The ports of a container that get a port on this computer: what the setting holds, as numbers.
 const portList = text => [...new Set(String(text || '').split(/\D+/).map(Number).filter(p => Number.isInteger(p) && p > 0 && p < 65536))].slice(0, 20);
+// The tools a folder names for mise, for the window to show: the keys of the [tools] table of a mise.toml, and
+// the first word of each line of a .tool-versions. files: [name, text] pairs.
+// ponytail: a few lines of reading, not a TOML parser: a tool named in another way is not listed. Only the
+// window's wording depends on this; the image is built by mise, which reads the files itself.
+function toolNames(files) {
+  const names = new Set(), bare = k => k.replace(/^["']|["']$/g, '');
+  for (const [name, text] of files) {
+    if (name === '.tool-versions') {
+      for (const line of text.split(/\r?\n/)) { const word = line.replace(/#.*/, '').trim().split(/\s+/)[0]; if (word) names.add(word); }
+    } else if (name.endsWith('.toml')) {
+      let inTools = false;
+      for (const raw of text.split(/\r?\n/)) {
+        const line = raw.trim(), table = /^\[+\s*([^\]]+?)\s*\]+/.exec(line);
+        if (table) { inTools = table[1] === 'tools'; if (table[1].startsWith('tools.')) names.add(bare(table[1].slice(6))); continue; }
+        const key = inTools && /^("[^"]+"|'[^']+'|[A-Za-z0-9_.:/@-]+)\s*=/.exec(line);
+        if (key) names.add(bare(key[1]));
+      }
+    }
+  }
+  return [...names];
+}
+
+// Files by name, as lines for git's exclude list (.git/info/exclude): what its pattern syntax would read as a
+// wildcard is escaped, and the slash in front keeps a name that starts with # or ! from meaning something else.
+const excludeLines = files => files.map(f => `/${f.replace(/[\\*?[\]]/g, '\\$&')}\n`).join('');
 // `docker port <container>`: one line for each of them, "8000/tcp -> 127.0.0.1:51759".
 const parsePorts = text => [...String(text).matchAll(/^(\d+)\/tcp -> 127\.0\.0\.1:(\d+)\s*$/gm)].map(m => ({ port: Number(m[1]), host: Number(m[2]) }));
 
@@ -598,6 +625,22 @@ function parseBoxStats(text) {
     out.set(name, { cpus: (parseFloat(cpu) || 0) / 100, mem: bytesOf(used), memLimit: bytesOf(limit || ''), count: Number(pids) || 0 });
   }
   return out;
+}
+
+// What the app's containers take on the disk, from `docker system df -v --format json`: the layers the
+// containers wrote themselves, the volumes (each container's Docker with its images, the caches, the logins),
+// and the image they are made from. prefix: what the containers' names begin with (see containers.js).
+function boxDisk(text, prefix = 'claudinho') {
+  const d = JSON.parse(text);
+  const sum = (rows, mine) => (rows || []).filter(mine).reduce((n, r) => n + bytesOf(String(r.Size).split(' ')[0]), 0);
+  return {
+    containers: sum(d.Containers, c => new RegExp(`^${prefix}-slot-\\d+$`).test(c.Names)),
+    // each container's Docker has a volume under the containers' own name; the others are shared by all
+    volumes: sum(d.Volumes, v => (/-slot-\d+-docker$/.test(v.Name) ? v.Name.startsWith(`${prefix}-slot-`) : v.Name.startsWith('claudinho-'))),
+    // one image per set of tools: what each holds alone, and once what they share
+    image: (d.Images || []).filter(i => i.Repository === 'claudinho-slot').reduce((n, i) => n + bytesOf(i.UniqueSize || i.Size), 0)
+      + Math.max(0, ...(d.Images || []).filter(i => i.Repository === 'claudinho-slot').map(i => bytesOf(i.SharedSize || '0B'))),
+  };
 }
 
 // ---------- CPU and memory of a process tree ----------
@@ -846,7 +889,8 @@ function labelFor(repoPath, cwd, worktrees = []) {
 
 // ---------- .claude / .github scan ----------
 
-const ROOT_FILES = ['CLAUDE.md', 'CLAUDE.local.md', '.mcp.json', '.worktreeinclude'];
+// The last three name a folder's tools, which its containers are built with (see containers.js).
+const ROOT_FILES = ['CLAUDE.md', 'CLAUDE.local.md', '.mcp.json', '.worktreeinclude', 'mise.toml', '.mise.toml', '.tool-versions'];
 const SKIP_DIRS = new Set(['worktrees', 'node_modules', '.git']); // .claude/worktrees holds whole checkouts
 
 function walk(root, rel, out, depth = 0) {
@@ -907,7 +951,7 @@ module.exports = {
   REVIEW_SYSTEM, REVIEW_SCHEMA, reviewPrompt, reviewVerdict, waitForChecks,
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,
   auditEntries, auditPick, toolKey, parseVersion, newerVersion,
-  BOX_CPUS, BOX_MEMORY_GB, boxLimit, freeSlot, boxWork, portList, parsePorts, parseBoxStats,
+  BOX_CPUS, BOX_MEMORY_GB, boxLimit, freeSlot, boxWork, portList, toolNames, excludeLines, parsePorts, parseBoxStats, boxDisk,
   childEnv, isInside, realPath, samePath, parseWorktrees, labelFor, scanConfig, configPath, ROOT_FILES, HOME_FILES, HOME_DIRS, scanHome, homePath,
   SAMPLE_SECONDS, samplerCommand, cpuSeconds, parseProcs, treeOf, treeUsage, sparedPids, byName,
   WEIGHTS, MIN_SHARE, shareCpu, scopeUnit, scopeProps, scopeCommand, throttleTargets, nextDuty,

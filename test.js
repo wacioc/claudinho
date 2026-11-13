@@ -244,12 +244,40 @@ assert.strictEqual(lib.boxWork('日本'), '/work/repo');
 // the ports setting, however it was typed: numbers, each once, none that is no port
 assert.deepStrictEqual(lib.portList('3000, 5173,8000  8080, x, 70000, 0, 3000'), [3000, 5173, 8000, 8080]);
 assert.deepStrictEqual(lib.portList(''), []);
+// local files copied into a clone, named for its exclude list: literally, whatever characters a name holds
+assert.strictEqual(lib.excludeLines(['.env', 'apps/web/.env.local', 'odd [1]*?.txt', 'back\\slash', '#hash', '!bang']),
+  '/.env\n/apps/web/.env.local\n/odd \\[1\\]\\*\\?.txt\n/back\\\\slash\n/#hash\n/!bang\n');
+assert.strictEqual(lib.excludeLines([]), '');
 assert.deepStrictEqual(lib.parsePorts('8000/tcp -> 127.0.0.1:51759\r\n5173/tcp -> 127.0.0.1:51760\n9/udp -> 127.0.0.1:1\n'), [{ port: 8000, host: 51759 }, { port: 5173, host: 51760 }]);
 // docker stats: processors in use, memory with its ceiling in Docker's units, processes
 const stats = lib.parseBoxStats('claudinho-slot-1\t152.34%\t185.3MiB / 4GiB\t42\r\nclaudinho-slot-2\t0.00%\t0B / 0B\t0\n\n');
 assert.deepStrictEqual(stats.get('claudinho-slot-1'), { cpus: 1.5234, mem: Math.round(185.3 * 2 ** 20), memLimit: 4 * 2 ** 30, count: 42 });
 assert.deepStrictEqual(stats.get('claudinho-slot-2'), { cpus: 0, mem: 0, memLimit: 0, count: 0 });
 assert.strictEqual(stats.size, 2);
+// what the containers take on the disk, out of Docker's report on everything it holds: only what is the app's
+const df = JSON.stringify({
+  Images: [{ Repository: 'claudinho-slot', Tag: 'abc', Size: '1.72GB' }, { Repository: 'postgres', Tag: '17', Size: '400MB' }],
+  Containers: [{ Names: 'claudinho-slot-2', Size: '1.5GB' }, { Names: 'claudinho-slot-10', Size: '12MB (virtual 1.7GB)' }, { Names: 'other-db-1', Size: '5GB' }, { Names: 'claudinho-slot-2-old', Size: '9GB' }],
+  Volumes: [{ Name: 'claudinho-claude', Size: '100MB' }, { Name: 'claudinho-slot-2-docker', Size: '900MB' }, { Name: 'elsewhere', Size: '7GB' }, { Name: 'cltest-slot-1-docker', Size: '1kB' }],
+  BuildCache: [],
+});
+assert.deepStrictEqual(lib.boxDisk(df), { containers: 1.5e9 + 12e6, volumes: 100e6 + 900e6, image: 1.72e9 });
+assert.deepStrictEqual(lib.boxDisk(df, 'cltest'), { containers: 0, volumes: 100e6 + 1e3, image: 1.72e9 });   // a test copy: its own containers, and the volumes all share
+assert.deepStrictEqual(lib.boxDisk('{}'), { containers: 0, volumes: 0, image: 0 });
+// one image per set of tools: the layers they share count once
+assert.strictEqual(lib.boxDisk(JSON.stringify({ Images: [
+  { Repository: 'claudinho-slot', Tag: 'a', Size: '2.1GB', UniqueSize: '100MB', SharedSize: '2GB' },
+  { Repository: 'claudinho-slot', Tag: 'b', Size: '4.5GB', UniqueSize: '2.5GB', SharedSize: '2GB' },
+  { Repository: 'python', Tag: '3.13-slim', Size: '180MB', UniqueSize: '0B', SharedSize: '180MB' }] })).image, 100e6 + 2.5e9 + 2e9);
+
+// the tools a folder names, for the window: the keys of [tools], also quoted ones and those with a table of
+// their own, and the first words of a .tool-versions; nothing of other tables, of comments or of a lock file
+assert.deepStrictEqual(lib.toolNames([['mise.toml', [
+  '# the project\'s tools', 'min_version = "2024.1.1"', '', '[env]', 'NODE_ENV = "development"', '', '[tools]', 'just = "1.36.0"', 'uv = "0.5.11" # the package manager',
+  '"npm:prettier" = "3"', 'python = { version = "3.13", virtualenv = ".venv" }', '', '[tools.flutter]', 'version = "3.27.1"', '', '[tasks.check]', 'run = "just check"'].join('\r\n')],
+['mise.lock', '[tools.node]\nversion = "22"\n'], ['.tool-versions', 'nodejs 22.1.0\n# ruby 3.3\n\ngolang 1.23 1.22\n']]),
+['just', 'uv', 'npm:prettier', 'python', 'flutter', 'nodejs', 'golang']);
+assert.deepStrictEqual(lib.toolNames([]), []);
 
 // the record of input requests
 const tea = { hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_1', tool_input: { questions: [

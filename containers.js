@@ -5,12 +5,13 @@
 // same ports, and none sees another's.
 //
 // A container is a numbered place, claudinho-slot-N, and there are only so many of them (lib.boxLimit), each
-// held to two processors and four gigabytes. It is made when its session starts and removed when the session's
+// held to two processors and a memory ceiling the owner sets. It is made when its session starts and removed when the session's
 // card is closed, as a worktree is. Three kinds of volume outlive it:
 //   claudinho-slot-N-docker       the images its Docker pulled, kept for the next session at that number
 //   claudinho-claude, -gh         Claude Code's configuration with its login, and GitHub's login: one of each
 //                                 for all containers. Both logins are made inside a container, by the owner.
-//   claudinho-npm-cache, -pip-cache   what npm and pip downloaded
+//   claudinho-npm-cache, -pip-cache, -uv-cache, -playwright   what npm, pip and uv downloaded, and the
+//                                 browsers Playwright fetched
 // The folder on this computer is mounted read-only at /src and cloned from there. A session's work leaves its
 // container by `git push`, and in no other way.
 //
@@ -22,6 +23,7 @@
 const { execFile, spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const lib = require('./lib');
 
@@ -56,19 +58,43 @@ async function info() {
   return { cpus: Number(cpus), mem: Number(mem), version, limit: lib.boxLimit(Number(cpus)) };
 }
 
-// The image all containers are made from, built from container/Dockerfile when it is not there yet. Its tag is
-// worked out from the recipe and from the version of Claude Code on this computer: a change of either builds a
-// new image, and the ones before it are then removed, unless a container still uses one.
+// The files in which a folder names its tools, for mise: https://mise.jdx.dev/configuration.html
+const TOOL_FILES = ['mise.toml', '.mise.toml', 'mise.lock', '.tool-versions'];
+// Those of a folder, as [name, what it holds].
+const toolFiles = root => TOOL_FILES.map(name => { try { return [name, fs.readFileSync(path.join(root, name))]; } catch { return null; } }).filter(Boolean);
+
+// The image a folder's containers are made from, built from container/Dockerfile when it is not there yet. It
+// holds the tools the folder names (see toolFiles), so a container has them from its first second. Its tag is
+// worked out from the recipe, from those files and from the version of Claude Code on this computer: a change
+// of any builds a new image, of which Docker makes only the layers that differ. Every start of a container
+// asks for it, which is how a changed mise.toml is noticed. Folders that name the same tools, or none, share
+// an image.
 // say: told each line of the build as it goes.
-let building = null;
-function image(claude, say = () => {}) {
-  const tag = `claudinho-slot:${crypto.createHash('sha256').update(fs.readFileSync(DOCKERFILE)).update(String(claude)).digest('hex').slice(0, 12)}`;
-  if (building) return building;
-  building = (async () => {
-    if (await docker(['image', 'inspect', '--format', '{{.Id}}', tag]).then(() => true, () => false)) return tag;
-    say('Building the image that containers are made from. This is needed once, and again with each new version of Claude Code. The first time it downloads several hundred megabytes and takes some minutes.');
+const building = new Map();   // tag -> the build under way: sessions started together wait for the same one
+function tagOf(claude, tools) {
+  const hash = crypto.createHash('sha256').update(fs.readFileSync(DOCKERFILE)).update(String(claude));
+  for (const [name, text] of tools) hash.update(`\0${name}\0`).update(text);
+  return `claudinho-slot:${hash.digest('hex').slice(0, 12)}`;
+}
+function image(claude, root, say = () => {}) {
+  const tools = toolFiles(root), tag = tagOf(claude, tools);
+  if (!building.has(tag)) building.set(tag, build(tag, claude, root, tools, say).finally(() => building.delete(tag)));
+  return building.get(tag);
+}
+
+async function build(tag, claude, root, tools, say) {
+  if (await docker(['image', 'inspect', '--format', '{{.Id}}', tag]).then(() => true, () => false)) return tag;
+  // Whose image it is: the folder's, or everybody's who names no tools. The images that one had before go.
+  const owner = tools.length ? root : '-';
+  say(`Building the image for the containers${tools.length ? ` of this folder, with the tools that ${tools.map(t => t[0]).join(' and ')} name${tools.length === 1 ? 's' : ''}` : ''}. This is needed once, again when those tools change, and again with each new version of Claude Code. The first time it downloads several hundred megabytes, more for a large toolchain, and takes some minutes.`);
+  // What Docker is given to build from: the recipe, and the folder's files in tools/.
+  const context = fs.mkdtempSync(path.join(os.tmpdir(), 'claudinho-image-'));
+  try {
+    fs.copyFileSync(DOCKERFILE, path.join(context, 'Dockerfile'));
+    fs.mkdirSync(path.join(context, 'tools'));
+    for (const [name, text] of tools) fs.writeFileSync(path.join(context, 'tools', name), text);
     await new Promise((resolve, reject) => {
-      const child = spawn('docker', ['build', '--progress', 'plain', '-t', tag, '--build-arg', `CLAUDE_CODE=${claude}`, '-f', DOCKERFILE, path.dirname(DOCKERFILE)], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      const child = spawn('docker', ['build', '--progress', 'plain', '-t', tag, '--label', `claudinho.tools-of=${owner}`, '--build-arg', `CLAUDE_CODE=${claude}`, context], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       let rest = '', last = '';
       const read = chunk => {
         const lines = (rest + chunk).split(/\r?\n/);
@@ -80,11 +106,15 @@ function image(claude, say = () => {}) {
       child.on('error', reject);
       child.on('exit', code => (code === 0 ? resolve() : reject(new Error(`The image for containers could not be built: ${last}`))));
     });
-    const tags = (await docker(['images', 'claudinho-slot', '--format', '{{.Repository}}:{{.Tag}}'])).split(/\r?\n/).filter(t => t && t !== tag);
-    for (const old of tags) await docker(['rmi', old]).catch(() => { /* a container still uses it */ });
-    return tag;
-  })().finally(() => { building = null; });
-  return building;
+  } finally { fs.rmSync(context, { recursive: true, force: true }); }
+  // The same owner's older images, and those from before images had an owner. One that a container still uses
+  // stays: Docker refuses to remove it.
+  const tags = (await docker(['images', 'claudinho-slot', '--format', '{{.Repository}}:{{.Tag}}'])).split(/\r?\n/).filter(t => t && t !== tag);
+  for (const old of tags) {
+    const of = await docker(['image', 'inspect', '--format', '{{index .Config.Labels "claudinho.tools-of"}}', old]).then(x => x.trim(), () => null);
+    if (of === owner || of === '') await docker(['rmi', old]).catch(() => { /* in use */ });
+  }
+  return tag;
 }
 
 // Every container of ours, running or not, by number. root, name, work and key are what `create` wrote on it:
@@ -98,16 +128,17 @@ async function list() {
 }
 
 // A new container at number n. dir: the folder on this computer that it sees as /claudinho, where the app puts
-// the session's settings and the session leaves its status (see lib.instanceSettings).
-async function create({ n, image: tag, root, name, work, key, dir, ports }) {
+// the session's settings and the session leaves its status (see lib.instanceSettings). memoryGb: its ceiling.
+async function create({ n, image: tag, root, name, work, key, dir, ports, memoryGb = lib.BOX_MEMORY_GB }) {
   const box = nameOf(n);
   await docker(['run', '-d', '--init', '--privileged', '--name', box, '--hostname', `slot-${n}`,
-    '--cpus', String(lib.BOX_CPUS), '--memory', `${lib.BOX_MEMORY_GB}g`,
+    '--cpus', String(lib.BOX_CPUS), '--memory', `${memoryGb}g`,
     '--label', `claudinho.root=${root}`, '--label', `claudinho.name=${name}`, '--label', `claudinho.work=${work}`, '--label', `claudinho.key=${key}`,
     // 127.0.0.1 without a port: Docker picks a free one on this computer for each of them (see `ports`)
     ...ports.flatMap(p => ['-p', `127.0.0.1::${p}`]),
     '-v', `${box}-docker:/var/lib/docker`, '-v', `claudinho-claude:${HOME}/.claude`, '-v', `claudinho-gh:${HOME}/.config/gh`,
     '-v', `claudinho-npm-cache:${HOME}/.npm`, '-v', `claudinho-pip-cache:${HOME}/.cache/pip`,
+    '-v', `claudinho-uv-cache:${HOME}/.cache/uv`, '-v', `claudinho-playwright:${HOME}/.cache/ms-playwright`,
     '-v', `${root}:/src:ro`, '-v', `${dir}:/claudinho`, tag]);
   return box;
 }
@@ -155,7 +186,12 @@ async function copyIncluded(box, root, work) {
   const ignored = listed && await hostGit(['check-ignore', '-z', '--stdin'], root, listed).catch(() => '');   // git ends with 1 when none of them is ignored
   if (!ignored) return 0;
   await inBox(box, ['sh', '-c', 'xargs -0 -r cp --parents -t "$1"', 'sh', work], { cwd: '/src', input: ignored, timeout: 300000 });
-  return ignored.split('\0').filter(Boolean).length;
+  // In the folder they are ignored, which may be by a rule that the clone does not have (the folder's own
+  // .git/info/exclude, the owner's global list). The clone is told to ignore each by name, so that none shows
+  // as a change there, and none is committed by a session that adds everything.
+  const files = ignored.split('\0').filter(Boolean);
+  await inBox(box, ['sh', '-c', 'cat >> "$1/.git/info/exclude"', 'sh', work], { input: lib.excludeLines(files) });
+  return files.length;
 }
 
 // What a new container gets before its session starts: the configuration, and the folder as a clone on a new
@@ -175,8 +211,20 @@ async function fill(box, { root, work, branch, origin, identity, configDir, say 
   const fresh = await git(['fetch', '-q', '--prune', 'origin'], { timeout: 120000 }).then(() => git(['remote', 'set-head', 'origin', '-a'], { timeout: 60000 })).then(() => true, () => false);
   if (!fresh) say('The remote did not answer, so this session starts from what the folder on this computer is on.');
   await git(['switch', '-q', '--no-track', '-c', branch, ...(fresh ? ['origin/HEAD'] : [])]);
+  // The clone came with a branch of its own: the one the folder on this computer is on. It is not the session's,
+  // and commits on it that the folder has not pushed would count as work that is only in this container (see
+  // `state`), which they are not. So it goes; the session can have it back from the remote.
+  for (const other of (await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads'])).split('\n').map(b => b.trim()).filter(b => b && b !== branch)) await git(['branch', '-q', '-D', other]);
+  // The image has the tools that the folder on this computer names. The branch the session works on may name
+  // others, or the folder none where the branch does: those are installed here, in the container alone.
+  // With nothing missing this takes a fraction of a second.
+  await inBox(box, ['mise', 'install'], { cwd: work, timeout: 1800000 }).catch(e => say(`Not all tools that this branch names could be installed: ${e.message}`));
   const copied = await copyIncluded(box, root, work);
-  if (copied) say(`Copied ${copied} file${copied === 1 ? '' : 's'} named by .worktreeinclude.`);
+  if (copied) say(`Copied ${copied} local file${copied === 1 ? '' : 's'} into the clone, as the folder's .worktreeinclude names them.`);
+  // A .env that stays behind is the usual reason a project does not start in its container: say so.
+  else if (!fs.existsSync(path.join(root, '.worktreeinclude')) && fs.readdirSync(root).some(n => /^\.env(\.|$)/.test(n) && !/\.(example|sample|template|dist)$/.test(n))) {
+    say('This folder has a .env that is not part of the clone, and no list of local files to copy. Name them under the settings, as "Local files to copy".');
+  }
 }
 
 // What a container's clone holds that is nowhere else, the way a worktree's row says it: changes that are not
@@ -204,6 +252,12 @@ const ports = async box => lib.parsePorts(await docker(['port', box]).catch(() =
 const stats = async names => lib.parseBoxStats(await docker(['stats', '--no-stream', '--format', '{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.PIDs}}', ...names], { timeout: 30000 }));
 const exists = box => docker(['container', 'inspect', '--format', '{{.Id}}', box]).then(() => true, () => false);
 const start = box => docker(['start', box]);
+// Another memory ceiling for containers that exist, running or not. The ceiling with swap goes along: Docker
+// had set it to twice the memory when the container was made, and refuses a memory above it.
+const resize = (names, memoryGb) => (names.length ? docker(['update', '--memory', `${memoryGb}g`, '--memory-swap', `${2 * memoryGb}g`, ...names]) : Promise.resolve());
+// What the app's containers, their volumes and their image take on the disk (see lib.boxDisk). Docker needs
+// two to three seconds for this.
+const disk = async () => lib.boxDisk(await docker(['system', 'df', '-v', '--format', 'json'], { timeout: 60000 }), PREFIX);
 // Stopped, a container keeps what is in it and runs nothing.
 const stop = names => (names.length ? docker(['stop', '-t', '5', ...names], { timeout: 120000 }) : Promise.resolve());
 // The same when the app is closing, which does not wait for it.
@@ -211,4 +265,4 @@ const stopBehind = names => { if (names.length) spawn('docker', ['stop', '-t', '
 // The volume of its Docker's images is left, for the next session at that number.
 const remove = box => docker(['rm', '-f', '-v', box], { timeout: 120000 });
 
-module.exports = { recipe, nameOf, numberOf, docker, inBox, info, image, list, create, ready, copyConfig, fill, state, signedIn, terminal, ports, stats, exists, start, stop, stopBehind, remove };
+module.exports = { recipe, nameOf, numberOf, docker, inBox, info, toolFiles, tagOf, image, list, create, ready, copyConfig, fill, state, signedIn, terminal, ports, stats, resize, disk, exists, start, stop, stopBehind, remove };

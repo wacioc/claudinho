@@ -61,7 +61,7 @@ The first `npm install` downloads the Electron binary.
 | **Instances** | Every Claude Code instance as a live terminal, titled with its worktree (or the folder name), with model, context window, API-equivalent cost, uptime, and the CPU and memory used by it and everything it started. Click one for the full terminal, a per-process breakdown, its environment variables, its autonomy and the input level, on a second tab the diff of its pull request, or of its folder while there is none yet, and beside it the list of all sessions to go from one to the next. A session that was sent after an issue, and one whose branch has a pull request, carry a button for each that opens it on GitHub. Sessions that belong to a group carry its name and colour, and one whose turn has ended a green outline and checkmark. Sessions started outside the app appear as status-only cards, which a filter can hide, and sessions that were open when the app last stopped appear as cards with a Resume button. |
 | **Worktrees** | Every worktree under `.claude/worktrees`: its branch, whether it holds uncommitted changes or commits that exist nowhere else, its last commit, and the session at work in it. Each can be removed from here. |
 | **Containers** | With Docker chosen, in the place of Worktrees: every container that sessions work in on this computer, with its session, its folder and branch, whether its clone holds uncommitted changes or commits that are not pushed, and whether it is running. A container that was kept can be given a new session, or removed. |
-| **Issues** | Open issues by default, in number order with the highest first, with the issues blocking each one. Select one or many, right-click, "Tackle with Claude Code". |
+| **Issues** | Open issues by default, in number order with the highest first, with the issues blocking each one. Select one or many, right-click, "Tackle with Claude Code". A double click on an issue does the same for that one. |
 | **Pull requests** | The repository's open pull requests in number order with the highest first, drafts and those ready for review: branch, checks, review state, and the session at work on each. A click on a title opens it on GitHub. |
 | **.claude** | Everything under `.claude` and `.github` of the open folder, and your own configuration from the home folder (`~/.claude`): `CLAUDE.md`, `settings.json`, agents, skills, commands, rules. All of it is editable inline. Saving a file of the open folder offers to commit and push. "New skill" and "New agent" generate one from a prompt in a terminal, where Claude can ask follow-up questions. |
 
@@ -69,6 +69,11 @@ The header shows the app's version, the logged-in account, the 5-hour and 7-day 
 Claude Code, the version of Claude Code that is installed, and the bell. When a newer version of the app or of
 Claude Code is out, a button to install it appears beside the version it replaces. A list in the header says
 where sessions work: in worktrees, or in Docker containers.
+
+Three figures in the bar below say what all of it takes: the CPU and the memory of every session the app runs,
+with whatever those sessions started, on this computer and in containers, and the disk their worktrees and
+containers hold. Each one's tooltip says what it is made of. The disk takes seconds to measure, so it is
+measured every ten minutes.
 
 ### Worktrees or Docker containers
 
@@ -80,8 +85,8 @@ is chosen, and the others go on out of sight.
 |---|---|---|
 | Where a session works | In a git worktree under `.claude/worktrees`, made by `claude -w`. | In a container of its own, on a clone of the folder, on a new branch made from GitHub's default branch. |
 | Services and ports | All sessions share this computer. Two that start the same service on the same port get in each other's way, unless each worktree is given ports of its own. | Each container has a Docker of its own inside, so every session can run the same services on the same ports. |
-| What it takes | Nothing beyond the requirements. | Docker Desktop, running. About 2 GB of disk for the image, what each container's services pull, and memory for each container while it runs. |
-| How many at once | As many as you start. | One for every two of Docker's processors, less one: 7 where Docker has 16. Each may use 2 processors and 4 GB. |
+| What it takes | Nothing beyond the requirements. | Docker Desktop, running. About 2 GB of disk for the image, more for a folder's own tools, what each container's services pull, and memory for each container while it runs. |
+| How many at once | As many as you start. | One for every two of Docker's processors, less one: 7 where Docker has 16. Each may use 2 processors and 8 GB of memory, which is a setting. |
 | Where the work is | On this computer, in the worktree. | In the container, until it is pushed. |
 
 With Docker chosen:
@@ -93,14 +98,32 @@ With Docker chosen:
 - The first container needs an image, which the app builds by itself: once, and again when Claude Code on this
   computer has a new version, so that containers run that version too. The first build downloads several
   hundred megabytes and takes some minutes; the card shows it going.
+- The image holds git, gh, jq, curl, Python, Node.js, Docker with Compose, and the system libraries a headless
+  Chromium needs. What else a folder's sessions need, the folder names in a `mise.toml` (or `.tool-versions`)
+  at its root, for [mise](https://mise.jdx.dev/configuration.html): `just`, `uv`, Flutter, another Node.js.
+  Those tools are built into that folder's image, so a container has them from its first second. Every start
+  of a container asks for the image that goes with the file as it is: nothing is built while the file is the
+  same, and when it has changed the next container waits for a new image, of which only the tools and what
+  follows them are built again.
+- The dialogs that start a session say which tools the folder names. Where it has no such file they say that
+  too, and offer to have Claude Code write one: it reads the folder's CI workflows, its justfile, its lockfiles
+  and version files, writes a `mise.toml` with a version for every tool, and the app offers to commit it.
+- A project's own set-up is not the image's: `uv sync`, `npm ci`, `flutter pub get`, `playwright install
+  chromium`. It is the repository's, as for a worktree: its `SessionStart` hook, or the session itself.
+  Sessions may use `sudo`, and what npm, pip, uv and Playwright download is kept for all containers.
 - Logins are made inside a container, once, and kept in Docker volumes that all containers share. Claude Code
   asks for its login in the first session's terminal (`/login`), and where GitHub has none yet, the card runs
   `gh auth login` before anything else. Nothing is copied from the logins of this computer.
 - Your own Claude Code configuration is copied into the containers at each start, file by file and only what
   has changed: `CLAUDE.md`,
   `settings.json`, `keybindings.json`, agents, commands, output styles, rules, skills, hooks, and the scripts
-  that lie directly in that folder. Files named by `.worktreeinclude` are copied into the clone, as Claude Code
-  copies them into a worktree.
+  that lie directly in that folder.
+- A clone does not bring the folder's local files, a `.env` for one. Name them under ⚙, "Local files to copy
+  into a new container or worktree": one pattern a line, in `.gitignore` syntax, anywhere in the folder.
+  Files that match, and that git ignores, are copied into each new container, and git in the clone is told
+  to ignore them there too. The list is the folder's `.worktreeinclude` file, which Claude Code reads the same
+  way for a new worktree, so one list serves both. Where a `.env` stays behind for want of a list, the card
+  says so.
 - Inside, every container has the same ports. To open what a session runs in your browser, name the ports
   under ⚙ ("Ports of a container to reach from this computer"; 3000, 5173, 8000 and 8080 to begin with). Each
   gets a port of its own on this computer, listed in the instance's detail view. A change counts for
@@ -400,9 +423,11 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
 
 - Each instance is `claude` in a pseudo-terminal (`node-pty`), drawn with `xterm.js`.
 - A session in a container is `docker exec -it … claude` in the same kind of pseudo-terminal. Its container is
-  made with `docker run --privileged --cpus 2 --memory 4g` from an image built from `container/Dockerfile`:
+  made with `docker run --privileged --cpus 2 --memory 8g` from an image built from `container/Dockerfile`:
   Debian with Python, Node.js, git, gh, Docker's engine with Compose, and Claude Code from Anthropic's package
-  repository. The open folder is mounted read-only and cloned inside.
+  repository. Between what every folder shares and Claude Code lies a layer with the folder's own tools,
+  installed by `mise install` from its `mise.toml`; the image's tag is worked out from the recipe, that file
+  and the version of Claude Code. The open folder is mounted read-only and cloned inside.
 - From a container, the app's hook server is another machine, and Claude Code refuses an HTTP hook to a
   private address. Those sessions send the same requests with `curl`, from command hooks, to
   `host.docker.internal`. Their status comes from `claude agents --json` run inside each container, their CPU
@@ -510,14 +535,26 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
 - The logins of the containers are their own, in the Docker volumes `claudinho-claude` and `claudinho-gh`.
   Removing those volumes signs the containers out. A setting of yours that names a path or a program of this
   computer points nowhere inside a container: a status line or a hook written for Windows does not run there.
-- Every container has the same ceiling, 2 processors and 4 GB. The CPU ceiling and the CPU weights under ⚙ do
-  not apply to it. When a container reaches its memory ceiling, the kernel ends a process in it, which may be
-  a service or Claude Code itself.
+- Every container has the same ceiling: 2 processors, and the memory set under ⚙, 8 GB to begin with. The CPU
+  ceiling and the CPU weights there do not apply to it. When a container reaches its memory ceiling, the
+  kernel ends a process in it, which may be a service or Claude Code itself. The ceilings are not set aside:
+  seven containers of 8 GB can ask for more than Docker has, and what Docker has is Docker's own setting
+  (on Windows, the memory of its WSL machine).
 - The ports that reach this computer are set when a container is made. A service on another port is reached
   from inside only: the session can test it, your browser cannot open it. The numbers on this computer change
   when a container is started again.
-- The image holds what most projects start from. What a project needs beyond it comes from pip, npm, or a
-  container of the Docker inside: sessions do not run as root, so they cannot `apt-get install`.
+- A folder's tools are built from the `mise.toml` in the folder on this computer, pushed or not. A session
+  finds them whatever its branch holds; tools that only the branch's own file names are installed when the
+  container is made, into that container alone, which takes as long as they take. A version written as
+  `latest` is looked up when the image is built and stays until the file changes. A change of one tool
+  fetches all of the folder's tools again.
+- A folder's tools have been tried with `just`, `uv` and Node.js. Flutter is in mise's list and has not
+  been tried here, nor has a tool that has to be compiled.
+- An image per set of tools takes disk: Flutter alone is about 2 GB. The app removes a folder's older images.
+  Those of a folder that is no longer opened stay until they are removed by hand (`docker rmi`).
+- What a session installs with `sudo`, or a tool it adds with mise, is in its container alone and goes with
+  it. The image has the libraries of a headless Chromium, not the browser: a project fetches the one its
+  Playwright wants, once for all containers.
 - A new version of Claude Code on this computer makes the next container wait for the image to be built
   again, about a minute. Sessions in containers that are already running keep the version they started with.
 - Quitting the app stops the containers of its sessions, and a resume does not start again what those

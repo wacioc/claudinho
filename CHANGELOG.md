@@ -4,7 +4,7 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
-## 0.7.1
+## 0.7.1 (2026-11-13)
 
 **Docker containers**
 
@@ -14,6 +14,31 @@ the [releases page](https://github.com/wacioc/claudinho/releases).
   takes about 13 seconds by itself.
 - Your Claude Code configuration goes into the containers file by file, and a file that has not changed is
   left alone. Before, every new container wrote all of it anew, under the sessions that were reading it.
+- The memory ceiling of a container is a setting, and 8 GB unless you change it. It was 4 GB. A change counts
+  for the containers there are as well.
+- Local files that a clone does not bring, a `.env` for one, are copied into each new container from a list
+  under ⚙: patterns in `.gitignore` syntax, kept in the folder's `.worktreeinclude`, which Claude Code reads
+  for a new worktree too. A card says so when a `.env` stays behind for want of a list. In the clone, git
+  ignores what was copied.
+- A container is no longer kept at closing because the folder on this computer had commits that were not
+  pushed. Those commits came along with the clone and counted as the session's.
+- A folder names the tools its sessions need in a `mise.toml` (or `.tool-versions`), and they are built into
+  that folder's image: `just`, `uv`, another Node.js, whatever mise knows. Every start of a container looks at the file,
+  and a changed one builds a new image. The dialogs that start a session say which tools the folder names,
+  and where it has no such file they offer to have Claude Code write one.
+- The image has the system libraries of a headless Chromium, and sessions may use `sudo`. What uv and
+  Playwright download is kept for all containers, as it already was for npm and pip.
+- With Docker chosen, the card of a session that writes a skill or an agent was out of sight. It is on show
+  under either choice now.
+
+**All of it at a glance**
+
+- Three figures in the bar say what every session of the app takes together: CPU, memory, and the disk of
+  their worktrees and containers.
+
+**Issues**
+
+- A double click on an issue opens the dialog that "Tackle … with Claude Code" opens.
 
 ## 0.7.0 (2026-11-13)
 

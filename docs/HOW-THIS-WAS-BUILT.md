@@ -1437,12 +1437,115 @@ Live, in the test copy, while the owner's own four container sessions were runni
 The cards still come a second and a half apart: each issue's blockers are asked of GitHub before it starts,
 one issue after another.
 
+### After 0.7.0: what the first real project ran into
+
+The owner ran seven sessions of another project in containers and came back with a list:
+
+> 1. Might need to increase to 8GB of RAM / container
+> 2. I'm getting a lot of errors for stuff that's missing [...] just, uv and flutter aren't installed here
+> 3. "Playwright's Chromium missing from this machine"
+> 4. No .env file in the containers
+
+and two wishes beside it: figures for the CPU, the memory and the disk of everything the app runs, and a
+double click on an issue for what the right click offers. Points 2 and 3 are a question of their own, how a
+repository says which tools it needs, and are not part of what follows.
+
+| Decision | Why |
+|---|---|
+| The memory ceiling is a setting, 8 GB unless changed. A change is also applied to the containers there are (`docker update`). | The owner's number. A session that has reached its ceiling is the reason to raise it, so the raise must reach that session. The ceilings together may exceed what Docker has; the setting says so, with Docker's figure. |
+| The local files to copy are the folder's `.worktreeinclude`, with a field for it under the settings. | Asked for was a list that can be set. That file is such a list already: Claude Code reads it for a new worktree, and 0.7.0 read it for a new container. One list then serves both ways of working, and it travels with the repository. The owner's project had none, which is why nothing arrived. |
+| A card says when a `.env` stays behind and no list exists. | That is the case the owner met, and nothing had said why. |
+| In the clone, each copied file is entered by name into git's own exclude list. | The rule that ignores a file in the folder can be one that the clone does not have (the folder's own exclude list, the owner's global one). Without it the copied file shows as a change, the container is kept at closing, and a session that adds everything commits a secret. |
+| After the clone, the branch that came with it is deleted. | A clone brings the branch the folder is on. If the folder had commits on it that were not pushed, they counted as work that exists only in the container, and the container was kept at closing for no reason. Found by `box-check.js`, on the day this repository itself was one commit ahead. |
+| The three figures add up what the cards show, for CPU and memory. The disk is the folder's worktrees and, where containers were chosen at some time, what Docker holds for them: the containers' own layers, the volumes, the image. | Asked for was what is "under claudinho's umbrella". Sessions started outside the app are not. Docker is not asked on a machine where containers were never chosen; the folder the app keeps for containers tells. Both parts of the disk take seconds, so they are measured every ten minutes and after a close, the worktrees by a helper process so that the app itself does not go through a hundred thousand files. |
+
+`test.js` has asserts for the disk report and for the lines of the exclude list. `box-check.js` got verdicts
+for a ceiling raised on a running container and for the disk reading, 25 in all.
+
+Live, in the test copy, with sessions that were started without a prompt and so called no model:
+
+| What | Result |
+|---|---|
+| A container made while the folder had a `.env` and no list | Its card said that a `.env` had stayed behind and where to name it. The file was not in the clone. The ceiling was 8 GB. |
+| The ceiling set to 6 GB, then to 8 again | The running container followed both times, within a second. |
+| The list set under the settings | The folder's `.worktreeinclude` held it, and the app offered to commit it. |
+| A container made with the list | Two files were copied, one of them three folders down. git in the clone counted neither as a change, although the rule that ignores them existed only in the folder on this computer. Claude Code copied the same two into a new worktree by itself. |
+| The three figures | Memory was the sum of the cards, split into this computer and containers, with what Docker has beside it. The disk named the image, the volumes and the containers' own layers, and the worktrees once there was one. |
+| A double click on the second of two issues | The dialog for that issue, after the first click had redrawn the list under the mouse. |
+
+| Symptom | Cause | What changed |
+|---|---|---|
+| A fresh container counted one commit as not pushed. | See the table above: the clone's own branch. | It is deleted after the clone. |
+| The disk of a test copy counted the volumes of the copy in use. | Every volume whose name begins with the app's was taken for a shared one. | A container's own volume is told from a shared one by its name's end. |
+| A helper that escapes file names escaped nothing, and the asserts said "ok". | It had been written through a shell that halved its backslashes, and its assert had not been written at all, because the same script stopped before it. | Written again with the editor; the assert is in. Section 17 has the rule. |
+
+### After 0.7.0: a folder's tools
+
+Points 2 and 3 of that list, tools that were not there, came as a question:
+
+> we need a deterministic way to identify what requirements the repository has, how could we get that from the
+> repo? This needs to work agnostic from this project.
+
+The first answer was three layers: a `mise.toml` where the repository has one, a table that infers tools from
+well-known files where it has none, and the tools installed into a volume all containers share. The owner asked
+what a Dev Container file would hold, who writes the `mise.toml`, whether its presence can be checked before
+an issue is tackled, and:
+
+> Could we build the base container off of the mise.toml and check it at every start if it was updated and if
+> it was updated we need to update the base container?
+
+That last one replaced the shared volume, and the question of who writes the file replaced the table.
+
+| Decision | Why |
+|---|---|
+| A repository names its tools in a `mise.toml` or `.tool-versions`, which mise reads. A Dev Container file is not read. | No program can tell from an arbitrary repository which tools it needs; what is certain is a file in which it says so. mise's file is a list of names and versions, and its registry has the tools that were missing (`just`, `uv`, Flutter). A Dev Container file says more (system packages, set-up commands), at the price of a second build tool and of fitting the app's own needs onto whatever base it names. It can be read as well, later, where a repository has one. |
+| The tools are built into the image, one image per set of tools, and not installed into a shared volume when a container starts. | The owner's proposal. A container then has its tools from the first second, a broken file fails once, at the build, and containers that start side by side share nothing they could both be writing. |
+| The image's tag is a hash of the recipe, the folder's tool files and the version of Claude Code. Every start of a container works the tag out and builds if no image has it. | That is the check "at every start". It costs a fraction of a second when nothing changed, and it is how the recipe and Claude Code were already followed. |
+| The recipe's order is: what every folder shares, the folder's tools, Claude Code. | Docker builds a layer again when one before it changed. Claude Code changes most often, so it comes last and does not take the tools with it. A folder's tools change seldom and are large. |
+| The tool files are taken from the folder on this computer and put above the clone, in `/work`. | They need not be pushed for the image to be built, and a session finds its tools whatever its branch holds. mise reads files from the folder a command runs in upwards, so a file of the clone itself comes first. Tools that only the branch names are installed when the container is made, into that container. |
+| The files are trusted (`MISE_TRUSTED_CONFIG_PATHS=/work`). | mise asks before it reads a file that sets variables or runs hooks. Nobody is there to answer, and everything else in the folder is run without asking. |
+| The start dialogs say which tools the folder names, and warn where it names none, without refusing the start. | Asked for was a check before an issue is tackled. A folder may need nothing beyond the image, so the start is the owner's call. |
+| The file is written by the repository's owner, and the app offers to have Claude Code write it: from the CI workflows, the justfile, lockfiles and version files, with a version for every tool. | This is the inference, made once, read by a person and committed, instead of a table in the app that guesses at every start and that nobody reviews. |
+| The image has the system libraries of a headless Chromium, as Playwright lists them, and not the browser. Sessions may use `sudo`. | A browser's version belongs to the project's Playwright; its libraries do not, and need root. The "no sudo" of 0.7.0 was a ceiling named in the recipe, and it was reached on the first day. A session is root in its own privileged container either way. |
+| Volumes shared by all containers for what uv and Playwright download. Not for Dart's packages. | Both say that several processes may use their cache at once. Nothing was found that says so of pub's. |
+| An image carries the folder it was built for. A new build removes that folder's older images, and the images from before this. | Otherwise every change of a file leaves two or three gigabytes behind. An image that a container still uses stays, because Docker refuses. |
+
+`test.js` has asserts for the names the window reads out of the files. `box-check.js` builds an image for a
+folder that names one small tool and has 30 verdicts now: the tool found from inside the clone, `sudo`, the
+browser's libraries and mise, the image there at once when asked for again, and another tag for a changed
+file, another Claude Code, or no file.
+
+Tried by hand in a throwaway container first: mise from its package repository with the release key its
+documentation names, two tools installed in 3 seconds from a file above the clone folder, and a headless
+Chromium that Playwright fetched as the session's user and that rendered a page with the libraries of the
+image alone.
+
+Live, in the test copy, on a folder that was given a justfile, a `.nvmrc` and a CI workflow:
+
+| What | Result |
+|---|---|
+| The dialogs before a start, with no file | Both said that the folder names no tools and what a container then holds, with the button. |
+| Claude Code (Haiku) asked to write the file | After 21 seconds: `node = "22"` from `.nvmrc`, `uv = "0.5.11"` and `just = "1.36.0"` from the workflow, each with a comment saying where the version came from, no "latest", and Python left out because the image has it. The app offered to commit. Its card was on show with Docker chosen. |
+| The first container of that folder | Its card showed the image being built with the folder's tools. It was ready after 49 seconds, most of it the build, and held all three in those versions, although its clone did not have the file yet. |
+| A second container | The same image, nothing built, ready after 13 seconds. |
+| uv raised by one version in the file | The next container waited 41 seconds for a new image and held the new uv. The first container kept the one it was made with. |
+| A session asked to run the tool | In the shell Claude Code runs commands in: `just` from `/opt/mise/shims`, and `sudo` answering. |
+
+| Symptom | Cause | What changed |
+|---|---|---|
+| The recipe's first step for the tools skipped a folder that had only a `mise.toml`. | `ls a b c` fails when one of the three is missing, also when another is there. | Three tests joined by "or". Found by reading, before the first build. |
+| The live test stood still for ten minutes. | It waited for a call that opens a dialog to return, which that call does when the dialog closes. | The test opens the dialog without waiting for it. |
+
+Not tried: Flutter through mise, which is two gigabytes; a tool that has to be compiled; a `mise.toml` that
+sets variables or runs hooks, beyond that it is read.
+
 ## 16. Still open
 
-- Sessions in containers: what section 15 lists as not verified. Docker Engine alone on Linux is not served.
-  The ceilings are the same for every container and are not settings. A container's ports are fixed when it
-  is made. A kept container can be given a new session, not its old conversation. The image is one for all
-  repositories, and sessions cannot install system packages in it.
+- Sessions in containers: what section 15 lists as not verified or not tried. Docker Engine alone on Linux
+  is not served. The processors of a container are not a setting. A container's ports are fixed when it is
+  made. A kept container can be given a new session, not its old conversation. A Dev Container file is not
+  read. A change of one tool fetches all of a folder's tools again, and the images of folders that are no
+  longer opened stay on the disk.
 - A pull request's later fate on GitHub (merged or closed there) reaches a card only when the session's next
   turn ends.
 - The Diff tab has GitHub's default view and no other, and shows no diff where GitHub's list of files gives
@@ -1610,6 +1713,13 @@ work relied on.
   <https://docs.docker.com/engine/install/debian/> for the engine's packages
 - <https://docs.docker.com/desktop/features/networking/> for `host.docker.internal` and published ports
 - <https://www.docker.com/legal/trademark-guidelines/> for what may be done with Docker's logo
+- mise (`https://mise.jdx.dev/…`): `configuration` (the files it reads), `installing-mise` (the package
+  repository and the release key), `dev-tools/shims`, `directories`, `security` (trust), `registry`,
+  `cli/install`
+- <https://playwright.dev/docs/browsers> (system dependencies, where browsers are kept) and
+  <https://playwright.dev/docs/intro> (the systems it supports), and
+  <https://containers.dev/implementors/json_reference/> for what a Dev Container file holds
+- <https://docs.docker.com/reference/cli/docker/container/update/> and `.../system/df/`
 - Claude Code: `worktrees` (the base of a new worktree, `.worktreeinclude`), `hooks` (command hooks, exit codes,
   the answer on standard output), `setup` (the package repository and its key), `authentication`, `devcontainer`
 - <https://cli.github.com/manual/gh_pr_view> (a pull request by its branch's name) and

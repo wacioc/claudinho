@@ -54,7 +54,7 @@ const dataDir = app.getPath('userData');
 const stateFile = path.join(dataDir, 'state.json');
 // settings.mode: 'worktree' or 'docker', where sessions are started (see spawnInstance). Not there until the
 // owner has picked one, which the window asks for.
-let saved = { repoPath: null, usage: null, templates: {}, sessions: [], settings: { mergeMethod: 'squash', timedMinutes: 5, cpuCeiling: 100, cpuShare: false, boxPorts: '3000, 5173, 8000, 8080' } };
+let saved = { repoPath: null, usage: null, templates: {}, sessions: [], settings: { mergeMethod: 'squash', timedMinutes: 5, cpuCeiling: 100, cpuShare: false, boxPorts: '3000, 5173, 8000, 8080', boxMemoryGb: lib.BOX_MEMORY_GB } };
 try {
   const s = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   saved = { ...saved, ...s, settings: { ...saved.settings, ...s.settings } };
@@ -118,7 +118,8 @@ function snapshot() {
   const worktrees = repo ? repo.worktrees : [];
   return {
     version: app.getVersion(), claudeFound: !!claudeBin, repo, account, usage: saved.usage, settings: saved.settings, cores: CORES,
-    cpuMechanism: cpu.mechanism, cpuError: cpu.error, docker: { ...dock, boxCpus: lib.BOX_CPUS, boxGb: lib.BOX_MEMORY_GB, recipe: boxes.recipe },
+    cpuMechanism: cpu.mechanism, cpuError: cpu.error, docker: { ...dock, boxCpus: lib.BOX_CPUS, boxGb: saved.settings.boxMemoryGb, recipe: boxes.recipe },
+    totals: totals(),
     notifications: notifications.slice(-100),
     // latest: only when it is newer than what is installed
     claude: { version: claudeCode.version, latest: lib.newerVersion(claudeCode.latest, claudeCode.version) ? claudeCode.latest : null, updating: claudeCode.updating },
@@ -250,7 +251,7 @@ function makeBox(inst, image) {
     const { limit } = await boxes.info();
     const n = lib.freeSlot((await boxes.list()).map(r => r.n), limit);
     if (!n) throw new Error(`All ${limit} containers are taken. Close a session, or remove a container that was kept: they are on the Containers tab.`);
-    return boxes.create({ n, image, root: inst.root, name: inst.name, work: inst.box.work, key: inst.box.key, dir: inst.dir, ports: lib.portList(saved.settings.boxPorts) });
+    return boxes.create({ n, image, root: inst.root, name: inst.name, work: inst.box.work, key: inst.box.key, dir: inst.dir, ports: lib.portList(saved.settings.boxPorts), memoryGb: saved.settings.boxMemoryGb });
   });
   boxLine = made.catch(() => {});
   return made;
@@ -283,7 +284,8 @@ async function startBox(inst, { model, effort, prompt, resume }) {
       const github = lib.parseGitHub(await git(['remote', 'get-url', 'origin'], inst.root).catch(() => ''));
       if (!github) throw new Error('This folder has no GitHub remote. A session in a container works on a clone of the folder, and its work leaves the container by `git push`.');
       say('Getting a container ready…');
-      const image = await boxes.image(claudeCode.version || 'latest', line => { dock.building = line; say(line); push(); }).finally(() => { dock.building = null; push(); });
+      // Asked for at every start: it is there already unless the folder's tools, the recipe or Claude Code changed.
+      const image = await boxes.image(claudeCode.version || 'latest', inst.root, line => { dock.building = line; say(line); push(); }).finally(() => { dock.building = null; push(); });
       inst.fresh = true;   // until its session has started, nothing in it is worth keeping (see closeBox)
       b.name = await makeBox(inst, image);
       if (!open()) { await boxes.remove(b.name).catch(() => {}); return; }   // closed before it had a container to close
@@ -378,7 +380,7 @@ async function closeInstance(id, remove) {
   instances.delete(id);
   const gone = inst.exited || !inst.proc ? null : new Promise(resolve => { inst.proc.onExit(resolve); setTimeout(resolve, 5000); });
   if (gone) { try { inst.proc.kill(); } catch { /* already gone */ } }
-  if (inst.box) { saveSessions(); push(); return closeBox(inst, remove).finally(() => { checkDocker(); pump(); }); }   // a queued issue may be waiting for its container
+  if (inst.box) { saveSessions(); push(); return closeBox(inst, remove).finally(() => { checkDocker(); pump(); disk.at = 0; }); }   // a queued issue may be waiting for its container
   // With its worktree going too, nothing the instance started may stay behind in it (see cpu.stop). What serves
   // the whole machine is left running all the same (see lib.sparedPids), and named should it hold the folder.
   const procs = lastProcs || new Map();
@@ -431,6 +433,7 @@ async function tick() {
   for (const inst of instances.values()) if (!inst.exited) { readStatus(inst); dropAnswered(inst); }
   sampleBoxes();
   if (saved.settings.mode === 'docker' && Date.now() - dock.at > 15000) checkDocker();
+  if (Date.now() - disk.at > 10 * 60000) measureDisk();
   push();
   syncSampler();
   // `claude agents` costs a process start each time: ease off when nothing runs here and nobody is looking.
@@ -508,6 +511,7 @@ async function removeWorktree(root, dir, force, skipPid) {
     if (row.branch) await git(['branch', '-D', row.branch], root).catch(e => { if (!stuck) throw e; });
   }
   if (repo && repo.path === root) { repo.worktrees = lib.parseWorktrees(await git(['worktree', 'list', '--porcelain'], root)); push(); }
+  disk.at = 0;   // measured again with the next look
   if (stuck) throw Object.assign(new Error(`Could not delete ${dir}: a program still has files open in it (${stuck.code}). Close that program, then remove the folder from the Worktrees tab.`), { stuck: true });
   return { removed: true, name: row.name, branch: row.branch };
 }
@@ -566,6 +570,63 @@ function syncSampler() {
   });
   child.on('error', () => { samplerFailed = true; sampler = null; });   // no PowerShell / ps: cards show no usage
   child.on('exit', () => { if (sampler === child) sampler = null; lastProcs = null; });
+}
+
+// ---------- what all of it takes: the three figures in the bar ----------
+
+// CPU and memory are added up from what the cards show: every instance of the app with what it started, on
+// this computer or in its container. Sessions started outside the app are not the app's and are left out.
+function totals() {
+  const sum = { cpu: 0, mem: 0, boxCpu: 0, boxMem: 0, dockerMem: dock.mem || 0, disk: { boxes: disk.boxes, worktrees: disk.worktrees, capped: disk.capped, at: disk.measured } };
+  for (const i of instances.values()) {
+    const u = !i.exited && (i.box ? i.usage : procUsage.get(i.pid));
+    if (!u) continue;
+    sum.cpu += u.cpu; sum.mem += u.mem;
+    if (i.box) { sum.boxCpu += u.cpu; sum.boxMem += u.mem; }
+  }
+  return sum;
+}
+
+// The size of a folder: every file in it, links not followed. It is counted by a helper process, the app's own
+// binary run as plain Node, as cpu.js does: a worktree with its dependencies installed has a hundred thousand
+// files, and going through them in this process would be in the way of every terminal it serves.
+// ponytail: it gives up after 400,000 entries, saying so, and it is still a process that reads the disk for
+// some seconds. Ask the system's own tool if that is too much.
+const SIZER = `const fs = require('fs'), path = require('path');
+let bytes = 0, seen = 0;
+const stack = [process.argv[1]];
+while (stack.length && seen < 400000) {
+  const dir = stack.pop();
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+  for (const e of entries) {
+    seen++;
+    if (e.isDirectory()) stack.push(path.join(dir, e.name));
+    else if (e.isFile()) { try { bytes += fs.statSync(path.join(dir, e.name)).size; } catch {} }
+  }
+}
+console.log(JSON.stringify({ bytes, capped: stack.length > 0 }));`;
+// Resolves to { bytes, capped }, or to null when the helper did not answer.
+const dirSize = dir => new Promise(resolve => execFile(process.execPath, ['-e', SIZER, dir], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, timeout: 300000, windowsHide: true },
+  (_err, stdout) => { try { resolve(JSON.parse(stdout)); } catch { resolve(null); } }));
+
+// Disk: what the open folder's worktrees hold, and what the containers, their volumes and their image take in
+// Docker. Both take seconds to measure, so they are measured every ten minutes, and after a close.
+// Docker is only asked where containers are chosen, or were at some time, which the folder the app keeps for
+// them says: nobody else's Docker is touched. at: when it was last begun; measured: when it last came back.
+const disk = { boxes: null, worktrees: null, capped: false, at: 0, measured: 0, busy: false };
+const usedDocker = () => saved.settings.mode === 'docker' || fs.existsSync(path.join(dataDir, 'boxes'));
+async function measureDisk() {
+  if (disk.busy) return;
+  disk.busy = true; disk.at = Date.now();
+  try {
+    const base = repo && path.join(repo.path, '.claude', 'worktrees');
+    const [w, b] = await Promise.all([
+      base && fs.existsSync(base) ? dirSize(base) : null,
+      usedDocker() ? boxes.disk().catch(() => null) : null,
+    ]);
+    disk.worktrees = w ? w.bytes : null; disk.capped = !!(w && w.capped); disk.boxes = b; disk.measured = Date.now();
+  } finally { disk.busy = false; push(); }
 }
 
 // ---------- hooks: input levels and "finished" ----------
@@ -727,7 +788,10 @@ function notify(kind, text, inst) {
 
 // The turn has ended. Resolves to what the Stop hook answers: nothing, or a follow-up for the session.
 async function onStop(inst, ev, gone) {
-  if (inst.kind === 'generator') send('config-changed');
+  if (inst.kind === 'generator') {   // it may have written a skill, an agent, or the folder's mise.toml
+    if (repo && lib.samePath(repo.path, inst.root)) repo.tools = readTools(repo.path);
+    send('config-changed');
+  }
   inst.said = ev.last_assistant_message || '';
   // A turn can end with what the session started still running: a shell in the background, a subagent, a
   // monitor. Then it has only paused. Claude Code wakes it when one of them ends or reports (that comes as a
@@ -988,6 +1052,18 @@ setInterval(pump, 5 * 60 * 1000);   // blockers are re-checked every 5 minutes, 
 
 // ---------- repo ----------
 
+// The folder's .worktreeinclude: the local files that a clone or a new worktree does not bring and that are
+// copied into it all the same (a .env, say), as patterns in .gitignore syntax. Claude Code reads the file for
+// a new worktree, and containers.js for a new container.
+// Read with one kind of line ending, so that a list the owner has not touched in the settings compares as the same.
+const readInclude = dir => { try { return fs.readFileSync(path.join(dir, '.worktreeinclude'), 'utf8').replace(/\r\n/g, '\n').trim(); } catch { return ''; } };
+// The tools the folder names for its containers, for the window to say before a session starts: in which
+// files, and which tools. The image itself is built from the files (see boxes.image).
+function readTools(dir) {
+  const files = boxes.toolFiles(dir).filter(([name]) => name !== 'mise.lock');
+  return { files: files.map(([name]) => name), names: lib.toolNames(files.map(([name, text]) => [name, text.toString('utf8')])) };
+}
+
 async function openRepo(dir) {
   const git = args => run('git', args, dir).then(s => s.trim(), () => '');
   const isGit = (await git(['rev-parse', '--is-inside-work-tree'])) === 'true';
@@ -999,7 +1075,10 @@ async function openRepo(dir) {
     // ponytail: prompts saved before 0.1.0 wrote the issue number as {n}, so every load turns a literal {n}
     // into the placeholder. Drop the replaceAll once no state file from before 0.1.0 is around.
     template: (saved.templates[dir] || lib.defaultTemplate(dir)).replaceAll('{n}', '{{ issue_id }}'),
+    include: readInclude(dir),
+    tools: readTools(dir),
   };
+  disk.at = 0;   // another folder, other worktrees
   saved.repoPath = dir; save(); push();
   return repo;
 }
@@ -1070,7 +1149,7 @@ const rpc = {
     if (force !== true && (row.changed == null || row.error || row.changed || row.unique)) return { kept: row };
     await boxes.remove(name);
     if (boxDir(r.key)) fs.rmSync(boxDir(r.key), { recursive: true, force: true });
-    checkDocker(); pump();   // a queued issue may have been waiting for it
+    checkDocker(); pump(); disk.at = 0;   // a queued issue may have been waiting for it
     return { removed: true, name: r.name, box: name };
   },
   resume(id) {
@@ -1232,7 +1311,10 @@ const rpc = {
   // Paths starting with "~/" are in the home config folder, the rest in the open folder.
   configList: () => ({ ...lib.scanConfig(repo.path), home: { dir: configDir(), files: lib.scanHome(configDir()).map(f => `~/${f}`) } }),
   configRead: rel => fs.readFileSync(configFile(rel), 'utf8'),
-  configWrite(rel, text) { fs.writeFileSync(configFile(rel), text); },
+  configWrite(rel, text) {
+    fs.writeFileSync(configFile(rel), text);
+    if (lib.ROOT_FILES.includes(rel)) { repo.include = readInclude(repo.path); repo.tools = readTools(repo.path); push(); }   // what the window says of the folder
+  },
   async gitChanges() {
     if (!repo.isGit) return null;
     const out = await run('git', ['status', '--porcelain', '-uall', '--', '.claude', '.github', ...lib.ROOT_FILES], repo.path);
@@ -1260,7 +1342,21 @@ const rpc = {
     if (patch.cpuCeiling) saved.settings.cpuCeiling = Math.min(100, Math.max(5, Math.round(Number(patch.cpuCeiling)) || 100));
     if (typeof patch.cpuShare === 'boolean') saved.settings.cpuShare = patch.cpuShare;
     if (typeof patch.boxPorts === 'string') saved.settings.boxPorts = lib.portList(patch.boxPorts).join(', ');
-    if (['worktree', 'docker'].includes(patch.mode)) { saved.settings.mode = patch.mode; if (patch.mode === 'docker') checkDocker(); }
+    if (['worktree', 'docker'].includes(patch.mode)) { saved.settings.mode = patch.mode; if (patch.mode === 'docker') checkDocker(); disk.at = 0; }
+    // The memory ceiling counts for the containers there are as well: a session that has reached it is the
+    // reason to raise it.
+    const gb = Math.min(64, Math.max(1, Math.round(Number(patch.boxMemoryGb)) || 0));
+    if (patch.boxMemoryGb && gb !== saved.settings.boxMemoryGb) {
+      saved.settings.boxMemoryGb = gb;
+      boxes.list().then(rows => boxes.resize(rows.map(r => r.box), gb)).catch(() => { /* Docker did not answer, or one is using more than that */ });
+    }
+    // The local files to copy into a new container or worktree: the folder's .worktreeinclude, written only
+    // when it was changed here, and removed when the list was emptied.
+    if (typeof patch.include === 'string' && repo && patch.include.trim() !== repo.include) {
+      const file = path.join(repo.path, '.worktreeinclude');
+      if (patch.include.trim()) fs.writeFileSync(file, `${patch.include.trim()}\n`); else fs.rmSync(file, { force: true });
+      repo.include = readInclude(repo.path);
+    }
     balanceCpu();
     save(); push();
   },

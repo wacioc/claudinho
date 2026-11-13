@@ -36,7 +36,7 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
 | `cpu.js` | CPU limits: one mechanism per operating system behind the same calls. No Electron. |
 | `cpu-check.js` | Runs the machine's real mechanism under real load and checks the numbers. |
 | `containers.js` | Sessions in Docker containers: the image, making, filling, stopping and removing a container, and what is asked of one. No Electron. Its top says what a container is and which volumes outlive it. |
-| `container/Dockerfile` | The image those containers are made from. |
+| `container/Dockerfile` | The image those containers are made from: what every folder shares, then the tools a folder names in its `mise.toml`, then Claude Code. One image per set of tools. |
 | `box-check.js` | Makes one real container the way the app does and checks what the app relies on there. No Claude Code session. |
 | `pack-check.js` | Starts a packaged copy of the app and checks what packaging can break. With `--update` it has an installed copy replace itself with a second build, which is for hosted machines only. No Electron. |
 | `package.json`, under `build` | The packaging settings for electron-builder. JSON takes no comments, so their reasons are in section 8 of the build history. |
@@ -67,6 +67,11 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
   removes a container of the copy in use. The image and the volumes with the two logins are shared with that
   copy, so a test session is logged in. Never remove the volumes `claudinho-claude` and `claudinho-gh`: they
   hold the owner's logins for containers.
+- A folder's tools are tested with a `mise.toml` that names a small tool (`just`), as `box-check.js` does:
+  the image for it builds in seconds once the shared layers exist. The check removes its image again; a live
+  test should remove the images marked with its folder (`claudinho.tools-of`).
+- A session started without a prompt calls no model. What happens when a container is made (what its card
+  says, what arrives in the clone, its ceilings) is tested that way, and so are the figures in the bar.
 - A full house is made with stand-ins: `docker create --name <name>-slot-N <the image> true` takes a number
   without starting anything. An issue sent off then waits for a free container, and one started by hand says
   that all are taken.

@@ -1,5 +1,6 @@
 # The image of the containers that sessions work in (see containers.js): what a session needs, a Docker of its
-# own for the project's services, and Claude Code.
+# own for the project's services, the tools the folder names for itself, and Claude Code. The layers are in the
+# order of how seldom they change: what every folder shares first, then the folder's tools, then Claude Code.
 FROM docker:dind AS dind
 
 # Debian, with a current Python.
@@ -36,18 +37,40 @@ RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 && r
     && tar -xJf "$f" -C /usr/local --strip-components=1 --no-same-owner --exclude='*/CHANGELOG.md' --exclude='*/README.md' \
     && rm -f "$f" SHASUMS256.txt && node --version && npm --version
 
+# What sessions asked for beyond that: sudo, the tools that unpack what toolchains come in, and the system
+# libraries a headless Chromium needs, as Playwright itself lists them for this system (about a hundred packages,
+# 350 MB). The browser is not in the image: a project fetches the one its Playwright version wants, into a
+# volume the containers share.
+# https://playwright.dev/docs/browsers#install-system-dependencies
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends sudo unzip zip \
+    && npx -y playwright@latest install-deps chromium \
+    && rm -rf /var/lib/apt/lists/* /root/.npm
+
+# mise, which installs the tools a folder names in its mise.toml (further down), from mise's own package
+# repository. The build stops unless the key is the release key that mise's documentation names.
+# https://mise.jdx.dev/installing-mise.html
+RUN curl -fsSL https://mise.jdx.dev/gpg-key.pub -o /etc/apt/keyrings/mise.asc \
+    && test "$(gpg --show-keys --with-colons /etc/apt/keyrings/mise.asc | awk -F: '$1=="pub"{n++} $1=="fpr"&&!p{p=$10} END{print n":"p}')" = "1:24853EC9F655CE80B48E6C3A8B81C9D17413A06D" \
+    && echo "deb [signed-by=/etc/apt/keyrings/mise.asc arch=$(dpkg --print-architecture)] https://mise.jdx.dev/deb stable main" > /etc/apt/sources.list.d/mise.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends mise \
+    && rm -rf /var/lib/apt/lists/* \
+    && mise --version
+
 # The start script of Docker's own Docker-in-Docker image: it prepares this container's control groups and
 # mounts for a Docker inside it.
 COPY --from=dind /usr/local/bin/dind /usr/local/bin/dind
 
-# Sessions do not run as root. The docker group owns the socket of the Docker inside. The folders made here are
-# where the volumes go that all containers share: Claude Code's configuration and login, GitHub's login, and
-# the download caches of npm and pip.
-# ponytail: no sudo. What a project needs beyond this image comes from pip, from npm, or from a container of
-# the Docker inside. Give `agent` sudo if sessions keep asking for apt.
+# Sessions do not run as root, and may become root: a project's set-up asks for system packages now and then,
+# and the container is the session's own. The docker group owns the socket of the Docker inside. The folders
+# made here are where the volumes go that all containers share: Claude Code's configuration and login, GitHub's
+# login, and the download caches of npm, pip, uv and Playwright's browsers. /opt/mise is where a folder's tools
+# are installed, in the image.
 RUN useradd --create-home --shell /bin/bash --groups docker agent \
-    && mkdir -p /work /home/agent/.claude /home/agent/.config/gh /home/agent/.npm /home/agent/.cache/pip \
-    && chown -R agent:agent /work /home/agent
+    && echo 'agent ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/agent && chmod 440 /etc/sudoers.d/agent \
+    && mkdir -p /work /opt/mise /home/agent/.claude /home/agent/.config/gh /home/agent/.npm /home/agent/.cache/pip /home/agent/.cache/uv /home/agent/.cache/ms-playwright \
+    && chown -R agent:agent /work /opt/mise /home/agent
 
 # git: a push to GitHub asks gh for the login. /src is the folder on the computer that the repository is cloned
 # from; it belongs to another user, which git refuses unless it is told.
@@ -57,6 +80,20 @@ RUN git config --system credential.https://github.com.helper '!gh auth git-crede
 
 # One folder for all of Claude Code's configuration, .claude.json included: the volume the containers share.
 ENV CLAUDE_CONFIG_DIR=/home/agent/.claude
+# mise: the tools go into the image, are found without a shell that was set up for them, and the files that
+# name them are taken at their word, as everything else in the folder is.
+ENV MISE_DATA_DIR=/opt/mise MISE_YES=1 MISE_TRUSTED_CONFIG_PATHS=/work PATH=/opt/mise/shims:$PATH
+
+# The tools of the folder this image is for: what its mise.toml or .tool-versions names. The app puts those
+# files into tools/ when it builds (see containers.js), and builds again when one of them has changed. They lie
+# in /work, above every clone, so a session finds the tools whatever its branch holds, and a file of the clone
+# itself comes before them. With no such file, tools/ is empty: that is the image all other folders share.
+# ponytail: one layer for all of a folder's tools, so a change of one version fetches all of them again. Give
+# this step a cache for mise's downloads if that takes too long.
+COPY --chown=agent:agent tools/ /work/
+USER agent
+RUN cd /work && if [ -e mise.toml ] || [ -e .mise.toml ] || [ -e .tool-versions ]; then mise install && mise ls; fi
+USER root
 
 VOLUME /var/lib/docker
 ENTRYPOINT ["dind"]
