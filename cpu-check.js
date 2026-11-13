@@ -138,21 +138,28 @@ const scenarios = {
 
   // Closing an instance together with its worktree ends everything the instance started, also what has detached
   // itself from its terminal: on Windows a running program holds its folder, which then could not be deleted.
+  // Twice: once with nobody of the job to spare (the one named is this check itself, outside the job), and once
+  // with one of the detached processes to be left running (the way Docker Desktop is, see lib.sparedPids).
   async stop() {
     if (cpu.mechanism !== 'job') { console.log(`skip  stop everything        (not needed with the ${cpu.mechanism} mechanism: there a folder can be deleted under a running program)`); return true; }
-    const grandchild = `require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { detached: true, stdio: 'ignore' })`;
-    const root = spawn(process.execPath, ['-e', `setTimeout(() => console.log(${grandchild}.pid), 500); setTimeout(() => {}, 60000);`], { stdio: ['ignore', 'pipe', 'ignore'] });
-    if (!cpu.attach('s', root.pid, { ceiling: 1, weight: 1 })) throw new Error('this mechanism could not take the process');
-    const child = Number(await new Promise(r => root.stdout.once('data', d => r(String(d)))));
-    const running = () => [root.pid, child].filter(pid => { try { process.kill(pid, 0); return true; } catch { return false; } }).length;
-    const before = running();
-    cpu.stop('s');
-    await sleep(1000);
-    const after = running();
-    cpu.detach('s');
-    const verdict = before === 2 && after === 0;
-    console.log(`${verdict ? 'ok  ' : 'FAIL'}  ${'stop everything'.padEnd(22)} running before: ${before} of 2 (one of them detached); after: ${after}`);
-    return verdict;
+    const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const detached = `require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { detached: true, stdio: 'ignore' }).pid`;
+    let all = true;
+    for (const sparing of [false, true]) {
+      const root = spawn(process.execPath, ['-e', `setTimeout(() => console.log(${detached}, ${detached}), 500); setTimeout(() => {}, 60000);`], { stdio: ['ignore', 'pipe', 'ignore'] });
+      if (!cpu.attach('s', root.pid, { ceiling: 1, weight: 1 })) throw new Error('this mechanism could not take the process');
+      const [one, two] = String(await new Promise(r => root.stdout.once('data', d => r(String(d))))).trim().split(' ').map(Number);
+      const before = [root.pid, one, two].filter(alive).length;
+      const left = cpu.stop('s', new Set([sparing ? two : process.pid]));
+      await sleep(1000);
+      const after = [root.pid, one, two].filter(alive);
+      cpu.detach('s');
+      for (const pid of after) { try { process.kill(pid); } catch { /* gone */ } }
+      const verdict = before === 3 && (sparing ? after.length === 1 && after[0] === two && left.length === 1 && left[0] === two : after.length === 0 && left.length === 0);
+      console.log(`${verdict ? 'ok  ' : 'FAIL'}  ${(sparing ? 'stop all but one' : 'stop everything').padEnd(22)} running before: ${before} of 3 (two of them detached); after: ${after.length}${sparing ? `, ${after[0] === two ? 'the one to be left running' : 'NOT the one to be left running'}` : ''}`);
+      all = all && verdict;
+    }
+    return all;
   },
 
   // The safety net of the pause-and-resume mechanism, in two halves. First the helper process that does the

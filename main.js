@@ -203,14 +203,20 @@ async function closeInstance(id, remove) {
   instances.delete(id);
   const gone = inst.exited ? null : new Promise(resolve => { inst.proc.onExit(resolve); setTimeout(resolve, 5000); });
   if (gone) { try { inst.proc.kill(); } catch { /* already gone */ } }
-  // With its worktree going too, nothing the instance started may stay behind in it (see cpu.stop).
-  if (remove && inst.wt) cpu.stop(id);
+  // With its worktree going too, nothing the instance started may stay behind in it (see cpu.stop). What serves
+  // the whole machine is left running all the same (see lib.sparedPids), and named should it hold the folder.
+  const procs = lastProcs || new Map();
+  const left = remove && inst.wt ? cpu.stop(id, lib.sparedPids(procs)) : [];
+  const spared = [...new Set(left.filter(pid => !left.includes(procs.get(pid).ppid)).map(pid => procs.get(pid).name.replace(/\.exe$/i, '')))];
   fs.rmSync(inst.dir, { recursive: true, force: true });
   cpu.detach(id);
   saveSessions(); push(); pump();
   if (!remove || !inst.wt) return;
   await gone;   // Windows does not let go of a folder while a process still sits in it
-  return removeWorktree(inst.root, inst.wt, remove === 'force', inst.pid);
+  return removeWorktree(inst.root, inst.wt, remove === 'force', inst.pid).catch(e => {
+    if (e.stuck && spared.length) e.message += ` Left running, as other sessions may be using it: ${spared.join(', ')}. Started by this session, it may be what holds the folder.`;
+    throw e;
+  });
 }
 
 // The status line tee (see lib.statusLineCommand) leaves Claude Code's own numbers in a file per instance.
@@ -323,7 +329,7 @@ async function removeWorktree(root, dir, force, skipPid) {
     if (row.branch) await git(['branch', '-D', row.branch], root).catch(e => { if (!stuck) throw e; });
   }
   if (repo && repo.path === root) { repo.worktrees = lib.parseWorktrees(await git(['worktree', 'list', '--porcelain'], root)); push(); }
-  if (stuck) throw new Error(`Could not delete ${dir}: a program still has files open in it (${stuck.code}). Close that program, then remove the folder from the Worktrees tab.`);
+  if (stuck) throw Object.assign(new Error(`Could not delete ${dir}: a program still has files open in it (${stuck.code}). Close that program, then remove the folder from the Worktrees tab.`), { stuck: true });
   return { removed: true, name: row.name, branch: row.branch };
 }
 

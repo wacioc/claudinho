@@ -58,6 +58,10 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
 - Electron's own flags go after the `.`: `electron . --inspect=9229 <folder>`. Before it, the app takes `.` for
   the folder to open and works on this checkout. Before a test starts an instance, check which folder is open.
 - Worktree removal deletes folders and branches. Test it in a scratch repository, never in this one.
+- What closing an instance leaves running is tested with a stand-in: a copy of `node.exe` named
+  `Docker Desktop.exe`, started detached from the instance's terminal beside an ordinary detached program.
+  After the instance is closed with its worktree, the stand-in must still run and the other must not. Never
+  test this with the real Docker Desktop: other sessions on the machine are using it.
 - The home-folder editor is tested with `CLAUDE_CONFIG_DIR` set to a scratch folder, never against the real
   home folder: the test reads, writes, and pokes at paths the editor must refuse.
 - To put load inside an instance without a model call, type `!` and a command in its terminal. From a test,

@@ -4,6 +4,17 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.6.4 (2026-11-13)
+
+**Instances**
+
+- Closing an instance together with its worktree no longer ends Docker Desktop. A session that needs Docker
+  starts Docker Desktop when it is not running, and it then counted as one of that session's programs: closing
+  the card ended it, and with it the containers of every other session. Everything else the session started
+  is still ended.
+- Where Docker Desktop was started from inside the worktree, Windows keeps that folder until Docker Desktop is
+  closed. The app says so, and the folder waits on the Worktrees tab.
+
 ## 0.6.3 (2026-11-13)
 
 **Instances**

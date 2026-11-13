@@ -292,6 +292,16 @@ assert.strictEqual(lib.treeUsage(new Map([P(0, 0, 1, 0)]), 0, null, 0).procs.len
 assert.strictEqual(lib.treeUsage(new Map([P(100, 1, 2, 500)]), 100, new Map([P(100, 1, 10, 400)]), 2).cpu, 1);   // reused pid
 assert.deepStrictEqual(lib.byName([{ name: 'ruff', cpu: 2, mem: 5 }, { name: 'claude', cpu: 0.5, mem: 300 }, { name: 'ruff', cpu: 3, mem: 5 }]),
   [{ name: 'ruff', n: 2, cpu: 5, mem: 10 }, { name: 'claude', n: 1, cpu: 0.5, mem: 300 }]);
+// Closing an instance spares Docker Desktop and what it started, wherever in the instance's tree it sits. Here a
+// session (100) whose shell (110) started Docker Desktop (120, its backend 121, a helper of that 122) and a dev
+// server (130). 140 is a part of Docker Desktop whose parent is gone. 150 only looks like a child of 120: an
+// older process whose parent's pid was given out again. 160 is Docker's command line, which is the session's own.
+const N = (pid, ppid, start, name) => [pid, { pid, ppid, start, name, cpu: 0, mem: 0 }];
+const withDocker = new Map([N(100, 1, 10, 'claude.exe'), N(110, 100, 20, 'bash.exe'), N(120, 110, 30, 'Docker Desktop.exe'), N(121, 120, 31, 'com.docker.backend.exe'),
+  N(122, 121, 32, 'wsl.exe'), N(130, 110, 40, 'node.exe'), N(140, 999, 50, 'com.docker.build.exe'), N(150, 120, 5, 'notepad.exe'), N(160, 110, 60, 'docker.exe')]);
+assert.deepStrictEqual([...lib.sparedPids(withDocker)].sort((a, b) => a - b), [120, 121, 122, 140]);
+assert.strictEqual(lib.sparedPids(new Map([N(100, 1, 10, 'claude'), N(130, 100, 40, 'node')])).size, 0);
+assert.deepStrictEqual([...lib.sparedPids(new Map([N(7, 1, 1, 'Docker Desktop'), N(8, 7, 2, 'com.docker.back')]))], [7, 8]);   // as macOS and Linux name them
 const [samplerCmd, samplerArgs] = lib.samplerCommand('win32', 1234);
 assert.ok(samplerCmd === 'powershell.exe' && Buffer.from(samplerArgs.pop(), 'base64').toString('utf16le').includes('Get-Process -Id 1234'));
 assert.strictEqual(lib.samplerCommand('linux', 1)[0], 'sh');

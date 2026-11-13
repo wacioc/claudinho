@@ -347,7 +347,8 @@ ends the processes attached to the instance's terminal, but one that has detache
 folder. Each instance already sits in a job object for the CPU limits, and a process cannot leave a job, so
 closing an instance together with its worktree now ends the whole job. Without that step the removal gave up
 after six seconds of retries; with it the folder was gone in half a second. On macOS and Linux a folder can be
-deleted under a running program, so nothing is ended there.
+deleted under a running program, so nothing is ended there. (Docker Desktop has since been left out of this:
+see "Closing a card took Docker Desktop with it" in section 14.)
 
 **The Worktrees section** lists what `git worktree list` reports under `.claude/worktrees`, plus folders in
 there that git no longer knows. The second kind exists because of the order in which git removes a worktree:
@@ -1236,6 +1237,45 @@ session was then told to push and to open a pull request. Three seconds after it
 | On a second run, the comparison of the file list failed. | The first runs had left a file touched, and the check took its names from git's quick list, which calls such a file modified. The tab was right. | The check takes its names from the list git makes by reading the files, and has the touched file as a case of its own. |
 | A patched copy of that check stopped matching anything. | The patch was written through a shell and lost its backslashes: the script held real tabs and zero bytes. | Written again as a file. |
 
+### Closing a card took Docker Desktop with it
+
+Found after 0.6.3, and not by a request. A session that needs Docker starts Docker Desktop when it is not
+running. On Windows every instance sits in a job object, and whatever it starts is born inside that job
+(section 6). Docker Desktop was therefore one of that instance's processes, and closing the instance together
+with its worktree, which ends the whole job so that nothing holds the folder (section 7), ended Docker Desktop
+too. With it went the containers of every other session. It left nothing to read: a job that is ended writes no
+shutdown lines into a program's log and no crash record into Windows' event log, and the virtual machine
+behind Docker stays up. What gave it away was the order of events: who had started Docker Desktop, and whose
+card had been closed in the seconds before it was gone.
+
+| Decision | Why |
+|---|---|
+| Closing with the worktree still ends what the instance started, but not Docker Desktop and not what Docker Desktop started itself. | The first is what makes the folder deletable and keeps a closed session from leaving a dev server behind. The second serves every session on the machine. |
+| Which programs those are is a list of names, with Docker Desktop's alone (`lib.sparedPids`). | No test tells such a program from a session's own: Docker Desktop and a dev server both sit in the worktree and both have their program files elsewhere. A name is at least something the owner can read and add to. A browser that a session was the first to open is the next candidate; nobody has asked. |
+| With one of those programs in the job, the job's processes are ended one at a time (`cpu.js`). Otherwise, which is the usual case because Docker Desktop mostly runs outside every instance, the job is ended as a whole, as before. | A job can only be ended whole. Its list of processes is asked for up to three times, since a process may start another while the first are being ended. The old way stays for every close that has nobody to spare: it is exact, and it has been in use since the second round. |
+| The names come from the latest process listing, which is up to two seconds old. | The listing is already taken for the cards. A Docker Desktop started in the last two seconds before the close is not in it and is ended. |
+| Where the folder then cannot be deleted, the message names what was left running. | `Start-Process` starts a program in the folder it is called from, so a Docker Desktop that a session started sits in the worktree, and Windows keeps that folder until Docker Desktop is closed. The owner has to know why the folder is still there. It waits on the Worktrees tab like any other leftover. |
+
+`test.js` has asserts for which processes of a listing are spared: Docker Desktop below a session's shell, what
+it started, a part of it whose parent is gone, an older process that only carries its pid as parent, and
+Docker's own command line, which is the session's. `cpu-check.js` ends a real job both ways: whole, and with one
+detached process left running.
+
+Live, in a test copy on the test repository, with a stand-in named `Docker Desktop.exe` (a copy of `node.exe`).
+In the first two cases a session started three things from its terminal: the stand-in, which started a helper
+of its own, and an ordinary detached program. In the third the stand-in was started by the check itself, and
+the session started the ordinary program alone.
+
+| Where the stand-in was | After the instance was closed with its worktree |
+|---|---|
+| Started by the session, in the worktree, as `Start-Process` leaves it. | The stand-in and its helper ran on; the ordinary program was gone. The folder could not be deleted, after six seconds of trying, and the message said that Docker Desktop had been left running and might be what holds it. git's record and the branch were gone. With the stand-in ended, the leftover was removed. |
+| Started by the session, in another folder. | The stand-in and its helper ran on; the ordinary program was gone. The worktree was removed in 0.4 seconds. |
+| Outside the instance, which is the usual case. | The session's program was gone and the stand-in ran on. The worktree was removed in 0.9 seconds, by ending the job as a whole. |
+
+| Symptom | Cause | What changed |
+|---|---|---|
+| The first run of the live check waited for a file that never came. | The command and Enter had gone to the terminal in one write, which Claude Code takes as pasted text: the command stood in the input box. | Enter as a write of its own, after a pause, as this file's section on testing already said. |
+
 ## 15. Still open
 
 - The Diff tab has GitHub's default view and no other, and shows no diff where GitHub's list of files gives
@@ -1276,7 +1316,11 @@ session was then told to push and to open a pull request. Three seconds after it
 - The Windows behaviour beside a saturating outside program, described above.
 - Sessions started outside the app are shown but not limited, and a terminal cannot be attached to them.
 - Closing an instance stops Claude Code but not the processes it left running; those are no longer limited.
-  Only on Windows, and only when the worktree goes too, are they ended.
+  Only on Windows, and only when the worktree goes too, are they ended. Docker Desktop is left running then
+  (section 14). Any other program that serves the whole machine and that a session was the first to start, a
+  browser for one, is still ended. A Docker Desktop that was started from inside the worktree keeps that
+  folder until it is closed; the app could start Docker Desktop itself, outside every instance, so that no
+  session has to.
 - Two copies of the app share one state file, and the last one to save wins.
 - Issues still queued for dispatch are not remembered across a restart.
 - The home folder: skills linked in through a symlink are not listed, and new files cannot be created there

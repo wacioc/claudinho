@@ -498,9 +498,11 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   or on a remote. After a squash merge whose remote branch has since been pruned, the commits look unsaved
   although their content is merged; the dialog then asks, and removing is fine.
 - On Windows a folder cannot be deleted while a program is running in it. Closing an instance together with
-  its worktree therefore ends everything the instance started. If a program from elsewhere sits in the folder,
-  the app says so; the folder then shows on the Worktrees tab as a leftover, to be removed once that program
-  is closed.
+  its worktree therefore ends everything the instance started, with one exception: Docker Desktop. A session
+  that needs Docker starts it when it is not running, and other sessions use it too, so it is left running.
+  If Docker Desktop was started from inside the worktree, or a program from elsewhere sits in the folder, the
+  app says so; the folder then shows on the Worktrees tab as a leftover, to be removed once that program is
+  closed. Other programs of that kind, a browser that a session was the first to open for one, are still ended.
 - CPU and memory are sampled, so a process that starts and ends between two samples is not seen, and a child
   whose parent has already exited is no longer counted.
 - CPU limits follow a change within a few seconds, not at once: the shares are recalculated once a second on

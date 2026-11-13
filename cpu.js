@@ -34,9 +34,18 @@ function jobObjects() {
   const TerminateJobObject = k32.func('int __stdcall TerminateJobObject(void *job, uint32_t exitCode)');
   const CloseHandle = k32.func('int __stdcall CloseHandle(void *handle)');
   const SET_QUOTA_AND_TERMINATE = 0x0101;   // the process rights AssignProcessToJobObject asks for
-  const CPU_RATE = 15, ACCOUNTING = 1;      // JOBOBJECTINFOCLASS
+  const CPU_RATE = 15, ACCOUNTING = 1, PROCESS_LIST = 3;   // JOBOBJECTINFOCLASS
   const ENABLE_HARD_CAP = 0x1 | 0x4;        // JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP
   const jobs = new Map();
+
+  // The pids in a job. JOBOBJECT_BASIC_PROCESS_ID_LIST { DWORD assigned; DWORD listed; ULONG_PTR pids[]; }
+  // ponytail: room for 1024 processes. The call fills what fits, so a job with more is cut off there. A pid
+  // takes eight bytes here, as on every 64-bit Windows, which is all the app is built for.
+  function members(job) {
+    const info = Buffer.alloc(8 + 8 * 1024);
+    QueryInformationJobObject(job, PROCESS_LIST, info, info.length, null);
+    return Array.from({ length: Math.min(1024, info.readUInt32LE(4)) }, (_, k) => Number(info.readBigUInt64LE(8 + 8 * k)));
+  }
 
   function setLimit(key, share) {
     const job = jobs.get(key);
@@ -77,8 +86,28 @@ function jobObjects() {
       if (!job || !QueryInformationJobObject(job, ACCOUNTING, info, 48, null)) return null;
       return Number(info.readBigInt64LE(0) + info.readBigInt64LE(8)) / 1e7;   // TotalUserTime + TotalKernelTime, in 100 ns
     },
-    // Ends every process in the job, also one that has detached itself from the instance's terminal.
-    stop(key) { const job = jobs.get(key); if (job) TerminateJobObject(job, 1); },
+    // Ends every process in the job, also one that has detached itself from the instance's terminal. The pids
+    // in `spare` are left running; the ones of them that were in the job are returned.
+    stop(key, spare) {
+      const job = jobs.get(key);
+      if (!job) return [];
+      // Nobody in this job is to be spared, which is the usual case (Docker Desktop mostly runs outside every
+      // instance): the job ends as a whole and at once, as it always did.
+      if (!spare || !members(job).some(pid => spare.has(pid))) { TerminateJobObject(job, 1); return []; }
+      // With somebody to spare the job cannot be ended as a whole: its processes are ended one at a time, and
+      // looked at again while that still ends something, for a process may have started another meanwhile.
+      // ponytail: three looks, without a pause. A program that keeps restarting what is ended would win.
+      const left = new Set();
+      for (let look = 0; look < 3; look++) {
+        let ended = 0;
+        for (const pid of members(job)) {
+          if (spare.has(pid)) { left.add(pid); continue; }
+          try { process.kill(pid); ended++; } catch { /* gone already, or not ours to end */ }
+        }
+        if (!ended) break;
+      }
+      return [...left];
+    },
     shutdown() { for (const key of [...jobs.keys()]) detach(key); },
   };
 }
@@ -255,9 +284,10 @@ module.exports = {
 
   // End everything the instance started, where that is needed to delete its folder afterwards: Windows does
   // not let go of a folder while a program is running in it. Elsewhere this does nothing.
+  // spare: a Set of pids that are left running (see lib.sparedPids). Returns the ones of them it came across.
   // ponytail: Windows only. On macOS and Linux whatever an instance left running keeps running after it is
   // closed; signal the tree (or stop the systemd scope) here if that should end too.
-  stop(key) { m.stop(key); },
+  stop(key, spare) { return m.stop(key, spare) || []; },
 
   // From each process listing: the tree's members, and the share of the machine it used since the last one.
   observe(key, procs, used) {

@@ -654,6 +654,21 @@ function treeUsage(procs, rootPid, prev, seconds) {
   return { cpu: list.reduce((s, p) => s + p.cpu, 0), mem: list.reduce((s, p) => s + p.mem, 0), procs: list };
 }
 
+// Programs that serve the whole machine, and so must outlive the session that happened to start them. A session
+// that needs Docker starts Docker Desktop when it is not running, and from then on Docker Desktop counts as one
+// of that instance's processes. Ended with the instance, it took the containers of every other session down.
+// ponytail: names, and Docker Desktop's alone. Add a name when another program of this kind turns up (a browser
+// that a session was the first to open would be one); make it a setting if owners need different lists.
+const OUTLIVES = /^(docker desktop|com\.docker\.)/i;
+
+// The pids in a process listing that closing an instance must leave running: those programs, and whatever they
+// started themselves.
+function sparedPids(procs) {
+  const spared = new Set();
+  for (const p of procs.values()) if (OUTLIVES.test(p.name) && !spared.has(p.pid)) for (const q of treeOf(procs, p.pid)) spared.add(q.pid);
+  return spared;
+}
+
 // Same-named processes folded together (sixteen workers read better as one line), busiest first.
 function byName(procs) {
   const groups = new Map();
@@ -848,6 +863,6 @@ module.exports = {
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,
   auditEntries, auditPick, toolKey, parseVersion, newerVersion,
   childEnv, isInside, realPath, samePath, parseWorktrees, labelFor, scanConfig, configPath, ROOT_FILES, scanHome, homePath,
-  SAMPLE_SECONDS, samplerCommand, cpuSeconds, parseProcs, treeOf, treeUsage, byName,
+  SAMPLE_SECONDS, samplerCommand, cpuSeconds, parseProcs, treeOf, treeUsage, sparedPids, byName,
   WEIGHTS, MIN_SHARE, shareCpu, scopeUnit, scopeProps, scopeCommand, throttleTargets, nextDuty,
 };
