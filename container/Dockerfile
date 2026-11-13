@@ -88,11 +88,13 @@ ENV MISE_DATA_DIR=/opt/mise MISE_YES=1 MISE_TRUSTED_CONFIG_PATHS=/work PATH=/opt
 # files into tools/ when it builds (see containers.js), and builds again when one of them has changed. They lie
 # in /work, above every clone, so a session finds the tools whatever its branch holds, and a file of the clone
 # itself comes before them. With no such file, tools/ is empty: that is the image all other folders share.
+# What mise downloaded to install them is removed in the same step: it keeps a copy, which for Flutter is 1.5 GB
+# that the image would carry for nothing.
 # ponytail: one layer for all of a folder's tools, so a change of one version fetches all of them again. Give
-# this step a cache for mise's downloads if that takes too long.
+# this step a cache for mise's downloads, outside the image, if that takes too long.
 COPY --chown=agent:agent tools/ /work/
 USER agent
-RUN cd /work && if [ -e mise.toml ] || [ -e .mise.toml ] || [ -e .tool-versions ]; then mise install && mise ls; fi
+RUN cd /work && if [ -e mise.toml ] || [ -e .mise.toml ] || [ -e .tool-versions ]; then mise install && mise ls && rm -rf /home/agent/.cache/mise; fi
 USER root
 
 VOLUME /var/lib/docker

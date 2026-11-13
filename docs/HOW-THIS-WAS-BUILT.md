@@ -1536,8 +1536,33 @@ Live, in the test copy, on a folder that was given a justfile, a `.nvmrc` and a 
 | The recipe's first step for the tools skipped a folder that had only a `mise.toml`. | `ls a b c` fails when one of the three is missing, also when another is there. | Three tests joined by "or". Found by reading, before the first build. |
 | The live test stood still for ten minutes. | It waited for a call that opens a dialog to return, which that call does when the dialog closes. | The test opens the dialog without waiting for it. |
 
-Not tried: Flutter through mise, which is two gigabytes; a tool that has to be compiled; a `mise.toml` that
-sets variables or runs hooks, beyond that it is read.
+Not tried: a tool that has to be compiled; a `mise.toml` that sets variables or runs hooks, beyond that it is
+read. Flutter was not tried either when 0.7.1 went out, and said to be "about 2 GB".
+
+### After 0.7.1: Flutter
+
+The owner asked how a repository that needs Flutter is handled, and had it tried: a folder whose `mise.toml`
+names `flutter = "3.50.0"`, the image the app builds for it, and in a container of that image, as the
+session's user, a new app.
+
+| What | Result |
+|---|---|
+| The image | Built in 241 seconds, 141 of them mise fetching and unpacking Flutter: a download of 1.5 GB, not of one. |
+| `flutter` and `dart` | Both found from the folder of a clone, through mise's shims. Flutter 3.50.0 with Dart 3.14.0. |
+| `flutter create`, `flutter pub get` | 17 seconds and 1 second. |
+| `flutter analyze`, `flutter test` | No issues; the template's test passed, in 8 seconds. |
+| `flutter doctor` | No Android SDK, no Chrome, no `clang++`. Tests and analysis do not need them; building for Android, the web or the Linux desktop does. |
+| The size | Docker counted 7.9 GB for this image beyond what it shares with the others, where 2 had been said. Inside: the SDK, 2.6 GB, and mise's own copy of the download, 1.5 GB, in the layer for nothing. Docker Desktop keeps each layer packed and unpacked, which doubles what a layer costs. |
+
+| Decision | Why |
+|---|---|
+| The recipe's step for the tools removes mise's cache when the tools are installed. | The copy of a download serves a second install, and an image is installed once. With the cache gone, mise still lists Flutter, and `flutter` and `dart` run. For Flutter the layer goes from 4.2 GB to 2.7. |
+| No Android SDK, Chrome or compiler in the image. | Nobody asked to build an app in a container, and each is gigabytes. A repository that needs one names it, or its set-up installs it: sessions have `sudo`. |
+
+`box-check.js` got a verdict for it, 31 in all: a fresh container of the image has no mise cache. Its first
+version looked in the container the check had filled, where the cache is back by then, small, because the
+clone is asked for its tools when a container is made. The smaller image was not built again with Flutter:
+that is a second download of 1.5 GB for a number that follows from the two above.
 
 ## 16. Still open
 

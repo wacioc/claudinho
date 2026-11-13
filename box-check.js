@@ -62,6 +62,7 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
     check(/^\d+\.\d+/.test(await inside(['docker', 'compose', 'version', '--short'])) && /^\d+\./.test(await inside(['docker', 'info', '--format', '{{.ServerVersion}}'])), 'a Docker of its own inside, with Compose');
     check(lib.parseVersion(await inside(['claude', '--version'])) !== null && /^v\d+/.test(await inside(['node', '--version'])) && /^Python 3/.test(await inside(['python', '--version'])), `Claude Code ${lib.parseVersion(await inside(['claude', '--version']))}, Node.js and Python are in it`);
     check(await inside(['just', '--version']) === 'just 1.36.0', 'the tool the folder names is in the image, and found from inside the clone without any set-up');
+    check(await boxes.docker(['run', '--rm', '--entrypoint', 'sh', image, '-c', 'test ! -e /home/agent/.cache/mise && echo none']).then(x => x.trim() === 'none', () => false), 'and the image keeps nothing of what mise downloaded to install it');
     check(await inside(['sudo', '-n', 'id', '-u']) === '0', 'the session\'s user may become root, for what a project\'s set-up installs');
     check(Number(await inside(['sh', '-c', 'ldconfig -p | grep -c -E "libnss3|libatk-1|libgbm"'])) >= 3 && /^\d{4}\./.test(await inside(['mise', '--version'])), 'the libraries of a headless Chromium are there, and mise');
 

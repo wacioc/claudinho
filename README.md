@@ -548,9 +548,13 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   container is made, into that container alone, which takes as long as they take. A version written as
   `latest` is looked up when the image is built and stays until the file changes. A change of one tool
   fetches all of the folder's tools again.
-- A folder's tools have been tried with `just`, `uv` and Node.js. Flutter is in mise's list and has not
-  been tried here, nor has a tool that has to be compiled.
-- An image per set of tools takes disk: Flutter alone is about 2 GB. The app removes a folder's older images.
+- A folder's tools have been tried with `just`, `uv`, Node.js and Flutter. With Flutter, a new app was
+  created, analyzed and tested in a container. Building it for Android, the web or the Linux desktop needs
+  what the image does not have: an Android SDK, Chrome, a C++ compiler. A tool that has to be compiled has
+  not been tried.
+- An image per set of tools takes disk. Flutter's SDK is a 1.5 GB download and 2.6 GB installed, and its
+  image takes about four minutes to build the first time. Docker Desktop keeps a layer packed and unpacked,
+  so it counts about 4 GB for such an image beyond the standard one. The app removes a folder's older images.
   Those of a folder that is no longer opened stay until they are removed by hand (`docker rmi`).
 - What a session installs with `sudo`, or a tool it adds with mise, is in its container alone and goes with
   it. The image has the libraries of a headless Chromium, not the browser: a project fetches the one its

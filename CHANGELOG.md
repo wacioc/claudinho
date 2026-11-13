@@ -4,6 +4,13 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.7.2 (2026-11-13)
+
+**Docker containers**
+
+- A folder's image no longer carries what mise downloaded to install the folder's tools. For a folder that
+  names Flutter, that was 1.5 GB in its image.
+
 ## 0.7.1 (2026-11-13)
 
 **Docker containers**
