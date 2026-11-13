@@ -455,7 +455,8 @@ function updateCard(t, inst, order) {
   if (detailId === inst.id && t.auditRev !== inst.auditRev) loadAudit(t);
   t.p.badge.textContent = st.text;
   t.p.badge.className = `badge ${st.cls}`;
-  t.p.badge.title = inst.starting ? 'Its first prompt has not gone in yet: Claude Code is still running the SessionStart hooks of this new worktree. Issues that are queued wait for it.' : '';
+  t.p.badge.title = !inst.starting ? '' : inst.box ? 'Its container is being made and filled, or its first prompt has not gone in yet. Nothing waits for it.'
+    : 'Its first prompt has not gone in yet: Claude Code is still running the SessionStart hooks of this new worktree. Issues that are queued wait for it.';
   t.card.classList.toggle('attention', st.cls === 'wait');
   // Its work is done and its pull request is still open: the owner can mark a draft ready, or merge, from here.
   const pr = inst.pr && inst.pr.state === 'OPEN' && (inst.done || inst.exited) ? inst.pr : null;
@@ -788,10 +789,11 @@ function renderInstances() {
       h('div.meta', [e.name, e.kind, e.startedAt && `up ${fmtDur(Date.now() - e.startedAt)}`].filter(Boolean).map(c => h('span.chip', c)), procChips(e.procs, 1)),
       h('div.note', 'Started outside claudinho: status only, no terminal.'));
   }));
-  // Worktrees are made one at a time, and so are containers: while a new one is still starting, the queue waits.
-  const first = state.instances.find(i => i.starting), after = first && `, after ${first.issue ? `#${first.issue}` : first.label} has started`;
+  // Worktrees are made one at a time: while a new one is still starting, the queue waits for it. Containers
+  // do not wait for each other.
+  const first = state.instances.find(i => i.starting && !i.box), after = first && `, after ${first.issue ? `#${first.issue}` : first.label} has started`;
   $('#queue').replaceChildren(...state.queue.filter(inMode).map(j => h('span.chip.warn', { title: `${j.title}${j.group ? `\nGroup: ${j.group}` : ''}` },
-    `queued #${j.number}${j.waitingOn.length ? `, waiting on ${j.waitingOn.map(n => (n === '?' ? 'GitHub' : n === 'box' ? 'a free container' : `#${n}`)).join(' ')}` : after || ''}`,
+    `queued #${j.number}${j.waitingOn.length ? `, waiting on ${j.waitingOn.map(n => (n === '?' ? 'GitHub' : n === 'box' ? 'a free container' : `#${n}`)).join(' ')}` : (!j.box && after) || ''}`,
     h('button', { title: 'Remove from the queue', onclick: () => call('unqueue', j.number) }, '✕'))));
   const mine = state.instances.filter(inMode), total = mine.length + outside.length;
   const waiting = [...mine, ...outside.map(e => ({ pending: [], session: e }))].filter(i => statusOf(i).cls === 'wait').length;

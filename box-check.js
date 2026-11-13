@@ -70,6 +70,22 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
     await inside(['sh', '-c', 'echo \'{"model":{"display_name":"x"}}\' | ' + lib.statusLineCommand('/claudinho/status.json')]);
     check(JSON.parse(fs.readFileSync(path.join(dir, 'status.json'), 'utf8')).model.display_name === 'x', 'what a status line writes inside is read on this computer');
 
+    // Into a folder of the check's own: the volume it would go to is the one the app's sessions read.
+    console.log('\nthe owner\'s Claude Code configuration, copied in');
+    const config = path.join(dir, 'config'), to = '/tmp/config-check';
+    fs.mkdirSync(path.join(config, 'skills', 'demo'), { recursive: true });
+    for (const [file, text] of [['settings.json', '{"a":1}'], ['statusline.sh', 'echo hi\n'], ['skills/demo/SKILL.md', 'demo\n'], ['.credentials.json', '{"secret":1}'], ['history.jsonl', 'x\n']]) fs.writeFileSync(path.join(config, file), text);
+    await boxes.inBox(box, ['mkdir', '-p', to]);
+    await boxes.copyConfig(box, config, to);
+    const arrived = await inside(['sh', '-c', `cd ${to} && find . -type f | sort | tr '\\n' ' '`]);
+    check(arrived === './settings.json ./skills/demo/SKILL.md ./statusline.sh', `what a person keeps there arrives, and neither login nor history: ${arrived}`);
+    const first = await inside(['stat', '-c', '%i %U', `${to}/settings.json`]);
+    await boxes.copyConfig(box, config, to);
+    check(first.endsWith(' agent') && await inside(['stat', '-c', '%i %U', `${to}/settings.json`]) === first, 'copied again, a file that is the same is left alone');
+    fs.writeFileSync(path.join(config, 'settings.json'), '{"a":2}');
+    await Promise.all([boxes.copyConfig(box, config, to), boxes.inBox(box, ['sh', '-c', `for k in $(seq 200); do cat ${to}/settings.json; echo; done | sort -u | tr '\\n' ' '`]).then(seen => { check(/^(\{"a":1\} )?(\{"a":2\} )?$/.test(seen), `read 200 times while it is replaced, it is never seen half written: ${seen.trim()}`); })]);
+    check(await inside(['cat', `${to}/settings.json`]) === '{"a":2}' && await inside(['sh', '-c', `ls -A ${to} | grep -c new- || true`]) === '0', 'a file that differs is replaced whole, and nothing is left beside it');
+
     console.log('\na port of the container, from this computer');
     await boxes.docker(['exec', '-d', '-u', 'agent', '-w', work, box, 'python', '-m', 'http.server', '8000']);
     const [p] = await boxes.ports(box);

@@ -127,11 +127,19 @@ async function ready(box) {
 // ponytail: copied at each start of a container, which only adds and overwrites. What was deleted on this
 // computer stays in the volume, and a setting that names a path of this computer points nowhere in there.
 const CONFIG = [...lib.HOME_FILES, ...lib.HOME_DIRS, 'hooks'];
-async function copyConfig(box, configDir) {
+// It goes into a folder of the container's own first, and from there file by file into the volume: a file that
+// is the same as the one there is left alone, and one that differs is written beside it and renamed over it.
+// Sessions in other containers read that volume while this runs, and several containers may be at it at once,
+// since they are started side by side: a settings file caught half written would not parse.
+// to: where the volume is. box-check.js names a folder of its own there, so as not to write into the volume.
+const STAGE = '/var/tmp/claudinho-config';   // not /tmp: there the image's start script puts a memory disk, which `docker cp` cannot reach
+async function copyConfig(box, configDir, to = `${HOME}/.claude`) {
   let names;
   try { names = fs.readdirSync(configDir, { withFileTypes: true }).filter(e => CONFIG.includes(e.name) || (e.isFile() && /\.(sh|js|mjs|cjs|py)$/.test(e.name))).map(e => e.name); } catch { return; }
-  for (const name of names) await docker(['cp', path.join(configDir, name), `${box}:${HOME}/.claude/`]);
-  if (names.length) await inBox(box, ['chown', '-R', 'agent:agent', ...names.map(n => `${HOME}/.claude/${n}`)], { root: true });
+  if (!names.length) return;
+  await inBox(box, ['sh', '-c', `rm -rf ${STAGE} && mkdir -p ${STAGE}`], { root: true });
+  for (const name of names) await docker(['cp', path.join(configDir, name), `${box}:${STAGE}/`]);
+  await inBox(box, ['bash', '-c', `cd ${STAGE} && find . -type f -print0 | while IFS= read -r -d '' f; do d="$1/$f"; cmp -s "$f" "$d" && continue; mkdir -p "$(dirname "$d")" && cp "$f" "$d.new-$HOSTNAME" && mv -f "$d.new-$HOSTNAME" "$d"; done`, 'bash', to], { timeout: 300000 });
 }
 
 const hostGit = (args, cwd, input) => new Promise((resolve, reject) => {
@@ -203,4 +211,4 @@ const stopBehind = names => { if (names.length) spawn('docker', ['stop', '-t', '
 // The volume of its Docker's images is left, for the next session at that number.
 const remove = box => docker(['rm', '-f', '-v', box], { timeout: 120000 });
 
-module.exports = { recipe, nameOf, numberOf, docker, inBox, info, image, list, create, ready, fill, state, signedIn, terminal, ports, stats, exists, start, stop, stopBehind, remove };
+module.exports = { recipe, nameOf, numberOf, docker, inBox, info, image, list, create, ready, copyConfig, fill, state, signedIn, terminal, ports, stats, exists, start, stop, stopBehind, remove };

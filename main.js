@@ -197,7 +197,7 @@ function spawnInstance({ cwd, worktree, box = null, resume, transcript, model, e
     cwd: box ? box.work : wt || root, sessionId: resume || null, transcript: transcript || null, group: lib.groupName(group),
     // A new worktree with a first prompt: until that prompt has gone in, the session is still running its
     // SessionStart hooks, where a repository sets a fresh worktree up (see onHook and pump). A new container
-    // the same, from the moment it is asked for.
+    // is starting from the moment it is asked for, which its card says and nothing waits for.
     starting: !!((wt || box) && prompt && !resume),
     // done: its last turn has ended with nothing it started still running, and no prompt has gone in since.
     // background: what was still running when its last turn ended (see onStop). audit: every input request (see onHook).
@@ -237,8 +237,11 @@ async function checkDocker() {
   catch (e) { Object.assign(dock, { ok: false, error: dockerBin ? e.message.split('\n')[0] : 'Docker was not found on PATH.' }); }
   push();
 }
-// Whether a container is still to be had. Without an answer from Docker: no.
-const freeBox = () => Promise.all([boxes.info(), boxes.list()]).then(([d, rows]) => rows.length < d.limit, () => false);
+// Whether a container is still to be had: of those Docker may have, less the ones there are, less the sessions
+// that have asked for one and not got it yet, since several are started side by side. Without an answer from
+// Docker: no.
+const freeBox = () => Promise.all([boxes.info(), boxes.list()])
+  .then(([d, rows]) => rows.length + [...instances.values()].filter(i => i.box && !i.box.name && !i.exited).length < d.limit, () => false);
 
 // One container is made at a time, so that no two sessions take the same number.
 let boxLine = Promise.resolve();
@@ -957,14 +960,17 @@ async function pump() {
   try {
     for (const job of [...queue]) {
       // One worktree at a time. The next is created only when the session in the one before has finished its
-      // SessionStart hooks, so two worktrees are never being set up side by side.
-      if ([...instances.values()].some(i => i.starting && !i.exited)) break;
+      // SessionStart hooks, so two worktrees are never being set up side by side. Containers do not wait, for
+      // each other or for a worktree: each is set up where nothing of another's can be in its way.
+      if (!job.box && [...instances.values()].some(i => i.starting && !i.exited && !i.box)) continue;
       const active = [...instances.values()].filter(i => i.pooled && !i.exited && !i.finished).length;
       if (job.pooled && active >= poolLimit) continue;
-      if (job.box && !await freeBox()) { job.waitingOn = ['box']; continue; }   // every container is taken
       try {
         job.waitingOn = lib.openBlockers(JSON.parse(await run('gh', ['api', `repos/{owner}/{repo}/issues/${job.number}/dependencies/blocked_by`], job.root)));
       } catch { job.waitingOn = ['?']; }   // gh failed: like claude_worktree, wait and retry
+      // A container is asked about last: nothing is awaited between Docker's answer and the start, so a session
+      // that is started has its place, also when several are started in one go (see freeBox).
+      if (!job.waitingOn.length && job.box && !await freeBox()) job.waitingOn = ['box'];   // every container is taken
       if (job.waitingOn.length || !queue.includes(job)) continue;
       queue.splice(queue.indexOf(job), 1);
       spawnInstance({

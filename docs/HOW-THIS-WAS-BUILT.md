@@ -1402,6 +1402,41 @@ the app's card by a new owner; a login being renewed while several sessions run;
 memory ceiling; the image built on a machine that has none of its layers; the packaged app, whose check
 starts no container.
 
+### After 0.7.0: containers start side by side
+
+The owner updated, sent four issues to containers, and watched them start one after another:
+
+> when starting multiple claude code sessions in Docker containers you don't need to wait for them to start
+> sequentially.
+
+The rule of one at a time was made for worktrees (section 9): a repository sets a fresh worktree up in its
+`SessionStart` hooks, and two of those side by side get in each other's way. 0.7.0 had applied it to containers
+as well, for no better reason than that the same code started both. Nothing a container's set-up touches is
+shared with another's, save two things, and both were looked at.
+
+| Decision | Why |
+|---|---|
+| The queue holds a worktree back while another worktree is starting, and holds a container back for nothing. | Asked for. A starting worktree does not hold a container back either, nor the other way round. |
+| Whether a container is still to be had is asked last, with nothing awaited between Docker's answer and the start, and the sessions that are still waiting for their container are counted as having one. | Started in one go, three sessions ask before any container exists. Counted by Docker's list alone, all three would find the same free places, and the one too many would fail on its card and be gone from the queue. |
+| The numbers are still given out one at a time. | Two `docker run` at once could take the same name. It is a second each, and the filling goes on side by side. |
+| The owner's configuration is first copied into a folder of the container's own, and from there file by file into the shared volume: the same file is left alone, a different one is written beside the old and renamed over it. | Until now every new container wrote the whole configuration anew, into a volume that the running sessions read. With several containers doing that at once, a session could find a settings file half written. Now a start with nothing changed writes nothing. |
+
+`box-check.js` got four verdicts for the copy, against a folder of its own: only what a person keeps there
+arrives, a file that is the same keeps its place on the disk, one that differs is replaced whole, and 200
+reads during the replacing never see half a file. Its first run failed, usefully: the folder the copy went
+through lay under `/tmp`, where the image's start script puts a memory disk that `docker cp` cannot reach. It
+lies under `/var/tmp` now. The asserts and the live tests before it had not gone that way.
+
+Live, in the test copy, while the owner's own four container sessions were running beside it:
+
+| What | Result |
+|---|---|
+| Three issues sent at once, three at once allowed | Cards after 1.6, 3.1 and 4.7 seconds, containers after 3.4, 5.2 and 7.0, first prompts in after 15.7, 16.5 and 17.3. The third had its card eleven seconds before the first had taken its prompt. All three turns were over 16.8 seconds after the first card. One after another, at 13 seconds each, the third would have begun after 26. |
+| Three issues at once with two places free | Two started side by side. The third stayed in the queue, waiting for a free container, with no failed card. It ran in the place of a stand-in that was removed. |
+
+The cards still come a second and a half apart: each issue's blockers are asked of GitHub before it starts,
+one issue after another.
+
 ## 16. Still open
 
 - Sessions in containers: what section 15 lists as not verified. Docker Engine alone on Linux is not served.

@@ -96,7 +96,8 @@ With Docker chosen:
 - Logins are made inside a container, once, and kept in Docker volumes that all containers share. Claude Code
   asks for its login in the first session's terminal (`/login`), and where GitHub has none yet, the card runs
   `gh auth login` before anything else. Nothing is copied from the logins of this computer.
-- Your own Claude Code configuration is copied into the containers at each start: `CLAUDE.md`,
+- Your own Claude Code configuration is copied into the containers at each start, file by file and only what
+  has changed: `CLAUDE.md`,
   `settings.json`, `keybindings.json`, agents, commands, output styles, rules, skills, hooks, and the scripts
   that lie directly in that folder. Files named by `.worktreeinclude` are copied into the clone, as Claude Code
   copies them into a worktree.
@@ -272,8 +273,9 @@ then that card says "starting", and the queued issues say which one they are wai
 work at once is still the number you choose.
 
 With Docker containers chosen, each issue gets a container instead of a worktree, named after the issue the
-same way, and so is its branch. Containers are made one at a time too. An issue waits in the queue while
-every container is taken.
+same way, and so is its branch. Containers do not wait for each other: the sessions of a batch start side by
+side, as many as you chose to run at once, because nothing one of them sets up can be in another's way. An
+issue waits in the queue while every container is taken.
 
 Several issues are started lowest number first, whatever the order of the list. For them you also choose how many
 agents run at once (max 4; with containers, as many as there may be) and the group's name (see [Groups](#groups)). For one issue or several you choose

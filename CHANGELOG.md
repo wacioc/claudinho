@@ -4,6 +4,17 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.7.1
+
+**Docker containers**
+
+- Issues sent to Claude Code together start side by side, as many as you chose to run at once. Before, each
+  container waited until the session in the one before it had taken its first prompt, the way worktrees do.
+  Measured with three issues: all three were at work 17 seconds after they were sent off, where each start
+  takes about 13 seconds by itself.
+- Your Claude Code configuration goes into the containers file by file, and a file that has not changed is
+  left alone. Before, every new container wrote all of it anew, under the sessions that were reading it.
+
 ## 0.7.0 (2026-11-13)
 
 **Two ways of working**
