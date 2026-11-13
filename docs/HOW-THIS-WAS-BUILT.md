@@ -1564,13 +1564,87 @@ version looked in the container the check had filled, where the cache is back by
 clone is asked for its tools when a container is made. The smaller image was not built again with Flutter:
 that is a second download of 1.5 GB for a number that follows from the two above.
 
+### After 0.7.2: one memory, a word about the place, and copying
+
+The owner reported three things from sessions in containers: the memories were "specific to each container",
+one session said that Playwright was not installed and referred to notes from an earlier run, and no text
+could be copied from a container's terminal.
+
+What was found, each read off the machine before anything was changed:
+
+| What | Finding |
+|---|---|
+| Where the containers' memory was | In the shared volume, under `projects/-work-<folder>/memory`. Claude Code names a project's folder after the path of the repository, and every container clones to the same path. So it was one memory for all containers of a folder, it outlived each of them, and it was another one than the folder has on the computer, where the sessions in worktrees keep theirs. |
+| The note | A session had written, under 0.7.0, that its "sandbox" had no `.env`, no Flutter and no browser for Playwright, with the instruction to report those gaps. A later session had brought it up to date in part. From then on the memory's index told every session so, also in containers whose image held Flutter. |
+| Playwright | The volume for its browsers was empty: no session had ever fetched one. The libraries have been in the image since 0.7.1. The note called the gap "the environment, not the change". |
+| Copying | A session in a container was in Claude Code's full-screen view, which takes the mouse over and copies a selection itself: with a program of the system on the computer, and in a container, where there is none, by asking its terminal (OSC 52). A selection sent as mouse reports produced that request, and it arrived through `docker exec` and the Windows console layer. xterm.js drops it unless a handler is registered. The sessions on the computer were in the same view; there, by its documentation, Claude Code writes the Windows clipboard itself. |
+
+| Decision | Why |
+|---|---|
+| A new container gets the repository's memory folder of the computer, mounted where Claude Code looks inside. | One memory for a repository is what Claude Code keeps across worktrees, and what the owner expected. A memory in a volume cannot be looked into or corrected, which is how the note lasted. The alternative was a copy for each container: nothing a session learns in a container would outlast it then, a correction of the owner's included. |
+| Mounted at the default place, not at a place of its own that `autoMemoryDirectory` names. | No setting to carry, and a container made before, which has no mount, goes on as it was and is not told of a folder it does not have. The cost: the place is worked out by Claude Code's naming, read off the folders it makes and documented nowhere. The same naming is needed for the folder on the computer either way. |
+| Docker makes the folders above a mount as root, here in the shared volume. The app hands them to the session's user before the session starts. | Claude Code keeps the conversation in the folder right above the memory, and for a folder's first container that folder is new. |
+| The session is told where it is, with `--append-system-prompt`. | The note came from a session that took its container for somebody else's machine. With one memory, such a note would reach the sessions on the computer as well. A few sentences: the container is the session's own, a tool that is missing is to be installed and named, a browser runs headless and how Playwright's is fetched, and what is true of one container only stays out of the memory. |
+| The app does not fetch Playwright's browser. | Which build is wanted is decided by the Playwright version the project pins. |
+| The app answers OSC 52 by writing the clipboard, in every terminal, and never answers a request to read it. | Reading would hand the clipboard to whatever a terminal prints. Writing is what the selection asked for. |
+
+Verified: `box-check.js`, 34 verdicts then, mounts a folder of its own as the memory and finds a note from the
+computer inside, a note from inside on the computer, and the folder above the mount the session's user's after
+it was root's. Live, in a container of the test clone: a session on Haiku named a word that only the folder's
+memory on the computer held, and quoted the command for Playwright's browser from what it had been told. A
+selection sent as mouse reports arrived at the app as the selected word, and Claude Code said "copied 14 chars
+to clipboard"; the clipboard was replaced by a recorder for that. Ctrl+V put a stand-in clipboard's text into
+the session's input.
+
+Not done: the notes that the containers wrote among themselves stay in the volume, unread by new containers. A
+container made before this has no mount. Pasting an image into a session in a container was not tried, and
+cannot work as it does on the computer. The real clipboard was not written in any test.
+
+What went wrong: a test typed `/memory` into a session through Git Bash, which made a Windows path of the
+argument. The session took it for a prompt and began a turn; it was stopped after three seconds, with nothing
+counted. The script now refuses an argument that is no slash command.
+
+### Playwright's browser, fetched when the image is built
+
+The owner read "fetched by the project's own Playwright" as something every container does, and asked for the
+browser in the base image instead.
+
+| What | Finding |
+|---|---|
+| Can the image all folders share hold it? | No. Playwright's documentation: each version needs browser builds of its own, and where the version in an image is not the project's, the browser is not found. Which version a project has, only the project knows. |
+| Can a folder's own image hold it? | Not where Playwright looks: that place is the volume all containers share, and a volume lies over what an image has there. Docker fills a volume from the image only while the volume is empty. |
+| What a container costs today | Nothing once a build is in the volume: the next `playwright install chromium` finds it. Until then nobody had fetched one. |
+| Naming Playwright for mise | Both ways work in the image: `"npm:playwright"` (19 MB, 3 seconds; mise installs npm packages itself) and `"pipx:playwright"`, which mise installs with `uv` (140 MB, 7 seconds with uv). For the version tried, both ask for the same builds: Chromium, its headless shell and ffmpeg, 328 MB to download. |
+| One volume, several versions | A Playwright that installs its builds removes those that no installation it knows of still uses. From inside one container it knows of none in another. |
+
+| Decision | Why |
+|---|---|
+| A folder names Playwright among its tools, in the version of its lockfile, and the app fetches that version's Chromium into the shared volume right after it has built the folder's image. | It is the moment the owner asked for, and the one place the tools of a folder are already named. Fetched there, the build is in every container at once, those that are running included, and the image does not grow by it. |
+| The version is named by hand, not read from a lockfile. | Reading lockfiles of every kind is guessing. A version that is out of date costs one fetch by a session, as before. |
+| `PLAYWRIGHT_SKIP_BROWSER_GC=1` in every container. | So that one container's install cannot take a build from under a session in another. The price: builds that nothing uses any more stay. |
+| Not a `postinstall` hook of mise in the folder's file, which would need no code here. | mise runs it at every `mise install`: when the image is built, where the download would land in the image under the volume, and again in every new container. |
+
+Verified up to the download: an image built by hand from the recipe, for a folder naming `uv` and
+`"pipx:playwright"`, in 33 seconds; in it the command the app runs finds Playwright from `/work` as the
+session's user and, with `--dry-run`, names the shared volume's place for all three builds. `box-check.js`, 36
+verdicts now, has one for a folder that names no Playwright and one for the setting in a container.
+
+Then, with the owner's yes to the download, the fetch itself, through the app's own code: image and browser
+after 43 seconds. In the volume: Chromium (403 MB), its headless shell (273 MB) and ffmpeg (5 MB), each marked
+complete and the session's user's. The same command again downloads nothing and is back in 0.9 seconds, the
+start of its container included. From the volume, mounted read-only, the browser starts headless as the
+session's user and draws a page. The card gets a line for every tenth of each download, some thirty in all.
+
 ## 16. Still open
 
 - Sessions in containers: what section 15 lists as not verified or not tried. Docker Engine alone on Linux
   is not served. The processors of a container are not a setting. A container's ports are fixed when it is
   made. A kept container can be given a new session, not its old conversation. A Dev Container file is not
   read. A change of one tool fetches all of a folder's tools again, and the images of folders that are no
-  longer opened stay on the disk.
+  longer opened stay on the disk. The notes that containers wrote among themselves before 0.7.3 stay in their
+  volume, and a memory moved with `autoMemoryDirectory` is not followed. An image cannot be pasted into a
+  session in a container. The Playwright version a folder names for its browser is kept equal to its
+  lockfile's by hand.
 - A pull request's later fate on GitHub (merged or closed there) reaches a card only when the session's next
   turn ends.
 - The Diff tab has GitHub's default view and no other, and shows no diff where GitHub's list of files gives
@@ -1749,9 +1823,18 @@ work relied on.
   the answer on standard output), `setup` (the package repository and its key), `authentication`, `devcontainer`
 - <https://cli.github.com/manual/gh_pr_view> (a pull request by its branch's name) and
   <https://cli.github.com/manual/gh_auth_login>
+- Claude Code: `memory` (where a repository's memory is kept, and that its worktrees share it), `fullscreen`
+  (the mouse, how a selection is copied and by what), `cli-reference` (`--append-system-prompt`)
+- <https://playwright.dev/docs/docker> ("Image tags": the image's version and the project's must match),
+  <https://playwright.dev/docs/browsers> ("Managing browser binaries", "Stale browser removal"), and mise's
+  `dev-tools/backends/npm`, `dev-tools/backends/pypi` (which `pipx:` names too) and `hooks`
+- <https://xtermjs.org/docs/guides/hooks/> for a handler of an OSC sequence, and
+  <https://invisible-island.net/xterm/ctlseqs/ctlseqs.html> ("Manipulate Selection Data") for OSC 52
 - Measured, not documented: that an HTTP hook to a private address is refused, that the terminal's end on this
   side leaves the program in the container running, and that `claude agents --json` in a container lists that
-  container's sessions although the configuration folder is shared.
+  container's sessions although the configuration folder is shared. Also the name of a project's folder under
+  `projects` (the path, with "-" for every character that is no letter or digit), that Claude Code in a
+  container sends OSC 52 for a selection, and that the request passes `docker exec` and the Windows console.
 
 **The Diff tab**: <https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files> for the list of a pull
 request's files, whose answer was also read from a real pull request;

@@ -216,6 +216,8 @@ assert.strictEqual(lib.statusLineCommand("C:\\Users\\o'brien\\s.json", 'bash ~/x
 assert.strictEqual(lib.statusLineCommand('/tmp/s.json'), "cat > '/tmp/s.json'");
 assert.deepStrictEqual(lib.claudeArgs({ settingsFile: 's', model: 'opus', effort: 'high', worktree: 'w', prompt: '-x' }), ['--settings', 's', '--model', 'opus', '--effort', 'high', '--worktree', 'w', '--', '-x']);
 assert.deepStrictEqual(lib.claudeArgs({ settingsFile: 's' }), ['--settings', 's']);
+// what a session in a container is told goes in at every start, a resumed one too
+assert.deepStrictEqual(lib.claudeArgs({ settingsFile: 's', note: 'n', resume: 'abc' }), ['--settings', 's', '--append-system-prompt', 'n', '--resume', 'abc']);
 // resuming: the conversation already has its worktree and its first prompt
 assert.deepStrictEqual(lib.claudeArgs({ settingsFile: 's', model: 'opus', worktree: 'w', prompt: 'again', resume: 'abc' }), ['--settings', 's', '--model', 'opus', '--resume', 'abc']);
 const settings = lib.instanceSettings({ statusFile: '/tmp/s.json', hookUrl: 'http://127.0.0.1:1/t/i', userStatusLine: { type: 'command', command: 'mine', padding: 2 } });
@@ -241,6 +243,15 @@ assert.strictEqual(lib.freeSlot([2, 1], 2), null);
 assert.strictEqual(lib.boxWork('my repo'), '/work/my-repo');
 assert.strictEqual(lib.boxWork('.hidden'), '/work/hidden');
 assert.strictEqual(lib.boxWork('日本'), '/work/repo');
+// where Claude Code keeps a folder's memory: named after the path, on this computer and for a clone in a container
+assert.strictEqual(lib.projectDir('E:\\Work\\my.repo_1'), 'E--Work-my-repo-1');
+assert.strictEqual(lib.projectDir('/work/my.repo_1'), '-work-my-repo-1');
+assert.strictEqual(lib.memoryDir(path.join('home', '.claude'), '/Users/me/app'), path.join('home', '.claude', 'projects', '-Users-me-app', 'memory'));
+assert.ok(lib.boxNote('/work/app').includes('/work/app') && !/["\\\n]/.test(lib.boxNote('/work/app')));   // one line, and nothing a command line would have to escape
+// OSC 52: text for the clipboard is taken, a question for what the clipboard holds is not answered
+assert.strictEqual(lib.clipText(`c;${Buffer.from('häll€ wörld\n2').toString('base64')}`), 'häll€ wörld\n2');
+assert.strictEqual(lib.clipText(`;${Buffer.from('x').toString('base64')}`), 'x');
+for (const no of ['c;?', 'c;', 'c', '', 'c;not base64!', 'c;?;aGk=']) assert.strictEqual(lib.clipText(no), null, no);
 // the ports setting, however it was typed: numbers, each once, none that is no port
 assert.deepStrictEqual(lib.portList('3000, 5173,8000  8080, x, 70000, 0, 3000'), [3000, 5173, 8000, 8080]);
 assert.deepStrictEqual(lib.portList(''), []);

@@ -13,7 +13,9 @@
 //   claudinho-npm-cache, -pip-cache, -uv-cache, -playwright   what npm, pip and uv downloaded, and the
 //                                 browsers Playwright fetched
 // The folder on this computer is mounted read-only at /src and cloned from there. A session's work leaves its
-// container by `git push`, and in no other way.
+// container by `git push`. One folder of this computer it writes to directly: the memory that Claude Code keeps
+// for the repository, mounted where Claude Code looks for it inside (see memoryIn). Sessions in containers and
+// sessions in worktrees then read and write the same notes.
 //
 // The containers are privileged, which a Docker inside needs. That keeps sessions out of each other's way; it
 // is no wall against a session that sets out to leave its container.
@@ -35,6 +37,14 @@ const DOCKERFILE = path.join(__dirname, 'container', 'Dockerfile');
 const recipe = fs.existsSync(DOCKERFILE);   // false in a packaged copy that left it out: pack-check.js looks
 const nameOf = n => `${PREFIX}-slot-${n}`;
 const numberOf = name => { const m = new RegExp(`^${PREFIX}-slot-(\\d+)$`).exec(name || ''); return m ? Number(m[1]) : null; };
+// Where Claude Code inside a container looks for the memory of the clone in `work`.
+const memoryIn = work => `${HOME}/.claude/projects/${lib.projectDir(work)}/memory`;
+// Playwright's browsers: one volume for all containers, at the place where every Playwright looks. Each version
+// of Playwright wants builds of its own, and they lie there side by side. A Playwright that installs its builds
+// also removes those that no installation it knows of still uses, and from inside one container it knows of
+// none in another: so that is turned off (https://playwright.dev/docs/browsers#stale-browser-removal).
+// ponytail: builds that nothing asks for any more stay in the volume until somebody clears it.
+const BROWSERS = ['-e', 'PLAYWRIGHT_SKIP_BROWSER_GC=1', '-v', `claudinho-playwright:${HOME}/.cache/ms-playwright`];
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
 // One docker command. Rejects with the last lines of what it printed as an error, and with its exit code.
@@ -51,6 +61,23 @@ function docker(args, { input, timeout = 120000, encoding = 'utf8' } = {}) {
 // A command inside a container: as the session's user unless `root` is set, in the folder `cwd`.
 const inBox = (box, argv, { root = false, cwd, ...opts } = {}) =>
   docker(['exec', ...(opts.input != null ? ['-i'] : []), '-u', root ? 'root' : 'agent', ...(cwd ? ['-w', cwd] : []), box, ...argv], opts);
+
+// A docker command that takes a while: `say` is told each line it prints as it goes. Rejects with the last one.
+function follow(args, say) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('docker', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let rest = '', last = '';
+    const read = chunk => {
+      const lines = (rest + chunk).split(/\r?\n/);
+      rest = lines.pop();
+      for (const line of lines) if (line.trim()) { last = line.trim(); say(last); }
+    };
+    child.stdout.setEncoding('utf8').on('data', read);
+    child.stderr.setEncoding('utf8').on('data', read);
+    child.on('error', reject);
+    child.on('exit', code => (code === 0 ? resolve() : reject(new Error(last || `docker ${args[0]} failed`))));
+  });
+}
 
 // Docker itself: the processors and the memory it has, and how many containers that allows.
 async function info() {
@@ -93,20 +120,19 @@ async function build(tag, claude, root, tools, say) {
     fs.copyFileSync(DOCKERFILE, path.join(context, 'Dockerfile'));
     fs.mkdirSync(path.join(context, 'tools'));
     for (const [name, text] of tools) fs.writeFileSync(path.join(context, 'tools', name), text);
-    await new Promise((resolve, reject) => {
-      const child = spawn('docker', ['build', '--progress', 'plain', '-t', tag, '--label', `claudinho.tools-of=${owner}`, '--build-arg', `CLAUDE_CODE=${claude}`, context], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-      let rest = '', last = '';
-      const read = chunk => {
-        const lines = (rest + chunk).split(/\r?\n/);
-        rest = lines.pop();
-        for (const line of lines) if (line.trim()) { last = line.trim(); say(last); }
-      };
-      child.stdout.setEncoding('utf8').on('data', read);
-      child.stderr.setEncoding('utf8').on('data', read);
-      child.on('error', reject);
-      child.on('exit', code => (code === 0 ? resolve() : reject(new Error(`The image for containers could not be built: ${last}`))));
-    });
+    await follow(['build', '--progress', 'plain', '-t', tag, '--label', `claudinho.tools-of=${owner}`, '--build-arg', `CLAUDE_CODE=${claude}`, context], say)
+      .catch(e => { throw new Error(`The image for containers could not be built: ${e.message}`); });
   } finally { fs.rmSync(context, { recursive: true, force: true }); }
+  // A folder that names Playwright among its tools ("npm:playwright" in its mise.toml, with the version its
+  // lockfile has) gets that version's browser now, into the volume the containers share: fetched once, when the
+  // image is built, so that no session has to and no container waits for it. The image itself cannot hold it.
+  // The volume lies over that place, and which build is wanted goes by the version of Playwright, which only
+  // the folder knows (https://playwright.dev/docs/docker#image-tags). Chromium, whose libraries the image has.
+  if (tools.length) {
+    await follow(['run', '--rm', '-u', 'agent', '-w', '/work', '--entrypoint', 'sh', ...BROWSERS, tag, '-c',
+      'if command -v playwright >/dev/null 2>&1; then echo "Fetching the browser of the Playwright this folder names, for all containers."; playwright install chromium; fi'], say)
+      .catch(e => say(`The browser for Playwright could not be fetched now (${e.message}). A session can fetch it: playwright install chromium`));
+  }
   // The same owner's older images, and those from before images had an owner. One that a container still uses
   // stays: Docker refuses to remove it.
   const tags = (await docker(['images', 'claudinho-slot', '--format', '{{.Repository}}:{{.Tag}}'])).split(/\r?\n/).filter(t => t && t !== tag);
@@ -129,7 +155,10 @@ async function list() {
 
 // A new container at number n. dir: the folder on this computer that it sees as /claudinho, where the app puts
 // the session's settings and the session leaves its status (see lib.instanceSettings). memoryGb: its ceiling.
-async function create({ n, image: tag, root, name, work, key, dir, ports, memoryGb = lib.BOX_MEMORY_GB }) {
+// memory: the folder on this computer that holds the repository's memory (see lib.memoryDir). Without that
+// mount the sessions in containers would keep a memory of their own in the shared volume, which nobody can
+// look into and which the sessions on this computer never see.
+async function create({ n, image: tag, root, name, work, key, dir, ports, memory, memoryGb = lib.BOX_MEMORY_GB }) {
   const box = nameOf(n);
   await docker(['run', '-d', '--init', '--privileged', '--name', box, '--hostname', `slot-${n}`,
     '--cpus', String(lib.BOX_CPUS), '--memory', `${memoryGb}g`,
@@ -138,8 +167,8 @@ async function create({ n, image: tag, root, name, work, key, dir, ports, memory
     ...ports.flatMap(p => ['-p', `127.0.0.1::${p}`]),
     '-v', `${box}-docker:/var/lib/docker`, '-v', `claudinho-claude:${HOME}/.claude`, '-v', `claudinho-gh:${HOME}/.config/gh`,
     '-v', `claudinho-npm-cache:${HOME}/.npm`, '-v', `claudinho-pip-cache:${HOME}/.cache/pip`,
-    '-v', `claudinho-uv-cache:${HOME}/.cache/uv`, '-v', `claudinho-playwright:${HOME}/.cache/ms-playwright`,
-    '-v', `${root}:/src:ro`, '-v', `${dir}:/claudinho`, tag]);
+    '-v', `claudinho-uv-cache:${HOME}/.cache/uv`, ...BROWSERS,
+    '-v', `${root}:/src:ro`, '-v', `${dir}:/claudinho`, '-v', `${memory}:${memoryIn(work)}`, tag]);
   return box;
 }
 
@@ -200,6 +229,9 @@ async function copyIncluded(box, root, work) {
 async function fill(box, { root, work, branch, origin, identity, configDir, say = () => {} }) {
   // What the session before it at this number left in its Docker goes. The images it pulled stay.
   await inBox(box, ['sh', '-c', 'docker rm -f $(docker ps -aq) >/dev/null 2>&1; docker volume prune -af >/dev/null 2>&1; docker network prune -f >/dev/null 2>&1; true'], { timeout: 120000 });
+  // For a folder's first container, Docker made the folders above the memory's mount, in the shared volume and
+  // as root. Claude Code keeps the session's conversation in the one right above, as the session's user.
+  await inBox(box, ['sh', '-c', 'chown agent:agent "$1" "$1/.."', 'sh', path.posix.dirname(memoryIn(work))], { root: true });
   await copyConfig(box, configDir);
   say('Cloning the folder into the container…');
   const git = (args, opts) => inBox(box, ['git', ...args], { cwd: work, ...opts });
@@ -265,4 +297,4 @@ const stopBehind = names => { if (names.length) spawn('docker', ['stop', '-t', '
 // The volume of its Docker's images is left, for the next session at that number.
 const remove = box => docker(['rm', '-f', '-v', box], { timeout: 120000 });
 
-module.exports = { recipe, nameOf, numberOf, docker, inBox, info, toolFiles, tagOf, image, list, create, ready, copyConfig, fill, state, signedIn, terminal, ports, stats, resize, disk, exists, start, stop, stopBehind, remove };
+module.exports = { recipe, nameOf, numberOf, memoryIn, docker, inBox, info, toolFiles, tagOf, image, list, create, ready, copyConfig, fill, state, signedIn, terminal, ports, stats, resize, disk, exists, start, stop, stopBehind, remove };

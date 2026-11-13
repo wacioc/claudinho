@@ -246,12 +246,12 @@ const freeBox = () => Promise.all([boxes.info(), boxes.list()])
 
 // One container is made at a time, so that no two sessions take the same number.
 let boxLine = Promise.resolve();
-function makeBox(inst, image) {
+function makeBox(inst, image, memory) {
   const made = boxLine.then(async () => {
     const { limit } = await boxes.info();
     const n = lib.freeSlot((await boxes.list()).map(r => r.n), limit);
     if (!n) throw new Error(`All ${limit} containers are taken. Close a session, or remove a container that was kept: they are on the Containers tab.`);
-    return boxes.create({ n, image, root: inst.root, name: inst.name, work: inst.box.work, key: inst.box.key, dir: inst.dir, ports: lib.portList(saved.settings.boxPorts), memoryGb: saved.settings.boxMemoryGb });
+    return boxes.create({ n, image, root: inst.root, name: inst.name, work: inst.box.work, key: inst.box.key, dir: inst.dir, ports: lib.portList(saved.settings.boxPorts), memory, memoryGb: saved.settings.boxMemoryGb });
   });
   boxLine = made.catch(() => {});
   return made;
@@ -287,7 +287,12 @@ async function startBox(inst, { model, effort, prompt, resume }) {
       // Asked for at every start: it is there already unless the folder's tools, the recipe or Claude Code changed.
       const image = await boxes.image(claudeCode.version || 'latest', inst.root, line => { dock.building = line; say(line); push(); }).finally(() => { dock.building = null; push(); });
       inst.fresh = true;   // until its session has started, nothing in it is worth keeping (see closeBox)
-      b.name = await makeBox(inst, image);
+      // The repository's memory on this computer, which is that of its main checkout whichever folder of it is
+      // open here. The container gets it where Claude Code looks inside.
+      const main = lib.parseWorktrees(await git(['worktree', 'list', '--porcelain'], inst.root).catch(() => '')).find(w => w.main);
+      const memory = lib.memoryDir(configDir(), main ? main.path : inst.root);
+      fs.mkdirSync(memory, { recursive: true });
+      b.name = await makeBox(inst, image, memory);
       if (!open()) { await boxes.remove(b.name).catch(() => {}); return; }   // closed before it had a container to close
       saveSessions(); checkDocker();
       await boxes.ready(b.name);
@@ -306,7 +311,7 @@ async function startBox(inst, { model, effort, prompt, resume }) {
     inst.ports = await boxes.ports(b.name);
     if (!open()) return;
     inst.fresh = false;
-    attach(inst, term(boxes.terminal(b.name, b.work, ['claude', ...lib.claudeArgs({ settingsFile: '/claudinho/settings.json', model, effort, prompt, resume })])));
+    attach(inst, term(boxes.terminal(b.name, b.work, ['claude', ...lib.claudeArgs({ settingsFile: '/claudinho/settings.json', model, effort, prompt, resume, note: lib.boxNote(b.work) })])));
     push();
   } catch (e) {
     if (!open()) return;   // closed while it was being set up: closeBox has dealt with the container
@@ -1362,6 +1367,8 @@ const rpc = {
   },
   clipRead: () => clipboard.readText(),
   clipWrite: text => clipboard.writeText(String(text)),
+  // What a session asked its terminal to put on the clipboard (see lib.clipText).
+  clipOsc: data => { const text = lib.clipText(data); if (text) clipboard.writeText(text); },
   // https, or a port of this computer that stands for a container's port.
   openUrl: url => { if (/^https:\/\//.test(url) || /^http:\/\/localhost:\d+\/$/.test(url)) shell.openExternal(url); },
 };

@@ -540,8 +540,10 @@ function instanceSettings({ statusFile, hookUrl, userStatusLine, curl = false })
 
 // `--` keeps a prompt starting with "-" from being read as a flag.
 // resume: the id of a conversation to continue. It already has its worktree and its first prompt.
-function claudeArgs({ settingsFile, model, effort, worktree, prompt, resume }) {
+// note: what the session is told at the end of its system prompt, at every start (see boxNote).
+function claudeArgs({ settingsFile, model, effort, worktree, prompt, resume, note }) {
   const a = ['--settings', settingsFile];
+  if (note) a.push('--append-system-prompt', note);
   if (model) a.push('--model', model);
   if (effort) a.push('--effort', effort);
   if (resume) return a.concat('--resume', resume);
@@ -582,6 +584,34 @@ function freeSlot(taken, limit) {
 }
 // Where a container keeps its clone of the folder.
 const boxWork = folder => `/work/${String(folder).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+/, '') || 'repo'}`;
+// The name Claude Code gives a folder under <its configuration>/projects, where it keeps that folder's
+// conversations and its memory: the folder's path, with every character that is no letter and no digit as "-".
+// ponytail: read off the folders Claude Code 2.1 makes, since its documentation gives no rule. A very long path
+// may get another name than this works out, and a memory that was moved with the `autoMemoryDirectory` setting
+// is not followed. The way up is that setting, given to a session in a container with its other settings.
+const projectDir = folder => String(folder).replace(/[^A-Za-z0-9]/g, '-');
+// A folder's memory on this computer: one for the repository, whichever of its worktrees a session is in
+// (https://code.claude.com/docs/en/memory). root: the repository's main checkout.
+const memoryDir = (configDir, root) => path.join(configDir, 'projects', projectDir(root), 'memory');
+// What a session in a container is told about where it is. Without it a session takes its container for
+// somebody else's machine: a tool that is missing becomes a limit of the environment where it could be
+// installed, and a note about that in the memory, which the sessions elsewhere then read.
+const boxNote = work => [
+  `This session runs in a Docker container that the app claudinho made for it, on a clone of the repository in ${work}.`,
+  'The container is this session\'s own: sudo asks for no password, there is a Docker inside for the project\'s services, and the tools the repository names for mise are installed.',
+  'When a tool that the project needs is missing here, install it, and say in your answer which it was. Do not report it as a limit of the environment.',
+  'For browser tests the system libraries of a headless Chromium are installed, and there is no display, so a browser runs headless. Playwright\'s browsers are in a cache that all containers share: one that is there needs no fetching, and one that Playwright reports missing is fetched once, with the project\'s own Playwright (`playwright install chromium`).',
+  'The memory of this project is the one that sessions on the owner\'s computer and in other containers read and write too. Keep out of it what is true of this container alone.',
+].join(' ');
+// OSC 52, by which a program asks its terminal to put text on the clipboard: "<which clipboard>;<the text in
+// base64>" (https://invisible-island.net/xterm/ctlseqs/ctlseqs.html, "Manipulate Selection Data"). Claude Code
+// sends it for a selection made with the mouse, and in a container that is all it can do: it finds no
+// clipboard there. A "?" in place of the text asks what the clipboard holds. That is never answered, or
+// whatever a terminal prints could read the clipboard. Returns the text, or null for anything else.
+function clipText(data) {
+  const at = String(data).indexOf(';'), b64 = at < 0 ? '' : String(data).slice(at + 1);
+  return b64 && /^[A-Za-z0-9+/]+=*$/.test(b64) ? Buffer.from(b64, 'base64').toString('utf8') : null;
+}
 // The ports of a container that get a port on this computer: what the setting holds, as numbers.
 const portList = text => [...new Set(String(text || '').split(/\D+/).map(Number).filter(p => Number.isInteger(p) && p > 0 && p < 65536))].slice(0, 20);
 // The tools a folder names for mise, for the window to show: the keys of the [tools] table of a mise.toml, and
@@ -951,7 +981,7 @@ module.exports = {
   REVIEW_SYSTEM, REVIEW_SCHEMA, reviewPrompt, reviewVerdict, waitForChecks,
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,
   auditEntries, auditPick, toolKey, parseVersion, newerVersion,
-  BOX_CPUS, BOX_MEMORY_GB, boxLimit, freeSlot, boxWork, portList, toolNames, excludeLines, parsePorts, parseBoxStats, boxDisk,
+  BOX_CPUS, BOX_MEMORY_GB, boxLimit, freeSlot, boxWork, projectDir, memoryDir, boxNote, clipText, portList, toolNames, excludeLines, parsePorts, parseBoxStats, boxDisk,
   childEnv, isInside, realPath, samePath, parseWorktrees, labelFor, scanConfig, configPath, ROOT_FILES, HOME_FILES, HOME_DIRS, scanHome, homePath,
   SAMPLE_SECONDS, samplerCommand, cpuSeconds, parseProcs, treeOf, treeUsage, sparedPids, byName,
   WEIGHTS, MIN_SHARE, shareCpu, scopeUnit, scopeProps, scopeCommand, throttleTargets, nextDuty,

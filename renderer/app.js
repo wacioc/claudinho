@@ -401,6 +401,9 @@ function createCard(inst) {
   term.onData(d => api.write(inst.id, d));
   term.onResize(({ cols, rows }) => api.resize(inst.id, cols, rows));
   term.attachCustomKeyEventHandler(e => termKeys(e, term));
+  // Claude Code takes the mouse over and copies a selection itself. On this computer it writes the clipboard;
+  // in a container it has none to write, and asks its terminal to (OSC 52), which is this.
+  term.parser.registerOscHandler(52, data => { call('clipOsc', data); return true; });
   if (backlog.has(inst.id)) { term.write(backlog.get(inst.id)); backlog.delete(inst.id); }
   const t = { term, fit, card, wrap, host, p, inst };
   t.observer = new ResizeObserver(() => layoutSoon(t));
@@ -1207,6 +1210,8 @@ Find out which command-line tools and language runtimes a developer needs to run
 The image already has: ${STANDARD_TOOLS}. Leave those out, unless the project asks for another version of Python or Node.js than that.
 
 Write only a [tools] table, one tool a line, with the names of mise's registry (run \`mise registry\` if mise is installed here, otherwise use the common names: node, python, go, rust, java, ruby, bun, deno, pnpm, uv, just, flutter, dart, terraform). Give every tool a version the repository states. Where it states none, pin the current stable version as major.minor, and never write "latest". Put a short comment above a tool where its version comes from.
+
+If the project tests in a browser with Playwright, name Playwright itself as a tool too, in exactly the version the project's lockfile has: "pipx:playwright" for a Python project (uv must then be among the tools as well), "npm:playwright" for a JavaScript one. When the image is built, the browser of that version is fetched for all containers.
 
 Then stop, and say in a few lines: which tools you named and where each version came from, and what the project needs that a mise.toml cannot name (system packages, browsers, services), so that the owner knows what is left for the project's own set-up. Do not install anything, and do not change any other file.`);
 }

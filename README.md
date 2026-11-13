@@ -95,6 +95,9 @@ With Docker chosen:
   the Issues tab get a container each, and wait in the queue while all containers are taken.
 - The cards and the detail view are the same. The terminal is Claude Code's own, running in the container. A
   card names its container, and its CPU and memory are the container's, as Docker reports them.
+- Text is copied from a container's terminal as from any other. In Claude Code's full-screen view that is:
+  select it with the mouse, and it is on the clipboard. Hold Shift while selecting for the terminal's own
+  selection instead.
 - The first container needs an image, which the app builds by itself: once, and again when Claude Code on this
   computer has a new version, so that containers run that version too. The first build downloads several
   hundred megabytes and takes some minutes; the card shows it going.
@@ -105,12 +108,17 @@ With Docker chosen:
   of a container asks for the image that goes with the file as it is: nothing is built while the file is the
   same, and when it has changed the next container waits for a new image, of which only the tools and what
   follows them are built again.
+- A folder that tests in a browser names Playwright there as well, in the version its lockfile has:
+  `"pipx:playwright"` for a Python project (with `uv` among the tools), `"npm:playwright"` for a JavaScript
+  one. When the image is built, the app fetches that version's browser into the cache that all
+  containers share. No container waits for it then, and no session has to fetch it.
 - The dialogs that start a session say which tools the folder names. Where it has no such file they say that
   too, and offer to have Claude Code write one: it reads the folder's CI workflows, its justfile, its lockfiles
   and version files, writes a `mise.toml` with a version for every tool, and the app offers to commit it.
-- A project's own set-up is not the image's: `uv sync`, `npm ci`, `flutter pub get`, `playwright install
-  chromium`. It is the repository's, as for a worktree: its `SessionStart` hook, or the session itself.
-  Sessions may use `sudo`, and what npm, pip, uv and Playwright download is kept for all containers.
+- A project's own set-up is not the image's: `uv sync`, `npm ci`, `flutter pub get`. It is the repository's,
+  as for a worktree: its `SessionStart` hook, or the session itself. Sessions may use `sudo`, and what npm,
+  pip, uv and Playwright download is kept for all containers: a browser that one session fetched
+  (`playwright install chromium`) is there for every other, and the command finds nothing to do.
 - Logins are made inside a container, once, and kept in Docker volumes that all containers share. Claude Code
   asks for its login in the first session's terminal (`/login`), and where GitHub has none yet, the card runs
   `gh auth login` before anything else. Nothing is copied from the logins of this computer.
@@ -118,6 +126,14 @@ With Docker chosen:
   has changed: `CLAUDE.md`,
   `settings.json`, `keybindings.json`, agents, commands, output styles, rules, skills, hooks, and the scripts
   that lie directly in that folder.
+- The memory that Claude Code keeps for the repository is one, for both ways of working. Every new container
+  gets the folder's memory from this computer (under `~/.claude/projects`), where the sessions in worktrees
+  keep theirs. What a session notes in a container, later sessions read wherever they work, and the other way
+  round.
+- A session in a container is told where it is: that the container is its own to set up, that a tool that is
+  missing can be installed and should be named in its answer, that a browser runs headless and how
+  Playwright's is fetched, and that the memory is shared with sessions elsewhere, so that what is true of one
+  container only is kept out of it.
 - A clone does not bring the folder's local files, a `.env` for one. Name them under ⚙, "Local files to copy
   into a new container or worktree": one pattern a line, in `.gitignore` syntax, anywhere in the folder.
   Files that match, and that git ignores, are copied into each new container, and git in the clone is told
@@ -427,7 +443,11 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   Debian with Python, Node.js, git, gh, Docker's engine with Compose, and Claude Code from Anthropic's package
   repository. Between what every folder shares and Claude Code lies a layer with the folder's own tools,
   installed by `mise install` from its `mise.toml`; the image's tag is worked out from the recipe, that file
-  and the version of Claude Code. The open folder is mounted read-only and cloned inside.
+  and the version of Claude Code. The open folder is mounted read-only and cloned inside. The repository's
+  memory folder on this computer is mounted where Claude Code looks for its memory inside, and
+  `--append-system-prompt` tells the session where it is.
+- Claude Code copies a selection itself. In a container it has no clipboard, and asks its terminal to do it
+  (OSC 52): the app then writes the clipboard. A request to read the clipboard is never answered.
 - From a container, the app's hook server is another machine, and Claude Code refuses an HTTP hook to a
   private address. Those sessions send the same requests with `curl`, from command hooks, to
   `host.docker.internal`. Their status comes from `claude agents --json` run inside each container, their CPU
@@ -535,6 +555,18 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
 - The logins of the containers are their own, in the Docker volumes `claudinho-claude` and `claudinho-gh`.
   Removing those volumes signs the containers out. A setting of yours that names a path or a program of this
   computer points nowhere inside a container: a status line or a hook written for Windows does not run there.
+- Sessions in containers write to one folder of this computer: the repository's memory. A note that one of
+  them writes is read by every session on the repository from then on, so a wrong one misleads them all. The
+  notes are files, to read and to delete, under `~/.claude/projects/`, in the folder named after the
+  repository's path, in `memory`. A container made before 0.7.3 has no such mount: its sessions keep the
+  memory that the containers had among themselves, in the Docker volume `claudinho-claude`, until the container
+  is removed. What was written there is not moved over.
+- The memory folder is found by the name Claude Code gives a folder today. A memory that was moved with Claude
+  Code's `autoMemoryDirectory` setting is not followed.
+- Copying from a container's terminal rests on Claude Code asking its terminal for it, through `docker exec`
+  and, on Windows, the console layer in between. That has been seen on Windows 11 with Docker Desktop only. An
+  image on the clipboard cannot be pasted into a session in a container: Claude Code looks for it on a
+  clipboard of its own, which a container does not have.
 - Every container has the same ceiling: 2 processors, and the memory set under ⚙, 8 GB to begin with. The CPU
   ceiling and the CPU weights there do not apply to it. When a container reaches its memory ceiling, the
   kernel ends a process in it, which may be a service or Claude Code itself. The ceilings are not set aside:
@@ -557,8 +589,12 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   so it counts about 4 GB for such an image beyond the standard one. The app removes a folder's older images.
   Those of a folder that is no longer opened stay until they are removed by hand (`docker rmi`).
 - What a session installs with `sudo`, or a tool it adds with mise, is in its container alone and goes with
-  it. The image has the libraries of a headless Chromium, not the browser: a project fetches the one its
-  Playwright wants, once for all containers.
+  it. The image has the libraries of a headless Chromium, not the browser. Which build is wanted goes by the
+  project's Playwright version, so the image all folders share cannot hold it, and the place where Playwright
+  looks is a volume all containers share. A build gets there when the image is built for a folder that names
+  Playwright among its tools, or when the first session that needs it fetches it. The version named in
+  `mise.toml` has to be kept the same as the lockfile's by hand. Builds of versions that nothing uses any more
+  stay in that volume. Only Chromium is fetched: the image has no libraries for Firefox or WebKit.
 - A new version of Claude Code on this computer makes the next container wait for the image to be built
   again, about a minute. Sessions in containers that are already running keep the version they started with.
 - Quitting the app stops the containers of its sessions, and a resume does not start again what those

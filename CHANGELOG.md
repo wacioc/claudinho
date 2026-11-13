@@ -4,6 +4,25 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.7.3 (2026-11-14)
+
+**Docker containers**
+
+- Sessions in containers use the memory that Claude Code keeps for the repository on this computer, the one
+  its sessions in worktrees use. Before, the containers of a folder had a memory among themselves, in a Docker
+  volume: nobody could look into it, the sessions on this computer never saw it, and a note that one session
+  wrote there about its container was read by every later one, also when it was no longer true. Containers
+  made before this version keep that memory until they are removed.
+- A session in a container is told where it is: that the container is its own to set up, that a tool that is
+  missing can be installed and should be named, that a browser runs headless and how Playwright's is fetched,
+  and that the memory is shared, so that what is true of one container only stays out of it.
+- A folder can name Playwright among its tools: `"pipx:playwright"` or `"npm:playwright"` in its `mise.toml`,
+  with the version its lockfile has. When its image is built, the app fetches that version's browser into the
+  cache all containers share, so no container waits for it and no session has to fetch it. A Playwright that
+  installs its browsers no longer removes another version's from that cache.
+- Text can be copied from the terminal of a session in a container. Claude Code copies a selection itself; in
+  a container it has no clipboard and asks its terminal, which the app now answers.
+
 ## 0.7.2 (2026-11-13)
 
 **Docker containers**

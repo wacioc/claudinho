@@ -80,6 +80,18 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
   never compare it with a path of this computer, and run `gh` for it in `hostDir(inst)`.
 - The terminal on this computer ending does not end Claude Code inside a container. After a test copy was
   stopped hard, its containers run on: resume the sessions and close them, or remove the containers.
+- A container's session has the folder's memory of this computer, mounted in. A live test puts its notes into
+  the test clone's memory folder (`lib.memoryDir`), which is empty, and takes them out again. Never write into
+  the memory of this folder, or of another one the owner works in.
+- Copying from a terminal is tested without the clipboard. In the window, put a function of your own in the
+  place of `call` that writes down what `clipOsc` is given, and send the selection as mouse reports with
+  `api.write`: press, drag and release, in SGR form. For Ctrl+V, have that function answer `clipRead`.
+- The browser that is fetched for a folder naming Playwright is a download of 300 MB and more, into the volume
+  all containers share: `box-check.js` only checks that a folder without it has nothing fetched. Up to the
+  download it is tried by hand: build such a folder's image from the recipe, and run the command that
+  `containers.js` runs after a build with `--dry-run` in it and a volume of the test's own.
+- A slash command typed into a session from Git Bash needs `MSYS_NO_PATHCONV=1`. Without it `/memory` arrives
+  as a Windows path, and the session takes that for a prompt.
 - What closing an instance leaves running is tested with a stand-in: a copy of `node.exe` named
   `Docker Desktop.exe`, started detached from the instance's terminal beside an ordinary detached program.
   After the instance is closed with its worktree, the stand-in must still run and the other must not. Never

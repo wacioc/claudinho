@@ -19,7 +19,9 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
 
 (async () => {
   let image = null;
-  const box = boxes.nameOf(1), work = lib.boxWork('claudinho'), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claudinho-check-'));
+  const box = boxes.nameOf(1), work = lib.boxWork('claudinho-check'), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claudinho-check-'));
+  // A folder of the check's own stands for the repository's memory on this computer.
+  const memory = path.join(dir, 'memory'), memoryIn = boxes.memoryIn(work);
   const inside = (argv, opts) => boxes.inBox(box, argv, { cwd: work, ...opts }).then(s => s.trim());
   const inspect = format => boxes.docker(['inspect', box, '--format', format]).then(s => s.trim());
   try {
@@ -32,8 +34,12 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
     const tools = path.join(dir, 'tools');
     fs.mkdirSync(tools);
     fs.writeFileSync(path.join(tools, 'mise.toml'), '[tools]\njust = "1.36.0"\n');
-    image = await boxes.image(version, tools, line => { if (/^#\d+ \[/.test(line)) console.log(`     ${line.slice(0, 110)}`); });
+    const said = [];
+    image = await boxes.image(version, tools, line => { said.push(line); if (/^#\d+ \[/.test(line)) console.log(`     ${line.slice(0, 110)}`); });
     console.log(`image ${image} (${secs(t)})`);
+    // Only a folder that names Playwright has a browser fetched when its image is built. The fetch itself is
+    // 300 MB and more, and not part of this check.
+    check(!said.some(line => /browser (of|for) (the )?Playwright/.test(line)), 'this folder names no Playwright, and no browser was fetched for it');
     t = Date.now();
     check(await boxes.image(version, tools) === image && Date.now() - t < 5000, `asked for again with nothing changed, it is there at once (${secs(t)})`);
     // Which image a folder gets is worked out from its file: another file, another Claude Code or no file is
@@ -47,9 +53,13 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
     console.log('\na container, made and filled as for a session');
     t = Date.now();
     const github = lib.parseGitHub(execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: __dirname, encoding: 'utf8' }).trim());
-    await boxes.create({ n: 1, image, root: __dirname, name: 'box-check', work, key: 'c0ffee00', dir, ports: [8000], memoryGb: 3 });
+    fs.mkdirSync(memory);
+    fs.writeFileSync(path.join(memory, 'MEMORY.md'), '- a note from this computer\n');
+    await boxes.create({ n: 1, image, root: __dirname, name: 'box-check', work, key: 'c0ffee00', dir, ports: [8000], memory, memoryGb: 3 });
     await boxes.ready(box);
     const made = secs(t);
+    // As it is for a folder's first container: Docker has made the folder above the memory, as root.
+    await boxes.inBox(box, ['chown', 'root:root', path.posix.dirname(memoryIn)], { root: true });
     await boxes.fill(box, { root: __dirname, work, branch: 'box-check', origin: `https://github.com/${github.owner}/${github.name}.git`, identity: [['user.name', 'box-check'], ['user.email', 'box-check@example.invalid']], configDir: path.join(dir, 'no-config'), say: line => console.log(`     ${line}`) });
     console.log(`  made and its Docker up after ${made}, filled after ${secs(t)}`);
     check(await inspect('{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.Privileged}}') === `${lib.BOX_CPUS}000000000 ${3 * 2 ** 30} true`, `held to ${lib.BOX_CPUS} processors and the 3 GB it was made with`);
@@ -65,6 +75,13 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
     check(await boxes.docker(['run', '--rm', '--entrypoint', 'sh', image, '-c', 'test ! -e /home/agent/.cache/mise && echo none']).then(x => x.trim() === 'none', () => false), 'and the image keeps nothing of what mise downloaded to install it');
     check(await inside(['sudo', '-n', 'id', '-u']) === '0', 'the session\'s user may become root, for what a project\'s set-up installs');
     check(Number(await inside(['sh', '-c', 'ldconfig -p | grep -c -E "libnss3|libatk-1|libgbm"'])) >= 3 && /^\d{4}\./.test(await inside(['mise', '--version'])), 'the libraries of a headless Chromium are there, and mise');
+    check(await inside(['sh', '-c', 'echo "$PLAYWRIGHT_SKIP_BROWSER_GC"; test -w ~/.cache/ms-playwright && echo writable']) === '1\nwritable', 'Playwright\'s browsers are the shared volume, from which no installation removes another one\'s');
+
+    console.log('\nthe repository\'s memory, which is a folder on this computer');
+    check(await inside(['cat', `${memoryIn}/MEMORY.md`]) === '- a note from this computer', 'a note written on this computer is read inside, where Claude Code looks for its memory');
+    await inside(['sh', '-c', `echo "from inside" > ${memoryIn}/inside.md`]);
+    check(fs.readFileSync(path.join(memory, 'inside.md'), 'utf8').trim() === 'from inside', 'a note that the session\'s user writes inside is on this computer');
+    check(await inside(['stat', '-c', '%U', path.posix.dirname(memoryIn)]) === 'agent', 'the folder above it, where the conversation is kept, is the session\'s user\'s, though Docker made it as root');
 
     console.log('\nwhat it holds that is nowhere else');
     let s = await boxes.state(box, work);
@@ -129,6 +146,8 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
   } finally {
     await boxes.remove(box).catch(() => {});
     await boxes.docker(['volume', 'rm', `${box}-docker`]).catch(() => {});   // the check's own: the app keeps a container's volume
+    // The two empty folders that the memory's mount left in the volume all containers share: the check's own too.
+    if (image) await boxes.docker(['run', '--rm', '--entrypoint', 'rmdir', '-v', 'claudinho-claude:/c', image, `/c/projects/${lib.projectDir(work)}/memory`, `/c/projects/${lib.projectDir(work)}`]).catch(() => {});
     if (image) await boxes.docker(['rmi', image]).catch(() => {});           // and its image, which no folder of the owner's uses
     fs.rmSync(dir, { recursive: true, force: true });
   }
