@@ -4,6 +4,15 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.7.4 (2026-11-14)
+
+**Docker containers**
+
+- On a Mac with Apple silicon, a folder that names Flutter in its `mise.toml` gets containers again. Docker
+  builds arm64 images there, Flutter publishes its Linux SDK for x64 only, and mise stopped the image's build.
+  The image now takes Flutter from its git repository, at the tag of the version the folder names; sessions
+  analyse and test as they do on x64.
+
 ## 0.7.3 (2026-11-14)
 
 **Docker containers**

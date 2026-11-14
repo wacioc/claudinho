@@ -584,6 +584,10 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   created, analyzed and tested in a container. Building it for Android, the web or the Linux desktop needs
   what the image does not have: an Android SDK, Chrome, a C++ compiler. A tool that has to be compiled has
   not been tried.
+- On a Mac with Apple silicon the containers are arm64, and Flutter publishes no SDK for Linux on arm64. The
+  image takes Flutter from its git repository there, at the tag of the version the folder names: 1.1 GB, half
+  a minute to build. Each new container's first `flutter create` or `flutter test` fetches about 170 MB more.
+  Another tool that has no build for Linux on arm64 still stops the image.
 - An image per set of tools takes disk. Flutter's SDK is a 1.5 GB download and 2.6 GB installed, and its
   image takes about four minutes to build the first time. Docker Desktop keeps a layer packed and unpacked,
   so it counts about 4 GB for such an image beyond the standard one. The app removes a folder's older images.

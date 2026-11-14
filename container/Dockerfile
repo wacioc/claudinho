@@ -94,6 +94,17 @@ ENV MISE_DATA_DIR=/opt/mise MISE_YES=1 MISE_TRUSTED_CONFIG_PATHS=/work PATH=/opt
 # this step a cache for mise's downloads, outside the image, if that takes too long.
 COPY --chown=agent:agent tools/ /work/
 USER agent
+# Flutter publishes its SDK for Linux on x64 only, and Docker on a Mac with Apple silicon builds arm64 images:
+# there mise has no download for it and stops. Flutter's git repository runs there, at the tag of the version
+# the folder names: the flutter command fetches the Dart SDK of this system when it first starts, and
+# `mise link` makes that the version mise has, so `mise install` skips it here and in every container.
+# https://mise.jdx.dev/cli/link.html
+# ponytail: each container's first `flutter create` or `flutter test` still fetches about 170 MB of engine
+# files. Run `flutter precache` here with the platforms sessions need if that wait matters.
+RUN cd /work && if [ "$(uname -m)" = aarch64 ] && v=$(mise current flutter 2>/dev/null) && [ -n "$v" ]; then \
+      git clone -q -c advice.detachedHead=false --depth 1 -b "$v" https://github.com/flutter/flutter.git "/opt/mise/flutter-$v" \
+      && "/opt/mise/flutter-$v/bin/flutter" --version --suppress-analytics \
+      && mise link "flutter@$v" "/opt/mise/flutter-$v"; fi
 RUN cd /work && if [ -e mise.toml ] || [ -e .mise.toml ] || [ -e .tool-versions ]; then mise install && mise ls && rm -rf /home/agent/.cache/mise; fi
 USER root
 

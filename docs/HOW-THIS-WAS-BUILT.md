@@ -1635,6 +1635,37 @@ complete and the session's user's. The same command again downloads nothing and 
 start of its container included. From the volume, mounted read-only, the browser starts headless as the
 session's user and draws a page. The card gets a line for every tenth of each download, some thirty in all.
 
+### After 0.7.3: Flutter on Apple silicon
+
+The owner sent an issue to a container from a Mac with Apple silicon, for a folder whose `mise.toml` names
+`uv`, `"pipx:playwright"`, `just` and `flutter = "3.47.9"`. The image was not built: mise stopped with "No URL
+for platform linux-arm64".
+
+| What | Finding |
+|---|---|
+| The platform | Docker Desktop on that Mac builds and runs linux-arm64 images. Flutter was tried in section 15 on Windows, on x64. |
+| mise's Flutter | Its registry entry (`registry/flutter.toml` in mise's repository) downloads Flutter's own archives, with URLs for Linux on x64, macOS on both and Windows on x64. Its second source, the plugin `vfox-flutter`, does not filter by architecture on Linux and would fetch the x64 archive, whose Dart does not run on arm64. |
+| Flutter's releases | Every Linux archive in `releases_linux.json` is for x64. Flutter's install pages do not name Linux on arm64. |
+| Flutter from its git repository, in a plain arm64 Debian container | `git clone --depth 1` at the tag 3.47.9; the `flutter` command fetched "Linux arm64 Dart SDK" from Flutter's engine by itself: Dart 3.13.7 on `linux_arm64`. A new app's `pub get`, `analyze` and `test` passed, 58 seconds from the clone on, 1.1 GB. `flutter doctor` as on x64: no Android toolchain, Chrome or Linux toolchain. |
+| What the first use fetches | After `flutter --version` the clone is 929 MB. `flutter create` and `flutter test` add about 170 MB of engine files. |
+
+| Decision | Why |
+|---|---|
+| On arm64, a step before `mise install` clones Flutter at the tag of the version mise resolves for the folder (`mise current flutter`), runs it once, and hands it to mise with `mise link`. | mise then counts that version as installed: `mise install` skips it when the image is built and when a container is made, the shims find `flutter` and `dart`, and the folder's `mise.toml` stays as it is. On x64 the step does nothing. |
+| Not `os = [...]` in the folder's `mise.toml`, which skips Flutter on Linux arm64. | It builds the image, without Flutter: a session could not analyse or test what it writes. |
+| Not an x64 image under emulation on arm64. | Flutter's x64 archive would install, and everything in every container would run emulated, Claude Code and the Docker inside included. |
+| A tool that fails still stops the image. | As decided in section 15: a broken file fails once, at the build. Flutter is the one tool whose missing arm64 build has been met. |
+| The engine files are not fetched in the image. | 170 MB per container, a few seconds. `flutter precache` in the same step is the way up. |
+
+Verified: the folder's image, built through the app's own `image()`, in 120 seconds with Playwright's browser;
+the Flutter step 34 seconds. In a container of it, as the session's user, in a folder under `/work` with the
+folder's `mise.toml`: `mise install` reports all tools installed; Flutter 3.47.9 with Dart on `linux_arm64`,
+`just`, `uv` and Playwright found through the shims; a new app's `pub get`, `analyze` and `test` passed in 19
+seconds. `box-check.js` passed, for a folder that names `just` only.
+
+Not tried: a session in such a container, and Flutter on arm64 for a version written fuzzily (`"3.47"`), beyond
+that `mise current flutter` resolves it to 3.47.9.
+
 ## 16. Still open
 
 - Sessions in containers: what section 15 lists as not verified or not tried. Docker Engine alone on Linux
