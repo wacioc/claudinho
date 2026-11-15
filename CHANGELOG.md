@@ -4,6 +4,14 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.8.1 (2026-11-15)
+
+**Versions**
+
+- A click on the app's version in the header, or on Claude Code's, looks for a newer one at once, where the
+  app otherwise looks every hour, and says what it found: that version is the newest, a newer one is out, or
+  it could not be found out just now. A newer one gets its button and its notification as before.
+
 ## 0.8.0 (2026-11-15)
 
 **Instances**

@@ -1833,8 +1833,37 @@ and a file that is not there were refused, for reading and for listing.
 |---|---|---|
 | The file that is one long line: "Maximum call stack size exceeded" when its colours arrived, and the file stayed uncoloured. | Its 240,000 runs of colour were handed to one call as that call's arguments. | The runs are appended one at a time. The Diff tab hands a line's runs over the same way; a line that long would fail there too. Left as it is, and listed below. |
 
+### After 0.8.0: a click on a version looks for a newer one
+
+> Clicking the claudinho or claude code versions should trigger a check for updates. Release this as 0.8.1
+
+| Decision | Why |
+|---|---|
+| The two versions in the header are buttons. A click runs, at once, the check the app runs every hour. | Asked for. As buttons the keyboard reaches them too. They are drawn as the text they were, underlined, and are no wider. |
+| The click is answered in words: that version is the newest, a newer one is out, or it could not be found out just now. | The hourly check says nothing unless something newer is out. A click that finds nothing newer would otherwise look like a click that did nothing. |
+| A newer version gets its button and its notification from the check itself, once per version, as before. | One way for a newer version to show, whoever asked for the check. |
+| The check of Claude Code hands back what the address answered. The app's own asks electron-updater, whose answer says whether an update is available. | Needed for the words. `isUpdateAvailable` is in electron-updater 6.8.11's own types. |
+| A copy run from source says that it does not update itself. While a download is under way, no new check is made. | electron-updater does nothing in a copy that is not packaged. What a check does to a download in progress was not tried, and nothing is gained by it: the newer one is on its way. |
+
+Verified in a test copy with both feeds read from one folder that `python3 -m http.server` served: a line of
+text for Claude Code, and a `latest-mac.yml` with no installer behind it for the app.
+
+| The feeds | A click on the app's version | A click on Claude Code's |
+|---|---|---|
+| name the installed versions | "claudinho 0.8.0 is the newest version." | "Claude Code 2.1.325 is the newest version." |
+| name 99.0.0 and 99.9.9 | "claudinho 99.0.0 is out; 0.8.0 is installed." Its button appeared, and one notification. | The same for 99.9.9. |
+| the same, clicked once more | The same words, and no second notification. | The same. |
+| are stopped | "Could not find out just now whether a newer claudinho is out." The button stayed. | The same. |
+
+In a copy started without the feeds, as one run from source: "This copy of claudinho runs from source, and
+does not update itself.", and for Claude Code, asked at its real address, that 2.1.325 is the newest. Neither
+update button was pressed. Not tried: the click in a packaged copy, which asks GitHub.
+
 ## 17. Still open
 
+- In a window as wide as the app opens it, with no usage figures yet and a long account name, the header is
+  wider than the window: the version of Claude Code is cut off at the right edge, and the bell and the
+  settings are out of view. Seen while the click on a version was tested, and so before that change.
 - The Files tab is for reading and does not follow a session at work. It shows one file at a time, no file
   over 1 MB, no picture, and no colours over 256 KB. It has no joined rows, no marks from git and no arrow
   keys (section 16). What section 16 lists as not tried.

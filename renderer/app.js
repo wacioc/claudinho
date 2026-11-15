@@ -220,6 +220,18 @@ async function updateClaude() {
   if (line) toast(line);
 }
 
+// A click on one of the two versions in the header looks for a newer one now, where the app otherwise looks
+// every hour, and says what it found. A newer one gets its button beside the version and its notification, as
+// from any check. what: the call to make. name: whose version it is.
+async function checkVersion(what, name) {
+  toast(`Looking for a newer ${name}…`);
+  const r = await call(what);
+  toast(r.source ? 'This copy of claudinho runs from source, and does not update itself.'
+    : !r.latest ? `Could not find out just now whether a newer ${name} is out.`
+      : r.newer ? `${name} ${r.latest} is out; ${r.installed} is installed. The button beside the version installs it.`
+        : `${name} ${r.installed} is the newest version.`);
+}
+
 // The button on a card whose session is done and whose pull request is open: a draft is marked ready for
 // review, anything else is merged, after a question, since a merge cannot be taken back.
 async function prAct(id) {
@@ -254,6 +266,7 @@ function usageWin(label, w, at) {
 function renderTop() {
   const r = state.repo, a = state.account, u = state.usage;
   $('#version').textContent = state.version ? `v${state.version}` : '';
+  $('#version').hidden = !state.version;
   // The app itself: a button when a newer release is out, which says how the download is going once pressed.
   const up = state.update;
   $('#btn-update-app').hidden = !up;
@@ -272,6 +285,7 @@ function renderTop() {
   // Claude Code itself: the version installed, and a button when a newer one is out.
   const cc = state.claude || {};
   $('#claude-version').textContent = cc.version ? `Claude Code ${cc.version}` : '';
+  $('#claude-version').hidden = !cc.version;
   $('#btn-update').hidden = !cc.latest && !cc.updating;
   $('#btn-update').disabled = !!cc.updating;
   $('#btn-update').textContent = cc.updating ? '⬆ updating…' : `⬆ ${cc.latest}`;
@@ -1374,6 +1388,8 @@ $('#btn-refresh-prs').onclick = loadPrs;
 $('#btn-bell').onclick = e => { e.stopPropagation(); if ($('#notes').hidden) openNotes(); else $('#notes').hidden = true; };
 $('#btn-update').onclick = updateClaude;
 $('#btn-update-app').onclick = updateApp;
+$('#version').onclick = () => checkVersion('checkApp', 'claudinho');
+$('#claude-version').onclick = () => checkVersion('checkClaude', 'Claude Code');
 $('#hide-outside').checked = !!prefs.hideOutside;
 $('#hide-outside').onchange = e => { prefs.hideOutside = e.target.checked; savePrefs(); renderInstances(); };
 $('#btn-refresh-issues').onclick = loadIssues;

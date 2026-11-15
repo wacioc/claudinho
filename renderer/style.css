@@ -34,6 +34,8 @@ header .spacer { flex: 1 0 0; }
 #btn-bell { position: relative; }
 #n-bell { position: absolute; top: -5px; right: -7px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: #e5484d; color: #fff; font: bold 11px/17px var(--mono); text-align: center; }
 #btn-update, #btn-update-app { border-color: var(--ok); color: var(--ok); }
+/* the two versions: a click looks for a newer one. No wider than the text they were before */
+#version, #claude-version { padding: 0; }
 #notes { position: fixed; top: 46px; right: 12px; z-index: 15; width: 460px; max-width: 92vw; max-height: 70vh; overflow: auto; background: var(--panel); border: 1px solid var(--dim); border-radius: 6px; white-space: normal; }
 .notes-head { padding: 8px 12px; color: var(--accent); border-bottom: 1px solid var(--line); }
 .note { display: flex; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--line); border-left: 3px solid transparent; cursor: pointer; overflow-wrap: anywhere; }

@@ -1016,18 +1016,21 @@ async function review(inst, pr) {
 // Where the official installer reads the newest version from: one line of text per release channel.
 // CLAUDINHO_RELEASES points a test at an address of its own.
 const RELEASES = process.env.CLAUDINHO_RELEASES || 'https://downloads.claude.ai/claude-code-releases';
+// Resolves to the newest version that address names, or to null where it gave none.
 async function checkClaude() {
-  if (!claudeBin) return;
+  if (!claudeBin) return null;
   try { claudeCode.version = lib.parseVersion(await run(claudeBin, ['--version'])); } catch { /* keep what was read before */ }
+  let latest = null;
   try {
     const channel = readJson(path.join(configDir(), 'settings.json')).autoUpdatesChannel === 'stable' ? 'stable' : 'latest';
     const res = await net.fetch(`${RELEASES}/${channel}`);
-    const latest = res.ok ? lib.parseVersion(await res.text()) : null;
+    latest = res.ok ? lib.parseVersion(await res.text()) : null;
     // One notification per version, not one per check.
     if (latest && latest !== claudeCode.latest && lib.newerVersion(latest, claudeCode.version)) notify('update', `Claude Code ${latest} is out; ${claudeCode.version} is installed. Press to run \`claude update\`.`);
     if (latest) claudeCode.latest = latest;
   } catch { /* offline: the next check may get through */ }
   push();
+  return latest;
 }
 setInterval(checkClaude, 3600 * 1000);   // every hour: `claude --version`, and one line of text from that address
 
@@ -1360,6 +1363,21 @@ const rpc = {
     claudeCode.updating = true; push();
     try { return (await run(claudeBin, ['update'])).trim().split(/\r?\n/).pop(); }
     finally { claudeCode.updating = false; await checkClaude(); }
+  },
+  // A click on one of the two versions in the header: is a newer one out? The app asks every hour, and this
+  // asks now. Answered with what is installed, the newest there is (nothing where that could not be found
+  // out), and whether that one is newer. A newer one gets its button and its notification, as from any check.
+  async checkClaude() {
+    const latest = await checkClaude();
+    return { installed: claudeCode.version, latest, newer: lib.newerVersion(latest, claudeCode.version) };
+  },
+  // source: this copy runs from source, and has no release to put in its own place.
+  async checkApp() {
+    const installed = app.getVersion();
+    if (!app.isPackaged && !process.env.CLAUDINHO_UPDATES) return { installed, source: true };
+    if (/^downloading/.test(selfUpdate.state || '')) return { installed, latest: selfUpdate.latest, newer: true };   // the newer one is on its way
+    const found = await autoUpdater.checkForUpdates().catch(() => null);
+    return { installed, latest: found && found.updateInfo.version, newer: !!(found && found.isUpdateAvailable) };
   },
   // Downloads the newer release of the app and installs it. The app then closes and starts again by itself.
   updateApp() {

@@ -122,6 +122,10 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
 - `CLAUDINHO_RELEASES=<address>` makes the app read Claude Code's newest version from there, so a test can
   serve a higher one and see the update button. Pressing it runs the real `claude update`: check first that
   the installed version is the newest, or the test updates Claude Code.
+- A click on a version in the header runs its check at once, so a test of either check does not wait for the
+  hour. Both feeds can be one folder served by `python3 -m http.server`: `claude/latest` and `claude/stable`
+  with a line of text each, and `app/latest-mac.yml` (`latest.yml` on Windows, `latest-linux.yml` on Linux).
+  Change a file and click again; stop the server to see what a check that fails says.
 - Auto-merge is tested live in a clone of a GitHub repository made for it: sessions open real pull requests
   there and the app merges them. A fresh clone needs its workspace trust dialog answered once before
   `claude -w` works in it. The verdicts come from a real Claude run, so a test records what happened and

@@ -67,8 +67,9 @@ The first `npm install` downloads the Electron binary.
 
 The header shows the app's version, the logged-in account, the 5-hour and 7-day usage as last reported by
 Claude Code, the version of Claude Code that is installed, and the bell. When a newer version of the app or of
-Claude Code is out, a button to install it appears beside the version it replaces. A list in the header says
-where sessions work: in worktrees, or in Docker containers.
+Claude Code is out, a button to install it appears beside the version it replaces. A click on either version
+looks for a newer one at once. A list in the header says where sessions work: in worktrees, or in Docker
+containers.
 
 Three figures in the bar below say what all of it takes: the CPU and the memory of every session the app runs,
 with whatever those sessions started, on this computer and in containers, and the disk their worktrees and
@@ -207,13 +208,16 @@ still there after a restart.
 ### Claude Code's own version
 
 The header shows which version of Claude Code is installed. The app looks for a newer one at its start and
-every hour. When one has been released, a button with that version appears beside it, and a notification with it. Pressing either runs `claude update`. Sessions that
-are running keep the version they started with; what is started afterwards gets the new one.
+every hour, and at once when you click that version: it then says what it found. When one has been released,
+a button with that version appears beside it, and a notification with it. Pressing either runs
+`claude update`. Sessions that are running keep the version they started with; what is started afterwards
+gets the new one.
 
 ### The app's own version
 
 At its start and every hour the installed app looks at the
-[releases](https://github.com/wacioc/claudinho/releases) of its repository. When a newer one has been
+[releases](https://github.com/wacioc/claudinho/releases) of its repository, and at once when you click the
+app's version in the header: it then says what it found. When a newer one has been
 published, a button with that version appears beside the app's own, and a notification with it. Nothing is
 downloaded before you press one of them: installing restarts the app, and that stops every session running in
 it. If any is running, the app asks first. It then downloads the release, closes, installs it and starts
@@ -225,7 +229,7 @@ again; the sessions that were open come back as cards with a Resume button.
 | Linux | The AppImage file is replaced by the new one, under the new version's file name. |
 | macOS | Through macOS's own update mechanism, which takes the release's `.zip` and accepts it only when it is signed by the same developer as the running app. A copy older than 0.3.1 is not signed and cannot update itself: install a newer `.dmg` by hand once. |
 
-A copy run from source does not look for releases.
+A copy run from source does not look for releases, and says so when its version is clicked.
 
 ### Closing an instance
 
