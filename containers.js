@@ -10,6 +10,8 @@
 //   claudinho-slot-N-docker       the images its Docker pulled, kept for the next session at that number
 //   claudinho-claude, -gh         Claude Code's configuration with its login, and GitHub's login: one of each
 //                                 for all containers. Both logins are made inside a container, by the owner.
+//                                 Claude Code's is to be the account this computer is signed in to (see
+//                                 signInBox in main.js).
 //   claudinho-npm-cache, -pip-cache, -uv-cache, -playwright   what npm, pip and uv downloaded, and the
 //                                 browsers Playwright fetched
 // The folder on this computer is mounted read-only at /src and cloned from there. A session's work leaves its
@@ -202,6 +204,36 @@ async function copyConfig(box, configDir, to = `${HOME}/.claude`) {
   await inBox(box, ['bash', '-c', `cd ${STAGE} && find . -type f -print0 | while IFS= read -r -d '' f; do d="$1/$f"; cmp -s "$f" "$d" && continue; mkdir -p "$(dirname "$d")" && cp "$f" "$d.new-$HOSTNAME" && mv -f "$d.new-$HOSTNAME" "$d"; done`, 'bash', to], { timeout: 300000 });
 }
 
+// The plugins this computer switches on for a session of the folder: in the owner's settings, and in the
+// folder's own (.claude/settings.json and settings.local.json). They are installed into the volume all containers
+// share, from the marketplace this computer has them from, once: Claude Code does not fetch them by itself in a
+// container (tried: nothing after 45 seconds of a first start), and this computer's record of them names its own
+// folders. One container at a time, since containers are filled side by side and the record is one file.
+// ponytail: a plugin that is no longer switched on here stays installed there. `claude plugin uninstall` in a
+// container takes it out of all of them.
+const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {}; } };
+let pluginLine = Promise.resolve();
+function installPlugins(box, configDir, root, say) {
+  const done = pluginLine.then(async () => {
+    const settings = [path.join(configDir, 'settings.json'), path.join(root, '.claude', 'settings.json'), path.join(root, LOCAL_SETTINGS)].map(readJson);
+    const wanted = [...new Set(settings.flatMap(lib.pluginsOn))];
+    if (!wanted.length) return;
+    let have = [];
+    try { have = JSON.parse(await inBox(box, ['claude', 'plugin', 'list', '--json'], { timeout: 60000 })).map(p => p.id); } catch { /* none yet */ }
+    const missing = wanted.filter(id => !have.includes(id));
+    if (!missing.length) return;
+    say(`Installing ${missing.join(', ')} for all containers, as Claude Code on this computer has ${missing.length === 1 ? 'it' : 'them'}…`);
+    const known = Object.assign({}, ...settings.map(s => s.extraKnownMarketplaces), readJson(path.join(configDir, 'plugins', 'known_marketplaces.json')));
+    for (const id of missing) {
+      const source = lib.marketplaceSource(known[id.slice(id.lastIndexOf('@') + 1)]);
+      if (source) await inBox(box, ['claude', 'plugin', 'marketplace', 'add', source], { timeout: 300000 }).catch(() => { /* the install says why */ });
+      await inBox(box, ['claude', 'plugin', 'install', id, '--scope', 'user'], { timeout: 300000 }).catch(e => say(`${id} could not be installed in the containers: ${e.message.split('\n')[0]}`));
+    }
+  });
+  pluginLine = done.catch(() => {});
+  return done;
+}
+
 const hostGit = (args, cwd, input) => new Promise((resolve, reject) => {
   const child = execFile('git', args, { cwd, maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
   if (input != null) { child.stdin.on('error', () => { /* it ended before reading */ }); child.stdin.end(input); }
@@ -209,16 +241,22 @@ const hostGit = (args, cwd, input) => new Promise((resolve, reject) => {
 
 // .worktreeinclude, as Claude Code reads it for a new worktree: the files that match one of its patterns and
 // that git ignores (a project's .env, say) are copied along, since a clone does not bring them.
+// And Claude Code's own settings of the folder that git does not track: a session in a worktree reads them from
+// the main checkout (https://code.claude.com/docs/en/worktrees), and a clone does not have them.
+const LOCAL_SETTINGS = '.claude/settings.local.json';
 async function copyIncluded(box, root, work) {
-  if (!fs.existsSync(path.join(root, '.worktreeinclude'))) return 0;
-  const listed = await hostGit(['ls-files', '-z', '--others', '--ignored', '--exclude-from=.worktreeinclude'], root);
-  const ignored = listed && await hostGit(['check-ignore', '-z', '--stdin'], root, listed).catch(() => '');   // git ends with 1 when none of them is ignored
-  if (!ignored) return 0;
-  await inBox(box, ['sh', '-c', 'xargs -0 -r cp --parents -t "$1"', 'sh', work], { cwd: '/src', input: ignored, timeout: 300000 });
+  let files = [];
+  if (fs.existsSync(path.join(root, '.worktreeinclude'))) {
+    const listed = await hostGit(['ls-files', '-z', '--others', '--ignored', '--exclude-from=.worktreeinclude'], root);
+    const ignored = listed && await hostGit(['check-ignore', '-z', '--stdin'], root, listed).catch(() => '');   // git ends with 1 when none of them is ignored
+    files = (ignored || '').split('\0').filter(Boolean);
+  }
+  if (!files.includes(LOCAL_SETTINGS) && fs.existsSync(path.join(root, LOCAL_SETTINGS)) && !await hostGit(['ls-files', '--', LOCAL_SETTINGS], root).catch(() => '')) files.push(LOCAL_SETTINGS);
+  if (!files.length) return 0;
+  await inBox(box, ['sh', '-c', 'xargs -0 -r cp --parents -t "$1"', 'sh', work], { cwd: '/src', input: files.join('\0'), timeout: 300000 });
   // In the folder they are ignored, which may be by a rule that the clone does not have (the folder's own
   // .git/info/exclude, the owner's global list). The clone is told to ignore each by name, so that none shows
   // as a change there, and none is committed by a session that adds everything.
-  const files = ignored.split('\0').filter(Boolean);
   await inBox(box, ['sh', '-c', 'cat >> "$1/.git/info/exclude"', 'sh', work], { input: lib.excludeLines(files) });
   return files.length;
 }
@@ -233,6 +271,7 @@ async function fill(box, { root, work, branch, origin, identity, configDir, say 
   // as root. Claude Code keeps the session's conversation in the one right above, as the session's user.
   await inBox(box, ['sh', '-c', 'chown agent:agent "$1" "$1/.."', 'sh', path.posix.dirname(memoryIn(work))], { root: true });
   await copyConfig(box, configDir);
+  await installPlugins(box, configDir, root, say);
   say('Cloning the folder into the container…');
   const git = (args, opts) => inBox(box, ['git', ...args], { cwd: work, ...opts });
   await inBox(box, ['git', 'clone', '-q', '/src', work], { timeout: 900000 });
@@ -252,9 +291,9 @@ async function fill(box, { root, work, branch, origin, identity, configDir, say 
   // With nothing missing this takes a fraction of a second.
   await inBox(box, ['mise', 'install'], { cwd: work, timeout: 1800000 }).catch(e => say(`Not all tools that this branch names could be installed: ${e.message}`));
   const copied = await copyIncluded(box, root, work);
-  if (copied) say(`Copied ${copied} local file${copied === 1 ? '' : 's'} into the clone, as the folder's .worktreeinclude names them.`);
+  if (copied) say(`Copied ${copied} local file${copied === 1 ? '' : 's'} that git does not track into the clone: what the folder's .worktreeinclude names, and Claude Code's local settings.`);
   // A .env that stays behind is the usual reason a project does not start in its container: say so.
-  else if (!fs.existsSync(path.join(root, '.worktreeinclude')) && fs.readdirSync(root).some(n => /^\.env(\.|$)/.test(n) && !/\.(example|sample|template|dist)$/.test(n))) {
+  if (!fs.existsSync(path.join(root, '.worktreeinclude')) && fs.readdirSync(root).some(n => /^\.env(\.|$)/.test(n) && !/\.(example|sample|template|dist)$/.test(n))) {
     say('This folder has a .env that is not part of the clone, and no list of local files to copy. Name them under the settings, as "Local files to copy".');
   }
 }

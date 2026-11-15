@@ -1666,6 +1666,53 @@ seconds. `box-check.js` passed, for a folder that names `just` only.
 Not tried: a session in such a container, and Flutter on arm64 for a version written fuzzily (`"3.47"`), beyond
 that `mise current flutter` resolves it to 3.47.9.
 
+### After 0.7.4: this computer's account and MCP servers
+
+The owner asked for the configuration of this computer in the containers: "if I update my logged in account on
+my machine, the Docker containers should reflect that", and the claude-context MCP server, which a session in
+a container did not have.
+
+| What | Finding |
+|---|---|
+| Where claude-context was | In `~/.claude.json`, under `projects["<the folder>"].mcpServers`: a server added for that folder alone, which Claude Code's documentation calls local scope. Servers for every project (user scope) are in the same file, under `mcpServers`. The app copied only from the folder `~/.claude`, and that file lies beside it. |
+| `--mcp-config` | Takes files. A stand-in server passed that way was listed by `/mcp` as connected with its one tool, with no question asked first, which the documentation does not say. |
+| The login on macOS | Claude Code keeps it in the Keychain (documentation, "Credential management"); in a container, in `.credentials.json` in the shared volume. There is no file to share. |
+| Long-lived tokens | `claude setup-token` makes one for a year, documented for CI and containers. It "can only make model requests": no Remote Control in a container. |
+| `claude auth status` | JSON with `loggedIn`, `email` and `orgId`; it ends with 1 when not signed in. On this Mac the volume had no login. |
+| `claude auth login` in a container | Shows an address to open and "Paste code here if prompted". No browser is needed inside. `--email` fills the address in. |
+
+| Decision | Why |
+|---|---|
+| The containers' login is still made inside a container. Before each session in a container, the app compares `claude auth status` of this computer with that of the container. Where the container has no login, or another email or organisation, the card runs `claude auth login --email <this computer's>` before the session. | The owner chose this over a long-lived token. It follows a switch of accounts with one sign-in, and keeps Remote Control. Copying the login is still out: section 15. |
+| The check goes one card at a time. | The login is one for all containers, and a batch starts its containers side by side. The next card finds the new login and asks nothing. |
+| Where this computer is not signed in, nothing is checked. | There is no account to follow. |
+| The MCP servers of every project and of the folder (the open one, or its main checkout) are written into the session's folder (`mcp.json`, readable only by the owner) at every start, and passed with `--mcp-config`. | Read anew at every start, as the owner asked, and nothing is written into the volume all containers share, where `.claude.json` is Claude Code's own. The keys in their settings travel with them, as they lie in `~/.claude.json`. |
+
+Then the owner asked for more: "the MCP servers, skills, agents, etc... both from the ~/.claude as well as the
+ones from the repo lianta-core/.claude".
+
+| What | Finding |
+|---|---|
+| The folder's `.claude` | Its agents, skills and `settings.json` are committed and on the default branch, so the clone has them. Not `.claude/settings.local.json`, which git ignores; there it held one hook. Claude Code's documentation: a session in a worktree "uses the file at the main checkout's root". |
+| The owner's plugins | `~/.claude/settings.json` switches on two and off one; the plugins themselves lie in `~/.claude/plugins`, whose record names this computer's folders. Only the settings reached a container. Section 15 had it that Claude Code installs them from there; its documentation says it fetches plugins switched on in the owner's settings. Tried in a container with no login: after 45 seconds of a first start, no plugin and no marketplace. |
+| `claude plugin` in a container, with no login | `marketplace add` and `install` work, both again without harm (0.47 seconds when installed already). An install from a marketplace not yet added ends with 1. `list --json` gives the installed ids. |
+
+| Decision | Why |
+|---|---|
+| When a container is made, the app installs into the shared volume every plugin switched on in the owner's settings and in the folder's (`settings.json` and `settings.local.json`), with `--scope user`, after adding its marketplace from what this computer has recorded. One container at a time; what is installed already is skipped. | The first session has them, and every later one. A marketplace's source is a GitHub repository or an address, which a container reaches. One that is a folder of this computer is skipped. |
+| The folder's `.claude/settings.local.json` goes into the clone with the files `.worktreeinclude` names, and is excluded there by name. | As in a worktree. Excluded, so that no session commits it. |
+| Nothing else of the folder's `.claude` is copied. | The clone starts from the default branch, as a worktree of `claude -w` does; what is only in the folder on this computer is no more a worktree's. |
+
+Verified: asserts for the servers chosen and for the order of the arguments, and on this computer's own
+`~/.claude.json` (names only): claude-context for that folder, none for this one. The container's Claude Code
+starts with the new arguments. The comparison and the sign-in were each run by hand, the sign-in up to its
+prompt. The app's own `fill` on a container without the shared volumes, for a scratch repository whose
+committed settings switch on ponytail and whose ignored local settings hold a hook, and a scratch home that
+switches playwright on and figma off: 13 seconds; both plugins installed and enabled, figma not; the local
+settings in the clone, and `git status` there empty. `box-check.js` passed. Not tried: the whole of it in the
+app. On this Mac neither GitHub nor Claude Code was signed in in the volumes, and the card asks for GitHub
+first. claude-context running inside a container.
+
 ## 16. Still open
 
 - Sessions in containers: what section 15 lists as not verified or not tried. Docker Engine alone on Linux

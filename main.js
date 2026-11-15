@@ -101,6 +101,9 @@ const hostDir = inst => (inst.box ? inst.root : inst.cwd);
 const labelOf = (inst, worktrees) => (inst.box ? { worktree: null, label: inst.name } : lib.labelFor(inst.root, inst.cwd, worktrees));
 const configDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {}; } };
+// Claude Code's record of this computer: the account, the projects, the MCP servers. Inside the folder that
+// CLAUDE_CONFIG_DIR names, or else beside it in the home folder.
+const claudeRecord = () => (process.env.CLAUDE_CONFIG_DIR ? path.join(process.env.CLAUDE_CONFIG_DIR, '.claude.json') : path.join(os.homedir(), '.claude.json'));
 
 // Sessions started outside the app (another terminal, the desktop app) inside this repo: visible, not attachable.
 function externalSessions() {
@@ -257,6 +260,32 @@ function makeBox(inst, image, memory) {
   return made;
 }
 
+// Claude Code's login in the containers: one, in the volume they share, made inside a container, since a login
+// copied from this computer is reported to break when its token is renewed (see the top of containers.js). It
+// is to be the account this computer is signed in to. Where it is not, or there is none, the card runs the
+// sign-in first, with that account's address filled in, and the cards started beside it wait for that and
+// then find the new login. Where this computer is not signed in, there is nothing to follow.
+let signInLine = Promise.resolve();
+function signInBox(inst, box, term, say) {
+  const done = signInLine.then(async () => {
+    const here = await run(claudeBin, ['auth', 'status']).then(JSON.parse, () => null);
+    if (!here || !here.loggedIn || !here.email) return;
+    account = here; push();   // the header shows the account too, read once at the start before
+    const same = () => boxes.inBox(box, ['claude', 'auth', 'status'], { timeout: 30000 })   // ends with 1 when not signed in
+      .then(out => { const s = JSON.parse(out); return s.loggedIn && s.email === here.email && s.orgId === here.orgId; }, () => false);
+    if (await same()) return;
+    say(`Claude Code in the containers is not signed in as ${here.email}, as it is on this computer. Sign them in here, once for all of them: open the address it shows in your browser, sign in, and paste the code it gives you.`);
+    await new Promise(resolve => {
+      inst.proc = term(boxes.terminal(box, null, ['claude', 'auth', 'login', '--email', here.email]));
+      inst.proc.onData(d => send('pty-data', inst.id, d));
+      inst.proc.onExit(() => { inst.proc = null; resolve(); });
+    });
+    if (!await same()) say(`Claude Code in the containers is still not signed in as ${here.email}. The session starts with the login they have.`);
+  });
+  signInLine = done.catch(() => {});
+  return done;
+}
+
 // A session in a container. The container is made and filled, or started again where the session has one
 // already, and then Claude Code is started in it, in the card's terminal. Until then the card says what is
 // going on, and why it failed if it did.
@@ -269,6 +298,9 @@ async function startBox(inst, { model, effort, prompt, resume }) {
   const again = () => { resume = undefined; inst.sessionId = null; inst.mayMerge = lib.toldToMerge(prompt); inst.starting = !!prompt; };
   try {
     if (!dockerBin) throw new Error('Docker was not found on PATH. Sessions in containers need Docker Desktop.');
+    // The repository's main checkout, whichever folder of it is open here: Claude Code keeps the memory on this
+    // computer by that folder, and MCP servers by that one or the open one.
+    const main = lib.parseWorktrees(await git(['worktree', 'list', '--porcelain'], inst.root).catch(() => '')).find(w => w.main);
     if (b.name && !await boxes.exists(b.name)) {
       say(`${b.name} is gone, and what was in it. This session starts again in a new container.`);
       b.name = null; again();
@@ -287,9 +319,7 @@ async function startBox(inst, { model, effort, prompt, resume }) {
       // Asked for at every start: it is there already unless the folder's tools, the recipe or Claude Code changed.
       const image = await boxes.image(claudeCode.version || 'latest', inst.root, line => { dock.building = line; say(line); push(); }).finally(() => { dock.building = null; push(); });
       inst.fresh = true;   // until its session has started, nothing in it is worth keeping (see closeBox)
-      // The repository's memory on this computer, which is that of its main checkout whichever folder of it is
-      // open here. The container gets it where Claude Code looks inside.
-      const main = lib.parseWorktrees(await git(['worktree', 'list', '--porcelain'], inst.root).catch(() => '')).find(w => w.main);
+      // The repository's memory on this computer. The container gets it where Claude Code looks inside.
       const memory = lib.memoryDir(configDir(), main ? main.path : inst.root);
       fs.mkdirSync(memory, { recursive: true });
       b.name = await makeBox(inst, image, memory);
@@ -308,10 +338,17 @@ async function startBox(inst, { model, effort, prompt, resume }) {
       for (const key of ['user.name', 'user.email']) { const v = await git(['config', key], inst.root).catch(() => ''); if (v) identity.push([key, v]); }
       await boxes.fill(b.name, { root: inst.root, work: b.work, branch: inst.name, origin: `https://github.com/${github.owner}/${github.name}.git`, identity, configDir: configDir(), say });
     }
+    await signInBox(inst, b.name, term, say);
+    if (!open()) return;
+    // The MCP servers a session of this folder has on this computer, read at every start: Claude Code inside
+    // has neither this computer's record nor the folder's path. Their settings may hold keys, as they do there.
+    const mcp = lib.mcpServersFor(readJson(claudeRecord()), [inst.root, ...(main ? [main.path] : [])]);
+    const mcpFile = path.join(inst.dir, 'mcp.json');
+    if (mcp) fs.writeFileSync(mcpFile, JSON.stringify(mcp), { mode: 0o600 }); else fs.rmSync(mcpFile, { force: true });
     inst.ports = await boxes.ports(b.name);
     if (!open()) return;
     inst.fresh = false;
-    attach(inst, term(boxes.terminal(b.name, b.work, ['claude', ...lib.claudeArgs({ settingsFile: '/claudinho/settings.json', model, effort, prompt, resume, note: lib.boxNote(b.work) })])));
+    attach(inst, term(boxes.terminal(b.name, b.work, ['claude', ...lib.claudeArgs({ settingsFile: '/claudinho/settings.json', mcpConfig: mcp && '/claudinho/mcp.json', model, effort, prompt, resume, note: lib.boxNote(b.work) })])));
     push();
   } catch (e) {
     if (!open()) return;   // closed while it was being set up: closeBox has dealt with the container

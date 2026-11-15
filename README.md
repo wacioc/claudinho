@@ -119,13 +119,29 @@ With Docker chosen:
   as for a worktree: its `SessionStart` hook, or the session itself. Sessions may use `sudo`, and what npm,
   pip, uv and Playwright download is kept for all containers: a browser that one session fetched
   (`playwright install chromium`) is there for every other, and the command finds nothing to do.
-- Logins are made inside a container, once, and kept in Docker volumes that all containers share. Claude Code
-  asks for its login in the first session's terminal (`/login`), and where GitHub has none yet, the card runs
-  `gh auth login` before anything else. Nothing is copied from the logins of this computer.
+- Logins are made inside a container, once, and kept in Docker volumes that all containers share. Where GitHub
+  has none yet, the card runs `gh auth login` before anything else. Claude Code's login there is to be the
+  account this computer is signed in to: where it has none, or another one, the card runs `claude auth login`
+  with that account's address filled in. Open the address it shows, sign in, and paste the code it gives you.
+  After you switch accounts here, the next container asks once more. Nothing is copied from the logins of this
+  computer.
 - Your own Claude Code configuration is copied into the containers at each start, file by file and only what
   has changed: `CLAUDE.md`,
   `settings.json`, `keybindings.json`, agents, commands, output styles, rules, skills, hooks, and the scripts
   that lie directly in that folder.
+- The plugins switched on in your settings and in the folder's (`.claude/settings.json`,
+  `.claude/settings.local.json`) are installed for all containers when the first container that needs them is
+  made, from the marketplace this computer has them from. A marketplace that is a folder of this computer is
+  not there. A plugin switched off later stays installed in the containers.
+- The folder's own `.claude` comes with the clone, as committed on the default branch. Its
+  `.claude/settings.local.json`, which git does not track, is copied in as well: a session in a worktree reads
+  that file from the main checkout.
+- The MCP servers a session of the folder has on this computer, those of every project and those added for
+  the folder alone (`claude mcp add`, in `~/.claude.json`), are handed to each session in a container as it
+  starts, settings and keys included. A server that runs a program the image does not have, or reaches an
+  address of this computer (`localhost`), does not work there. One that signs in through a browser has no
+  login there. A server that indexes the code by its path, such as claude-context, keeps one index for the
+  containers, apart from this computer's.
 - The memory that Claude Code keeps for the repository is one, for both ways of working. Every new container
   gets the folder's memory from this computer (under `~/.claude/projects`), where the sessions in worktrees
   keep theirs. What a session notes in a container, later sessions read wherever they work, and the other way

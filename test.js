@@ -218,6 +218,24 @@ assert.deepStrictEqual(lib.claudeArgs({ settingsFile: 's', model: 'opus', effort
 assert.deepStrictEqual(lib.claudeArgs({ settingsFile: 's' }), ['--settings', 's']);
 // what a session in a container is told goes in at every start, a resumed one too
 assert.deepStrictEqual(lib.claudeArgs({ settingsFile: 's', note: 'n', resume: 'abc' }), ['--settings', 's', '--append-system-prompt', 'n', '--resume', 'abc']);
+// so are the MCP servers of this computer, and the next option ends the list that --mcp-config takes
+assert.deepStrictEqual(lib.claudeArgs({ settingsFile: 's', mcpConfig: 'm', prompt: 'p' }), ['--settings', 's', '--mcp-config', 'm', '--', 'p']);
+{
+  const here = path.join(os.tmpdir(), 'mcp-here'), other = path.join(os.tmpdir(), 'mcp-other');
+  const record = { mcpServers: { a: { command: 'user-a' }, b: { command: 'user-b' } },
+    projects: { [here]: { mcpServers: { b: { command: 'local-b' }, c: { command: 'local-c' } } }, [other]: { mcpServers: { d: { command: 'other-d' } } } } };
+  // every project's, then this folder's own, which win; another folder's are left out
+  assert.deepStrictEqual(lib.mcpServersFor(record, [here]), { mcpServers: { a: { command: 'user-a' }, b: { command: 'local-b' }, c: { command: 'local-c' } } });
+  assert.strictEqual(lib.mcpServersFor({}, [here]), null);
+  assert.strictEqual(lib.mcpServersFor({ projects: { [here]: {} } }, [here]), null);
+}
+// the plugins a container gets: those switched on, from a marketplace a container can reach
+assert.deepStrictEqual(lib.pluginsOn({ enabledPlugins: { 'a@m': true, 'b@m': false, 'c@n': true } }), ['a@m', 'c@n']);
+assert.deepStrictEqual(lib.pluginsOn({}), []);
+assert.strictEqual(lib.marketplaceSource({ source: { source: 'github', repo: 'o/r' } }), 'o/r');
+assert.strictEqual(lib.marketplaceSource({ source: { source: 'git', url: 'https://example.invalid/m.git' } }), 'https://example.invalid/m.git');
+assert.strictEqual(lib.marketplaceSource({ source: { source: 'directory', path: '/Users/x/m' } }), null);
+assert.strictEqual(lib.marketplaceSource(undefined), null);
 // resuming: the conversation already has its worktree and its first prompt
 assert.deepStrictEqual(lib.claudeArgs({ settingsFile: 's', model: 'opus', worktree: 'w', prompt: 'again', resume: 'abc' }), ['--settings', 's', '--model', 'opus', '--resume', 'abc']);
 const settings = lib.instanceSettings({ statusFile: '/tmp/s.json', hookUrl: 'http://127.0.0.1:1/t/i', userStatusLine: { type: 'command', command: 'mine', padding: 2 } });

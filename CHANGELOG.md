@@ -4,6 +4,22 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.7.5 (2026-11-15)
+
+**Docker containers**
+
+- Claude Code in the containers follows the account this computer is signed in to. Where the containers have
+  no login, or another account's, the card signs them in before the session starts, once for all of them,
+  with this computer's address filled in. After a switch of accounts here, the next container asks once more.
+- Sessions in containers get the MCP servers that a session of the folder has on this computer: those of
+  every project, and those added for the folder alone, which live in `~/.claude.json` and never reached a
+  container before. They are read anew at every start.
+- The plugins switched on in your settings and in the folder's own are installed for all containers, from the
+  marketplaces this computer has them from. Before, only the settings that name them reached a container, and
+  Claude Code there did not fetch them.
+- A container's clone gets the folder's `.claude/settings.local.json`, which git does not track, as a session in
+  a worktree reads it from the main checkout.
+
 ## 0.7.4 (2026-11-14)
 
 **Docker containers**

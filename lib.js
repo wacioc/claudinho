@@ -541,8 +541,9 @@ function instanceSettings({ statusFile, hookUrl, userStatusLine, curl = false })
 // `--` keeps a prompt starting with "-" from being read as a flag.
 // resume: the id of a conversation to continue. It already has its worktree and its first prompt.
 // note: what the session is told at the end of its system prompt, at every start (see boxNote).
-function claudeArgs({ settingsFile, model, effort, worktree, prompt, resume, note }) {
+function claudeArgs({ settingsFile, mcpConfig, model, effort, worktree, prompt, resume, note }) {
   const a = ['--settings', settingsFile];
+  if (mcpConfig) a.push('--mcp-config', mcpConfig);
   if (note) a.push('--append-system-prompt', note);
   if (model) a.push('--model', model);
   if (effort) a.push('--effort', effort);
@@ -550,6 +551,26 @@ function claudeArgs({ settingsFile, model, effort, worktree, prompt, resume, not
   if (worktree) a.push('--worktree', worktree);
   if (prompt) a.push('--', prompt);
   return a;
+}
+
+// The MCP servers Claude Code gives a session of this computer in one of `paths`, as a file for --mcp-config:
+// those it keeps for every project (user scope), then those it keeps for that folder (local scope), which win.
+// Both are in its record, .claude.json: under `mcpServers`, and under `projects[<the folder's path>].mcpServers`.
+// https://code.claude.com/docs/en/mcp#mcp-installation-scopes
+function mcpServersFor(record, paths) {
+  const servers = { ...record.mcpServers };
+  for (const [p, project] of Object.entries(record.projects || {})) if (paths.some(q => samePath(p, q))) Object.assign(servers, project.mcpServers);
+  return Object.keys(servers).length ? { mcpServers: servers } : null;
+}
+
+// The plugins a settings file switches on: `enabledPlugins`, "name@marketplace": true.
+const pluginsOn = settings => Object.entries((settings && settings.enabledPlugins) || {}).filter(([, on]) => on === true).map(([id]) => id);
+// Where a marketplace comes from, as `claude plugin marketplace add` takes it, out of Claude Code's record of it
+// (known_marketplaces.json, extraKnownMarketplaces). A folder or file of this computer is not there in a container.
+// https://code.claude.com/docs/en/discover-plugins
+function marketplaceSource(entry) {
+  const s = (entry && entry.source) || {};
+  return s.source === 'github' ? s.repo || null : s.source === 'git' || s.source === 'url' ? s.url || null : null;
 }
 
 // Instances must bill the Claude subscription, never an API key.
@@ -982,7 +1003,7 @@ module.exports = {
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,
   auditEntries, auditPick, toolKey, parseVersion, newerVersion,
   BOX_CPUS, BOX_MEMORY_GB, boxLimit, freeSlot, boxWork, projectDir, memoryDir, boxNote, clipText, portList, toolNames, excludeLines, parsePorts, parseBoxStats, boxDisk,
-  childEnv, isInside, realPath, samePath, parseWorktrees, labelFor, scanConfig, configPath, ROOT_FILES, HOME_FILES, HOME_DIRS, scanHome, homePath,
+  childEnv, mcpServersFor, pluginsOn, marketplaceSource, isInside, realPath, samePath, parseWorktrees, labelFor, scanConfig, configPath, ROOT_FILES, HOME_FILES, HOME_DIRS, scanHome, homePath,
   SAMPLE_SECONDS, samplerCommand, cpuSeconds, parseProcs, treeOf, treeUsage, sparedPids, byName,
   WEIGHTS, MIN_SHARE, shareCpu, scopeUnit, scopeProps, scopeCommand, throttleTargets, nextDuty,
 };
