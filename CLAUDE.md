@@ -1,8 +1,8 @@
 # claudinho
 
 A desktop monitor (Electron) for the Claude Code instances running in a repo: live terminals in groups, their
-worktrees or Docker containers, GitHub issues with dispatch into either, the open pull requests, the diff of a session's pull
-request, merging that pull request once the session says it is ready, notifications with a record of every
+worktrees or Docker containers, GitHub issues with dispatch into either, the open pull requests, the files of a session's
+folder, the diff of its pull request, merging that pull request once the session says it is ready, notifications with a record of every
 input request, an editor for the `.claude` setup, per-instance CPU limits, resuming every session after the
 app stops, and updating itself from its GitHub releases.
 
@@ -109,6 +109,11 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
   `SessionStart` command hook that writes down when it begins and ends, in which folder. Two set-ups must
   never overlap. Issues can be handed to `dispatch` directly; with `GH_REPO` set, `gh` finds a repository for
   the blocker lookup although the scratch folder has no GitHub remote.
+- An issue that is sent off is assigned on GitHub, which is a write: never send off an issue of a real
+  repository unless the assignment is what is being tested. One handed to `dispatch` without a `url`, in a
+  folder without a GitHub remote, is not assigned at all. To see the command go out, put a stand-in `gh` first
+  on the `PATH` of the main process through `--inspect`, once the app runs: at its start the app replaces its
+  `PATH` with the one its login shell prints.
 - The Issues and the Pull requests tab are tested read-only in an empty folder whose `origin` is a public
   repository with many of both. Nothing is started there; a start dialog can be opened, read and cancelled.
 - Input requests need a session that is asked before it uses a tool. Where the machine's default is auto
@@ -136,6 +141,16 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
   the folder is trusted, and that is enough: the tab needs its folder alone. The tab must change nothing, so
   hash `.git/index` before and after a read, with a file that was only touched in the folder, and run no git
   command of your own in between. `git diff` and `git status` write the index; `git diff-index` does not.
+- The Files tab is tested the same way, in a scratch repository with every kind of entry: folders inside
+  folders, an empty one, one with thousands of files, a link into the folder and one out of it, a name with a
+  line break; and files of real size: a megabyte of code, one over the limit, a binary one, and one that is a
+  single long line. What its two calls must refuse is asked of them directly, in the window:
+  `api.call('files', id, '..')` and `api.call('fileRead', id, 'a-link-that-leads-out')`. The tab must never
+  write: it has no call that does, and a test has no reason to add one. What the calls ask of a container
+  needs no session: mount the folder into a throwaway container of the app's image, under a name that is not a
+  slot's, take the shell commands from the text of `main.js` and run them through `containers.js`. Set a
+  card's `openDirs` only before its tree is drawn: a folder that is drawn open reports it a moment later, as a
+  click would.
 - The detail view's list of sessions is tested live with three sessions, two of them in a group and one
   waiting for an answer. For a request the app holds on the card, that session needs the "timed" input level:
   at "manual" the session asks in its own terminal and the app holds nothing.
@@ -187,4 +202,4 @@ an update, and not notarised. A release whose update fails is not published.
 - The Windows installer is not signed, by the owner's decision (section 11 of the build history), and the
   installers carry Electron's default icon. A packaged build must keep Electron's `RunAsNode` fuse on (see
   `cpu.js`); `pack-check.js` fails when it is off.
-- The open points are listed in the README under "Limits" and in section 16 of the build history.
+- The open points are listed in the README under "Limits" and in section 17 of the build history.

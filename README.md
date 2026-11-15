@@ -58,10 +58,10 @@ The first `npm install` downloads the Electron binary.
 
 | Tab | What it shows |
 |---|---|
-| **Instances** | Every Claude Code instance as a live terminal, titled with its worktree (or the folder name), with model, context window, API-equivalent cost, uptime, and the CPU and memory used by it and everything it started. Click one for the full terminal, a per-process breakdown, its environment variables, its autonomy and the input level, on a second tab the diff of its pull request, or of its folder while there is none yet, and beside it the list of all sessions to go from one to the next. A session that was sent after an issue, and one whose branch has a pull request, carry a button for each that opens it on GitHub. Sessions that belong to a group carry its name and colour, and one whose turn has ended a green outline and checkmark. Sessions started outside the app appear as status-only cards, which a filter can hide, and sessions that were open when the app last stopped appear as cards with a Resume button. |
+| **Instances** | Every Claude Code instance as a live terminal, titled with its worktree (or the folder name), with model, context window, API-equivalent cost, uptime, and the CPU and memory used by it and everything it started. Click one for the full terminal, a per-process breakdown, its environment variables, its autonomy and the input level, on a second tab the diff of its pull request, or of its folder while there is none yet, on a third its folder as a tree of files, each of which a click shows to read, and beside it the list of all sessions to go from one to the next. A session that was sent after an issue, and one whose branch has a pull request, carry a button for each that opens it on GitHub. Sessions that belong to a group carry its name and colour, and one whose turn has ended a green outline and checkmark. Sessions started outside the app appear as status-only cards, which a filter can hide, and sessions that were open when the app last stopped appear as cards with a Resume button. |
 | **Worktrees** | Every worktree under `.claude/worktrees`: its branch, whether it holds uncommitted changes or commits that exist nowhere else, its last commit, and the session at work in it. Each can be removed from here. |
 | **Containers** | With Docker chosen, in the place of Worktrees: every container that sessions work in on this computer, with its session, its folder and branch, whether its clone holds uncommitted changes or commits that are not pushed, and whether it is running. A container that was kept can be given a new session, or removed. |
-| **Issues** | Open issues by default, in number order with the highest first, with the issues blocking each one. Select one or many, right-click, "Tackle with Claude Code". A double click on an issue does the same for that one. |
+| **Issues** | Open issues by default, in number order with the highest first, with the issues blocking each one. Select one or many, right-click, "Tackle with Claude Code". A double click on an issue does the same for that one. An issue that is started is assigned to its session's GitHub account. |
 | **Pull requests** | The repository's open pull requests in number order with the highest first, drafts and those ready for review: branch, checks, review state, and the session at work on each. A click on a title opens it on GitHub. |
 | **.claude** | Everything under `.claude` and `.github` of the open folder, and your own configuration from the home folder (`~/.claude`): `CLAUDE.md`, `settings.json`, agents, skills, commands, rules. All of it is editable inline. Saving a file of the open folder offers to commit and push. "New skill" and "New agent" generate one from a prompt in a terminal, where Claude can ask follow-up questions. |
 
@@ -176,6 +176,7 @@ an entry opens the instance it is about.
 | answered for itself | The same at the Auto level, with what was asked and what was picked. |
 | is done | A session's turn has ended and nothing it started is still running. With auto-merge on, it also says what became of the pull request. |
 | was told | With auto-merge on, the app sent the session a follow-up before merging (see [Auto-merge](#auto-merge)). |
+| could not be assigned | A session was started for an issue, and GitHub refused to assign the issue to the session's account (see [Dispatching issues](#dispatching-issues)). |
 | Claude Code … is out | A newer version than the installed one has been released. Pressing it runs `claude update`. |
 | claudinho … is out | A newer release of the app has been published. Pressing it installs that release. |
 
@@ -279,7 +280,8 @@ Beside the session on show, the detail view lists every instance the app runs: i
 card, a checkmark once it is done, and the stripe of its group. The list is in the order of the wall. The
 session on show is marked, and one that waits for input stands out. Sessions that run in the same folder have
 the same name, so each of those also shows the name Claude Code gave it. A click goes to that session and keeps the
-tab you are on: from one terminal to the next, or from one session's diff to the next one's.
+tab you are on: from one terminal to the next, from one session's diff to the next one's, or from one's files
+to the next one's.
 
 Sessions started outside the app are not in the list: they have no view to go to.
 
@@ -332,6 +334,12 @@ same way, and so is its branch. Containers do not wait for each other: the sessi
 side, as many as you chose to run at once, because nothing one of them sets up can be in another's way. An
 issue waits in the queue while every container is taken.
 
+An issue that is started is assigned on GitHub to the account of its session: the one `gh` is signed in to
+where the session works, which is this computer for a session in a worktree, and the containers for a session
+in a container. Whoever is assigned already stays assigned. It happens when the issue's session starts, not
+while the issue waits in the queue. Where GitHub refuses, because that account may not assign in the
+repository, say, the session starts all the same and the bell says why.
+
 Several issues are started lowest number first, whatever the order of the list. For them you also choose how many
 agents run at once (max 4; with containers, as many as there may be) and the group's name (see [Groups](#groups)). For one issue or several you choose
 the autonomy (next section).
@@ -362,8 +370,9 @@ so. Choose Semi-auto at the start, or tell the session yourself.
 
 ### The diff of a session's work
 
-The detail view of an instance has two tabs, **Terminal** and **Diff**. The Diff tab's name says which diff
-it holds: **Diff (git)** once the session's branch has a pull request, **Diff (local)** until then.
+The detail view of an instance has three tabs: **Terminal**, **Diff**, and **Files (Read-only)** (next
+section). The Diff tab's name says which diff it holds: **Diff (git)** once the session's branch has a pull
+request, **Diff (local)** until then.
 
 **Diff (git)** shows what the pull request changes, the way GitHub's "Files changed" shows it: the same files
 in the same order, the same hunks and line numbers, added lines green and removed ones red, and the code
@@ -384,6 +393,26 @@ the first 20,000 lines. The list in the bar jumps to a file.
 The tab is read-only: it shows, and changes nothing, in the folder, in git or on GitHub. Text can be selected
 and copied, without the line numbers and the + and − marks. It is read when the tab is opened, when the
 session's turn ends while the tab is open, and with **↻ Refresh**.
+
+### The files of a session's folder
+
+The **Files (Read-only)** tab shows the folder a session works in as a tree, drawn the way VS Code's explorer
+draws one: folders first, then files, each by name. A click on a folder opens or closes it, and a file carries
+a small mark for its kind. The folder is the session's worktree, or the open folder for a session that works
+in that one; for a session in a container it is the clone inside the container. The bar names it.
+
+A click on a file shows it beside the tree: its lines with their numbers, coloured by its language as in the
+Diff tab. The tab is for reading. There is nothing in it to type into and nothing that saves: it changes no
+file, as its name says. Text can be selected and copied, without the line numbers. A long line is not broken;
+the view scrolls sideways.
+
+Everything in the folder is listed, ignored files and `node_modules` too, except what VS Code's explorer leaves
+out as well: `.git`, `.svn`, `.hg`, `.jj`, `.DS_Store` and `Thumbs.db`. A link is listed as a file. One that
+leads to a file inside the folder shows that file; one that leads out of the folder shows nothing.
+
+Every folder that is open, and the file on show, is read anew when the tab is opened, when a folder is opened
+or closed, when the session's turn ends while the tab is open, and with **↻ Refresh**. The place in the file
+stays.
 
 ### Merging a pull request yourself
 
@@ -515,6 +544,12 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   GitHub's dark page. It runs in the main process, for one file at a time when that file is first drawn, and
   picks the language by the file's name. What it answers is taken apart into runs of text with a class each,
   and a line whose runs do not add up to the line itself stays uncoloured.
+- The Files tab asks the main process for one folder at a time, by its path within the session's folder: read
+  with `readdir` on this computer, and with one level of `find` inside a container. A file that is clicked is
+  read the same way, with `readFile` or with `cat`. A path that leaves the session's folder, by `..` or
+  through a link, is refused, on this computer and inside a container alike. The main process has no call
+  that writes for this tab.
+- An issue is assigned with `gh issue edit <its address> --add-assignee @me`, run where its session works.
 - "Finished its `SessionStart` hooks" is read from another hook, `UserPromptSubmit`: Claude Code holds the
   first prompt back until those hooks are done, and gives no other sign of it. The status line and
   `claude agents` both react while the hooks are still running.
@@ -672,6 +707,17 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   Where it finds none, it shows what is not committed. Of the files git does not know, the first 200 are
   listed and read up to 1 MB each and 8 MB in all; a larger one is named without its lines. It is not kept up
   to date while a session edits: it is read again when the turn ends, or with Refresh.
+- The Files tab is for reading: a file cannot be edited there. It is not kept up to date while a session
+  works either: it is read again when a folder is opened or closed, when the turn ends, or with Refresh. A
+  file of more than 1 MB is named and not shown, and one of more than 256 KB is shown without colours. A
+  binary file is not shown, a picture included. One file is on show at a time. A folder that is linked in
+  cannot be opened. Of a folder with more than 10,000 entries the first 10,000 are listed. A dozen kinds of
+  file have a mark of their own and the rest share one. Unlike in VS Code, a folder that holds nothing but one
+  folder is not joined with it into one row, files that git ignores or has changed are not marked, and the
+  arrow keys do nothing: with the keyboard, Tab goes from row to row and Enter opens a folder or a file.
+- An issue is assigned when its session starts, and stays assigned when that session is closed without a pull
+  request. The Issues tab reads its list again the next time it is opened after a start; the assignee of an
+  issue that waited in the queue shows after Refresh.
 - Semi-auto depends on the session being let to merge: Claude Code's own permissions still apply to its
   `gh pr merge`, and auto mode refuses it when the session was told by a note and not in a prompt. A session
   is told once; a conversation that is cleared or compacted may no longer know. An idle session hears of a

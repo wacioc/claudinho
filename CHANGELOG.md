@@ -4,6 +4,23 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.8.0 (2026-11-15)
+
+**Instances**
+
+- The detail view has a third tab, **Files (Read-only)**: the folder the session works in as a tree, drawn
+  the way VS Code's explorer draws one. Folders first, a click opens or closes one, and a file carries a mark
+  for its kind. A click on a file shows it beside the tree, with line numbers and the Diff tab's colours, to
+  read: nothing in the tab can change a file. For a session in a container it is the clone inside the
+  container. The tab is read again when a folder is opened or closed, when the session's turn ends, and with
+  Refresh.
+
+**Issues**
+
+- An issue that is started is assigned on GitHub to the account of its session: the one `gh` is signed in to
+  on this computer, or in the containers for a session in a container. Where GitHub refuses, the session
+  starts all the same and the bell says why.
+
 ## 0.7.5 (2026-11-15)
 
 **Docker containers**

@@ -184,7 +184,7 @@ function trayImages(count) {
   });
 }
 
-const NOTE_MARKS = { input: '?', auto: '»', done: '✓', update: '⬆', app: '⬆', merge: '↩' };
+const NOTE_MARKS = { input: '?', auto: '»', done: '✓', update: '⬆', app: '⬆', merge: '↩', issue: '!' };
 let shownFresh = -1;
 function renderBell() {
   const fresh = (state.notifications || []).filter(n => !n.seen).length;
@@ -369,9 +369,11 @@ function createCard(inst) {
     done: h('span.tick', { title: 'Done: its last turn has ended, nothing it started is still running, and nothing has been asked of it since.' }, '✓'),
     prBtn: h('button.pr-act', { hidden: true, onclick: e => { e.stopPropagation(); prAct(inst.id); } }),
     info: h('dl'), env: h('div.env'), procs: h('div.procs'), audit: h('div.audit'),
-    // The detail view's two tabs: the session's terminal, and the diff of its pull request.
-    tabs: h('div.tabs', h('button.active', { onclick: () => { showTab(t, 'term'); term.focus(); } }, 'Terminal'), h('button', { onclick: () => showTab(t, 'diff') }, 'Diff')),
+    // The detail view's three tabs: the session's terminal, the diff of its pull request, and its folder as a
+    // tree with the file that was clicked beside it. Nothing in that last one can change a file, which its name says.
+    tabs: h('div.tabs', h('button.active', { onclick: () => { showTab(t, 'term'); term.focus(); } }, 'Terminal'), h('button', { onclick: () => showTab(t, 'diff') }, 'Diff'), h('button', { onclick: () => showTab(t, 'files') }, 'Files (Read-only)')),
     diff: h('div.diff', { hidden: true }),
+    tree: h('div.files-tree'), view: h('div.files-view', h('div.empty', 'Click a file to read it here.')), filesRoot: h('b.files-root'), filesAt: h('span.hint'),
     groupIn: h('input', { type: 'text', list: 'groups', maxLength: 40, placeholder: 'none', title: 'Sessions with the same group name are marked as belonging together. Clear the name to take this one out of its group.',
       onchange: e => call('setInstance', inst.id, { group: e.target.value }) }),
     merge: h('select', { onchange: e => call('setInstance', inst.id, { autonomy: e.target.value }) }, AUTONOMY.map(([v, text]) => h('option', { value: v }, text))),
@@ -381,12 +383,15 @@ function createCard(inst) {
       [['low', 'Low: half a share'], ['normal', 'Normal'], ['high', 'High: a double share']].map(([v, text]) => h('option', { value: v }, text))),
   };
   p.meta = h('div.meta', p.issueBtn, p.prLink, p.chips);
+  p.files = h('div.files', { hidden: true },
+    h('div.diff-bar', p.filesRoot, h('span.spacer'), p.filesAt, h('button', { onclick: () => loadFiles(t) }, '↻ Refresh')),
+    h('div.files-panes', p.tree, p.view));
   const card = h('article.card', { onclick: e => { if (detailId !== inst.id && !e.target.closest('button, .pending-box')) openDetail(inst.id); } },
     h('div.head', p.done, p.title, p.group, p.badge, h('span.spacer'), p.prBtn,
       h('button.back', { onclick: e => { e.stopPropagation(); closeDetail(); } }, '← All instances'),
       h('button.x', { title: 'Stop and remove', onclick: e => { e.stopPropagation(); closeInstance(inst.id); } }, '✕')),
     p.meta, p.pending, p.tabs,
-    h('div.body', wrap, p.diff, h('aside.side',
+    h('div.body', wrap, p.diff, p.files, h('aside.side',
       h('h3', 'Session'), p.info,
       h('label', 'Group ', p.groupIn),
       h('h3', 'Input requests'), p.audit,
@@ -405,7 +410,7 @@ function createCard(inst) {
   // in a container it has none to write, and asks its terminal to (OSC 52), which is this.
   term.parser.registerOscHandler(52, data => { call('clipOsc', data); return true; });
   if (backlog.has(inst.id)) { term.write(backlog.get(inst.id)); backlog.delete(inst.id); }
-  const t = { term, fit, card, wrap, host, p, inst };
+  const t = { term, fit, card, wrap, host, p, inst, openDirs: new Set() };   // openDirs: the folders open in its Files tab
   t.observer = new ResizeObserver(() => layoutSoon(t));
   t.observer.observe(wrap);
   t.observer.observe(host.querySelector('.xterm-screen'));
@@ -460,7 +465,7 @@ function renderPending(t, inst) {
 
 // order: where the card sits in the grid. A group's cards share one, so they sit next to each other.
 function updateCard(t, inst, order) {
-  if (t.tab === 'diff' && inst.done && !t.inst.done) loadDiff(t);   // its turn has just ended: what it did should show
+  if (inst.done && !t.inst.done) { if (t.tab === 'diff') loadDiff(t); if (t.tab === 'files') loadFiles(t); }   // its turn has just ended: what it did should show
   t.inst = inst;
   t.p.tabs.children[1].textContent = inst.pr ? 'Diff (git)' : 'Diff (local)';   // the pull request as GitHub has it, or the folder's own diff until there is one
   const st = statusOf(inst), s = inst.status || {};
@@ -607,17 +612,19 @@ function switchTo(id) {
   if (id === detailId || !terms.has(id)) return;
   const tab = from && from.tab;
   openDetail(id);
-  if (tab === 'diff') { showTab(terms.get(id), 'diff'); terms.get(id).term.blur(); }   // the keyboard stays out of a terminal that is not on show
+  if (tab && tab !== 'term') { showTab(terms.get(id), tab); terms.get(id).term.blur(); }   // the keyboard stays out of a terminal that is not on show
 }
 
 // ---------- the Diff tab ----------
 
+const TABS = ['term', 'diff', 'files'];   // in the order of their buttons
 function showTab(t, name) {
   t.tab = name;
-  [...t.p.tabs.children].forEach((b, i) => b.classList.toggle('active', (i === 1) === (name === 'diff')));
-  t.wrap.hidden = name === 'diff';
+  [...t.p.tabs.children].forEach((b, i) => b.classList.toggle('active', TABS[i] === name));
+  t.wrap.hidden = name !== 'term';
   t.p.diff.hidden = name !== 'diff';
-  if (name === 'diff') loadDiff(t); else layoutSoon(t);
+  t.p.files.hidden = name !== 'files';
+  if (name === 'diff') loadDiff(t); else if (name === 'files') loadFiles(t); else layoutSoon(t);
 }
 
 // The pull request of the session's branch as GitHub's "Files changed" has it: what is pushed, against the
@@ -706,6 +713,108 @@ function diffTable(hunks) {
       h('td.ln', l.old), h('td.ln', l.new), h('td.code', { 'data-m': l.type === '\\' ? '' : l.type }, l.text))),
   ])));
 }
+
+// ---------- the Files tab ----------
+
+// The session's folder as a tree, drawn the way VS Code's explorer draws one: folders first, a folder opened or
+// closed by a click on its name, a file with the mark of its kind. A click on a file shows it beside the tree.
+// Read-only, which the tab's name says: it lists and shows, and nothing in it can change a file.
+// Every folder that is open, and the file on show, is read anew when the tab is shown, when a folder is opened
+// or closed, when the session's turn ends, and with Refresh: the tab is then as the disk was at that moment.
+// ponytail: it does not follow a session at work. The hook server hears of every tool call that has run: read
+// again then, if it should.
+async function loadFiles(t) {
+  loadFile(t);
+  const mine = t.filesLoad = {};
+  if (!t.p.tree.firstChild) t.p.tree.replaceChildren(h('div.empty', 'Reading the folder…'));
+  t.p.filesAt.textContent = 'reading…';
+  const dirs = ['', ...t.openDirs].sort();   // '' is the session's folder itself
+  const lists = await Promise.all(dirs.map(d => api.call('files', t.inst.id, d).catch(e => ({ error: errText(e) }))));
+  if (t.filesLoad !== mine) return;                   // a newer read is on its way
+  const key = JSON.stringify([dirs, lists]);
+  if (key !== t.filesKey) { t.filesKey = key; renderFiles(t, new Map(dirs.map((d, i) => [d, lists[i]]))); }   // nothing new: the tree stays as it is
+  t.p.filesAt.textContent = `read ${new Date().toLocaleTimeString()}`;
+}
+
+// A click on a file: that one is on show beside the tree, and marked in it.
+function showFile(t, rel) {
+  t.file = rel;
+  for (const el of t.p.tree.querySelectorAll('button')) el.classList.toggle('active', el.dataset.path === rel);
+  loadFile(t);
+}
+
+// The file on show, to read: its lines beside their numbers, in the Diff tab's colours. They are text of the
+// page, with nothing to type into and no call that writes. Drawn anew only where the file differs from what is
+// drawn, so the place in it stays.
+async function loadFile(t) {
+  const rel = t.file, mine = t.fileLoad = {};
+  if (rel == null) return;
+  const f = await api.call('fileRead', t.inst.id, rel).catch(e => ({ note: errText(e) }));
+  const key = JSON.stringify([rel, f]);
+  if (t.fileLoad !== mine || key === t.fileKey) return;   // another file was clicked meanwhile, or nothing is new
+  const view = t.p.view, top = rel === t.fileDrawn ? view.scrollTop : 0, text = f.lines ? f.lines.join('\n') : null, code = f.lines && h('pre', text);
+  t.fileKey = key; t.fileDrawn = rel;
+  view.replaceChildren(h('div.files-path', rel), code ? h('div.files-code', h('pre.nums', f.lines.map((_, i) => i + 1).join('\n')), code) : h('div.diff-note', f.note));
+  view.scrollTop = top;
+  // The colours come a moment later, as in the Diff tab and from the same call: the file as one stretch of
+  // lines that did not change. A line the colouring could not account for stays as it is.
+  // ponytail: no colours for a file of more than 256 KB. Colouring a megabyte took 1.3 s when measured, in
+  // which the main process serves no terminal. Colour such a file in pieces if it should have them.
+  if (!code || text.length > 2 ** 18) return;
+  const runs = await api.call('diffColours', rel, [{ lines: f.lines.map(text => ({ type: ' ', text })) }]).catch(() => null);
+  if (!runs || !code.isConnected) return;
+  // Put together one run at a time: a file that is a single line can have more runs than a call takes arguments.
+  const coloured = document.createDocumentFragment();
+  runs.forEach((r, i) => {
+    for (const [cls, text] of r || [['', f.lines[i]]]) coloured.append(cls ? h('span', { className: cls }, text) : text);
+    coloured.append('\n');
+  });
+  code.replaceChildren(coloured);
+}
+
+// A file's mark, in the colours that the icons VS Code comes with (Seti) give that kind: a sign or two letters
+// for the kinds a repository is mostly made of, and three lines for the rest. A folder has no icon there, only
+// its arrow.
+// ponytail: a dozen kinds. Add a line for one that is missed; all of them would be a font of icons.
+const FILE_MARKS = [
+  [/\.(mjs|cjs|jsx?)$/i, 'JS', '#cbcb41'], [/\.tsx?$/i, 'TS', '#519aba'], [/\.json$/i, '{}', '#cbcb41'], [/\.md$/i, 'M↓', '#519aba'],
+  [/\.(css|scss|less)$/i, '#', '#519aba'], [/\.(html?|xml|svg|vue)$/i, '<>', '#e37933'], [/\.py$/i, 'PY', '#519aba'], [/\.(sh|bash|zsh)$/i, '>_', '#8dc149'],
+  [/\.ya?ml$/i, '!', '#a074c4'], [/\.(png|jpe?g|gif|ico|webp)$/i, '▣', '#a074c4'], [/^\.|\.(toml|ini|lock|env)$/i, '⚙', '#6d8086'],
+];
+const fileMark = name => { const [, text, color] = FILE_MARKS.find(([re]) => re.test(name)) || [null, '≡', '#d4d7d6']; return h('i', { style: `color:${color}` }, text); };
+
+// lists: what `files` said of every folder that is open, by the folder's path within the session's folder.
+// A row's depth goes to the style sheet as --d, which indents it: the rows themselves all span the tree.
+// A file is a button, so that the keyboard can reach it and open it as it can a folder.
+function renderFiles(t, lists) {
+  const box = t.p.tree, top = box.scrollTop, root = lists.get(''), open = new Set(), where = root.root || '';
+  // The row the keyboard is on is drawn anew like the rest, and gets the keyboard back.
+  const at = box.contains(document.activeElement) ? document.activeElement.dataset.path : undefined;
+  const rows = (dir, depth) => {
+    const l = lists.get(dir), style = `--d:${depth}`;
+    if (l.error) return h('div.entry.loss', { style }, l.error);
+    return [l.rows.map(e => {
+      const rel = dir ? `${dir}/${e.name}` : e.name, isOpen = lists.has(rel);
+      if (!e.dir) return h('button', { className: `entry${rel === t.file ? ' active' : ''}`, style, title: rel, 'data-path': rel, onclick: () => showFile(t, rel) }, fileMark(e.name), e.name);
+      if (isOpen) open.add(rel);
+      const el = h('details', { style, open: isOpen, ontoggle: () => {
+        if (el.open === t.openDirs.has(rel)) return;   // it was drawn open: nobody clicked
+        if (el.open) t.openDirs.add(rel);
+        else t.openDirs = new Set([...t.openDirs].filter(d => d !== rel && !d.startsWith(`${rel}/`)));   // with the folders open inside it
+        loadFiles(t);
+      } }, h('summary.entry', { title: rel, 'data-path': rel }, e.name), isOpen && h('div.kids', rows(rel, depth + 1)));
+      return el;
+    }), l.more > 0 && h('div.entry.hint', { style }, `and ${l.more} more`)];
+  };
+  box.replaceChildren(h('div', rows('', 0)));
+  box.scrollTop = top;
+  if (!root.error) t.openDirs = open;   // without the folders that are gone from the disk
+  t.p.filesRoot.textContent = where.split(/[\\/]/).pop() || t.inst.label;
+  t.p.filesRoot.title = t.inst.box ? `${t.inst.box.name}: ${where}` : where;
+  const back = at !== undefined && [...box.querySelectorAll('[data-path]')].find(el => el.dataset.path === at);
+  if (back) back.focus();
+}
+
 // What removing a worktree would throw away, in words ('' = nothing). w: a row from the main process.
 // The same for a container (w.box): there, a commit is safe once it is pushed, and one that is stopped without
 // a record of what it held (w.changed is not known) is taken to hold something.
@@ -1074,6 +1183,7 @@ async function tackle(picked) {
   ], 'Start', v => api.call('dispatch', { ...v, box, issues: picked.map(i => ({ number: i.number, title: i.title, url: i.url })) }));
   if (!v) return;
   savePrefs(v);
+  issuesFor = null;   // an issue that is started gets an assignee: the list is read anew when it is next shown
   show('instances');
 }
 

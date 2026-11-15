@@ -1477,7 +1477,7 @@ Live, in the test copy, with sessions that were started without a prompt and so 
 |---|---|---|
 | A fresh container counted one commit as not pushed. | See the table above: the clone's own branch. | It is deleted after the clone. |
 | The disk of a test copy counted the volumes of the copy in use. | Every volume whose name begins with the app's was taken for a shared one. | A container's own volume is told from a shared one by its name's end. |
-| A helper that escapes file names escaped nothing, and the asserts said "ok". | It had been written through a shell that halved its backslashes, and its assert had not been written at all, because the same script stopped before it. | Written again with the editor; the assert is in. Section 17 has the rule. |
+| A helper that escapes file names escaped nothing, and the asserts said "ok". | It had been written through a shell that halved its backslashes, and its assert had not been written at all, because the same script stopped before it. | Written again with the editor; the assert is in. Section 18 has the rule. |
 
 ### After 0.7.0: a folder's tools
 
@@ -1713,8 +1713,135 @@ settings in the clone, and `git status` there empty. `box-check.js` passed. Not 
 app. On this Mac neither GitHub nor Claude Code was signed in in the volumes, and the card asks for GitHub
 first. claude-context running inside a container.
 
-## 16. Still open
+## 16. The eleventh round: a Files tab, and issues assigned to their session
 
+On 15 November, after 0.7.5, on the owner's Mac. Two requests, the second while the first was being built:
+
+> I want besides the terminal and the Diff tabs to also have a Files folder that displays the contents of the
+> lianta-core folder that claude code session is running in. This should look similar to the VS Code file tree
+> explorer.
+
+> Also, when a GitHub issue is started from claudinho, it should also automatically assign the issue to the
+> github account that's logged in the session.
+
+### How each was read, and why
+
+| Decision | Why |
+|---|---|
+| A third tab in the detail view, **Files**: the session's folder as a tree. It lists, and a click on a file opens nothing. | The contents of the folder were asked for. What is inside a file is a view of its own, with its own questions (how large a file, which kinds), and was not asked. |
+| The folder is the session's worktree, else the folder it was started in; in a container, the clone. Not `inst.cwd`. | `inst.cwd` is what a hook or the status line last reported as the session's folder: the app takes it from both, and it can be a folder inside the worktree that the session has changed into. The root of a tree should not move with the session. The Diff tab can read `inst.cwd`, since git finds its repository from any folder inside it. Whether Claude Code's hooks do report another folder after a `cd` was not tried. |
+| One folder is read per call. The window keeps which folders are open and reads all of them anew whenever something may have changed: the tab is shown, a folder is opened or closed, the session's turn ends, Refresh is pressed. Where nothing differs, nothing is drawn. | Like VS Code, which reads a folder when it is opened: `node_modules` costs nothing until somebody looks into it. With every read a read of everything open, one way of drawing serves a click, a refresh and the end of a turn, and the tree is never half old. On this computer a folder is one `readdir`. |
+| It does not follow a session at work. | As the Diff tab. The hook server hears of every tool call that has run, which would be the moment to read again; left until it is missed. |
+| In a container: `find <folder> -mindepth 1 -maxdepth 1 -printf '%y%f\0'`, one `docker exec` for each folder that is open. | The image has GNU find. A zero byte ends each name, because a name may hold a line break. |
+| The order, and what is left out, are VS Code's: folders before files, each by name, with digits read as numbers and capitals among the small letters; no `.git`, `.svn`, `.hg`, `.jj`, `.DS_Store` or `Thumbs.db`. Files that git ignores are listed. | "Similar to VS Code". Those six are the default of its `files.exclude` setting, and "Folders are displayed before files" is how its source describes the default order. It dims an ignored file and colours a changed one, which takes git; left out. |
+| A link is listed as a file and not followed. The main process refuses a path that leaves the session's folder, by `..` or through a link. | The window is not to be able to read names from anywhere on the disk, whatever it is made to ask. The `.claude` editor's scan has the same rule and never follows a link out of the folder. |
+| The look: rows of 22 px that span the tab, the system's own font at 13 px, 8 px of indent a level, an arrow for a folder and no icon, a mark in a colour for a file's kind, a line down from an open folder while the mouse is over the tree, the folder's name in capitals in the bar. | VS Code's defaults: `workbench.tree.indent` is 8, `workbench.tree.renderIndentGuides` is `onHover`, and the icons it comes with (Seti) define none for a folder. The marks are letters and signs in the colour Seti gives that kind of file, not its icons: those are a font, which would be a dependency taken on for looks. |
+| A folder that holds one folder and nothing else is a row of its own. | VS Code joins the two into one row by default (`explorer.compactFolders`). To know that of a folder, what is in it has to be read before it is opened. Not built. |
+| Folders are `<details>` elements. | The platform's own: a click, Enter and Space open and close one, and Tab goes to the next. VS Code's arrow keys were not built. |
+| At most 10,000 entries of a folder, and a row that says how many more there are. | All rows are drawn at once. Measured: 34 ms for 2,000 rows, with their layout. |
+| An issue is assigned with `gh issue edit <its address> --add-assignee @me` when its session starts. | `gh`'s help for that command: "`@me`: assign or unassign yourself". Named by its address, the issue needs no folder to tell `gh` the repository. |
+| "The account that's logged in the session" is the one `gh` is signed in to where the session works: this computer for a worktree, the containers' login for a container. A container's issue is assigned from inside it, once GitHub has a login there. | The owner's words. The two can differ: the containers' GitHub login is made inside a container, and follows nothing on this computer. |
+| When the session starts: not while the issue waits in the queue, and not again at a resume. | An issue that waits for its blockers is not being worked on yet. At a resume the owner may have changed the assignment since. A session whose container is gone starts again in a new one, and is then assigned again, which changes nothing where it still is. |
+| Nothing waits for the assignment. A refusal goes to the bell, as a notification of a kind of its own. | An account that may not assign in a repository can still work in it. The terminal is Claude Code's, so the reason cannot be written there. |
+| The Issues tab reads its list again the next time it is shown after a start. | Its Assignees column would otherwise say for good that nobody is assigned. Not at once: a list that is read anew loses what was selected in it. |
+| No setting turns the assignment off. | None was asked for. |
+
+### How it was verified
+
+`test.js` has asserts for the order of a folder's entries, for what is left out, for the limit, and for what
+find prints, with a link and a name that holds a line break in it.
+
+The tab, in a test copy on a scratch repository: folders five deep, an empty one, one with 2,100 files, files
+of a dozen kinds, a name with spaces and one with a line break, a link into the folder and one out of it,
+`.git` and `.DS_Store`. Its sessions were asked nothing and sat at Claude Code's question whether the folder
+is trusted.
+
+| What was done | What happened |
+|---|---|
+| The Files tab was opened. | Five folders, then thirteen files, in VS Code's order. No `.git`, no `.DS_Store`. Both links as files. The bar read FILES-TEST. |
+| Folders were opened, one inside the other, and a screenshot taken, one more with the mouse over a row. | Each with its entries below it, `f2.txt`, `F3.txt`, `f10.txt` in that order, the marks in their colours. The row under the mouse lit up from edge to edge, with the lines down from the open folders. |
+| The folder with 2,100 files, with the limit still at 2,000. | 2,000 rows and "and 100 more". 4 ms to list, 34 ms to draw. The limit was raised to 10,000 after that. |
+| A folder was closed with folders open inside it, and opened again. | The ones inside were closed. |
+| The tree was read again with nothing changed. | Its rows were the very nodes they had been. |
+| The call was asked for `..`, `../..`, `src/../..`, `/etc` and the link out of the folder. | Refused, each one. The link into the folder was listed, which the window never asks for. |
+| A folder was opened with the keyboard on it. | The keyboard was on the same folder afterwards. |
+| A second session, and back and forth in the list of sessions. | Each came up on its Files tab, with the folders that were open in it. Back on the wall, the card showed its terminal. |
+| A file was made on the disk, and the window was handed a state in which the session's turn had ended. | The file was in the tree. Removed, it was gone after Refresh. |
+
+The listing inside a container, without a session: the scratch folder mounted into a throwaway container of
+the app's image, under a name that is not a slot's, and read through `containers.js` with the command the app
+sends. Seven folders, each held against the same folder read on this computer: the same rows every time, the
+2,100 files and the name with the line break among them.
+
+The assignment, with a stand-in for `gh` first on the `PATH` of the main process, which was reached with
+`--inspect`, and issues handed to `dispatch`:
+
+| The issue | What `gh` was asked | What the app showed |
+|---|---|---|
+| One with an address. | For the blockers, then `issue edit <the address> --add-assignee @me`, once, in the folder. | Nothing. |
+| One that the stand-in refuses. | The same. | A notification: "could not be assigned issue #2", and the stand-in's reason. |
+| One without an address, in a folder without a GitHub remote. | For the blockers alone. | Nothing. |
+
+In an untrusted folder Claude Code refuses to make a worktree, as the first session's terminal said. No
+worktree was made for any of the three, so none of them reached its prompt. Inside the throwaway container a
+stand-in `gh` received the same five words through `containers.js`, and its refusal came back as the reason.
+
+Not tried: the Files tab of a real session in a container, and an issue sent to a container. Both take a
+container session of the test copy, for which GitHub's login in the containers is the owner's to make. A real
+assignment on GitHub. The tab on Windows.
+
+### Then: a click shows the file, to read
+
+Asked whether a click on a file should show what is in it, the owner answered:
+
+> Yes, add that. It should be read-only. Actually make the tab name "Files (Read-only)"
+
+| Decision | Why |
+|---|---|
+| The file is shown beside the tree: the tree keeps 270 px on the left, the file has the rest. One file at a time. | An editor's layout, and the tree stays in reach. |
+| Read-only by what the tab is made of: the lines are text of the page, with no field to type into, and the main process has two calls for the tab, one that lists and one that reads. The tab is called "Files (Read-only)". | The owner's words. Nothing has to be switched off that way: there is no way to write. |
+| The numbers of the lines and the lines are two blocks of text side by side. A long line is not broken: the view scrolls sideways, and the numbers stay in place. | A megabyte in 10,927 lines was read and drawn in 72 ms. A row per line, as the Diff tab has them, was measured there at 0.15 ms a row. An editor does not break lines either. |
+| The colours are the Diff tab's, from its own call: the file is handed over as one stretch of lines that did not change. Not for a file of more than 256 KB. | No new code for colours. Files of 100 KB and 142 KB took 83 ms and 68 ms to colour. A megabyte took 1.3 s, in which the main process serves no terminal. |
+| A file is read up to 1 MB; a larger one is named, with a note. A zero byte among the first 8000 makes a file binary, which is not shown; an empty one says so. | The limit the local diff has for a new file, and git's rule for binary. A picture is a binary file here: showing it was not asked. |
+| A link that leads out of the session's folder shows nothing. In a container the path is resolved in the container (`realpath`) and held against the clone there, for reading and for listing. | A container holds Claude Code's login and GitHub's for all containers. A repository can carry a link to either, and one click would put it on the screen. |
+| A file's row is a button. | The keyboard reaches it and Enter opens it, with nothing written for that. |
+| The file on show is read with every read of the tree, and drawn again only where it differs. | A session changes the very file one is reading. The place in it stays. |
+
+`test.js` has asserts for a file's lines and for the notes. In the test copy, with files of real size in the
+scratch repository (this repository's `main.js` and its lock file, a megabyte of JavaScript, a file of 2 MB,
+one of 480 KB that is a single line, a binary one, an empty one, one with Windows line ends, a link to a file
+in the folder and a link to one outside it):
+
+| What was done | What happened |
+|---|---|
+| The tab's name was read. | "Files (Read-only)". |
+| A file of Python was clicked. | Its six lines beside the numbers 1 to 6, coloured, and its row marked in the tree. Nowhere in the tab a field to type into. |
+| Each other kind was clicked. | The 2 MB: "larger than 1 MB, and is not shown here". The binary and the empty one: their notes. The link to a folder: "This is not a file." The two links that lead out: refused. The link to a file inside: that file. Windows line ends: two lines and no stray character. |
+| The call was asked for `..`, a file beside the folder, `/etc/hosts`, and a path through the link that leads out. | Refused, each one. |
+| The megabyte, and the single long line. | 72 ms and 30 ms to read and draw, uncoloured. With colours, before the limit was set: 1.9 s and 1.6 s. |
+| `main.js` and the lock file. | 160 ms and 129 ms, colours included. |
+| Read again with nothing changed; a folder opened; the other tabs and back. | The same nodes, the same place in the file, the row still marked. |
+| A line was added to the file on the disk, and the turn ended. | The line was there, coloured, and the place in the file was kept. |
+| A second session. | Its tab had no file on show; the first still had its own. |
+
+In a throwaway container, with the shell commands as `main.js` has them, taken from its text: six folders
+listed and thirteen paths read (the files above, a folder, the links that stay inside), each with the same
+result as on this computer, the megabyte among them. The two links that lead out, a path through one of them,
+and a file that is not there were refused, for reading and for listing.
+
+| Symptom | Cause | What changed |
+|---|---|---|
+| The file that is one long line: "Maximum call stack size exceeded" when its colours arrived, and the file stayed uncoloured. | Its 240,000 runs of colour were handed to one call as that call's arguments. | The runs are appended one at a time. The Diff tab hands a line's runs over the same way; a line that long would fail there too. Left as it is, and listed below. |
+
+## 17. Still open
+
+- The Files tab is for reading and does not follow a session at work. It shows one file at a time, no file
+  over 1 MB, no picture, and no colours over 256 KB. It has no joined rows, no marks from git and no arrow
+  keys (section 16). What section 16 lists as not tried.
+- The Diff tab hands all runs of colour of one line to one call. A line of some hundred thousand runs, in a
+  minified file, would fail there and stay uncoloured, as it did in the Files tab at first (section 16).
+  Not tried in the Diff tab.
+- An issue stays assigned when its session is closed without a pull request.
 - Sessions in containers: what section 15 lists as not verified or not tried. Docker Engine alone on Linux
   is not served. The processors of a container are not a setting. A container's ports are fixed when it is
   made. A kept container can be given a new session, not its old conversation. A Dev Container file is not
@@ -1775,8 +1902,20 @@ first. claude-context running inside a container.
 - A flag placed before the `.` on the command line makes the app open its own source folder (see the table
   above). The app could find the folder argument more carefully.
 
-## 17. Continuing the work
+## 18. Continuing the work
 
+- **The Files tab** is tested in a scratch repository with every kind of entry, with sessions that are asked
+  nothing, and with files of real size among them: a megabyte, one over the limit, and one that is a single
+  long line, which is what broke the colours. What the two calls refuse is asked of them directly:
+  `api.call('files', <id>, '..')` and `api.call('fileRead', <id>, …)` in the window. What they ask of a
+  container is checked without a session, in a throwaway container of the app's image under a name that is not
+  a slot's: the shell commands are taken from the text of `main.js` and run through `containers.js`. A test
+  that sets a card's open folders by hand finds one of them open again: a folder that is drawn open says so a
+  moment later, as if it had been clicked.
+- **An issue that is sent off is assigned on GitHub**, which is a write. A test hands `dispatch` issues without
+  a `url` in a folder without a GitHub remote, which are not assigned at all, or puts a stand-in `gh` first on
+  the `PATH` of the main process through `--inspect`, once the app runs: at its start the app replaces its
+  `PATH` with the one its login shell prints.
 - **Sessions in containers** are tested live in the clone of the test repository, with the test copy started
   under `CLAUDINHO_BOX=<a name>` so that its containers have names of their own. The two volumes with the
   logins are shared with the copy in use, so the test sessions are logged in; those volumes are never removed
@@ -1858,10 +1997,21 @@ first. claude-context running inside a container.
 - This repository has no `docs/PROCESS.md` on purpose. The app, like the owner's helper, tells an agent to
   follow that file when it exists, and this record is a history, not a process to follow.
 
-## 18. Sources
+## 19. Sources
 
 The owner's rule for the session was to name the documentation before building on it. These are the pages the
 work relied on.
+
+**The Files tab, and assigning an issue**
+
+- <https://cli.github.com/manual/gh_issue_edit>, as `gh issue edit --help` of gh 2.103.3 prints it
+- VS Code's own source, for what its explorer does by default:
+  `src/vs/workbench/contrib/files/browser/files.contribution.ts` (`files.exclude`, `explorer.sortOrder`,
+  `explorer.compactFolders`), `src/vs/platform/list/browser/listService.ts` (`workbench.tree.indent`,
+  `workbench.tree.renderIndentGuides`) and `extensions/theme-seti/icons/vs-seti-icon-theme.json` (no icon for a
+  folder, and the colour of a file without a kind), all under <https://github.com/microsoft/vscode>
+- <https://github.com/jesseweed/seti-ui>: `styles/ui-variables.less` for the colours and
+  `styles/components/icons/mapping.less` for which kind of file gets which
 
 **Signing and the app's own update**
 

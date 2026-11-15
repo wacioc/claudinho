@@ -40,7 +40,7 @@ header .spacer { flex: 1 0 0; }
 .note:hover { background: var(--line); }
 .note.fresh { border-left-color: #e5484d; }
 .note .mark { flex: none; width: 16px; text-align: center; font-weight: bold; color: var(--dim); }
-.note.input .mark { color: var(--warn); } .note.done .mark, .note.update .mark, .note.app .mark { color: var(--ok); } .note.auto .mark, .note.merge .mark { color: var(--busy); }
+.note.input .mark, .note.issue .mark { color: var(--warn); } .note.done .mark, .note.update .mark, .note.app .mark { color: var(--ok); } .note.auto .mark, .note.merge .mark { color: var(--busy); }
 .tab, .tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--dim); padding: 4px 8px; }
 .tab.active, .tabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
@@ -167,6 +167,36 @@ main > section { height: 100%; display: flex; flex-direction: column; min-height
 .diff-table tr.del td.code { background: rgba(248, 81, 73, .15); } .diff-table tr.del td.ln { background: rgba(248, 81, 73, .3); color: var(--fg); }
 .diff-table tr.hunk td { background: rgba(56, 139, 253, .1); color: var(--dim); } .diff-table tr.hunk td.ln { background: rgba(56, 139, 253, .4); }
 .diff-table tr.eof td.code { color: var(--dim); font-style: italic; }
+
+/* the Files tab: the session's folder as a tree, the way VS Code's explorer draws one, and beside it the file
+   that was clicked, to read. Its bar is the Diff tab's. */
+.files { min-height: 0; display: flex; flex-direction: column; }
+.files-panes { flex: 1; min-height: 0; display: flex; }
+.files-tree { flex: none; width: 270px; overflow: auto; border-right: 1px solid var(--line); user-select: none; }
+.files-root { font-size: 11px; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; }
+/* a row spans the tree, so that all of it lights up under the mouse; its depth (--d) only moves what is in it.
+   A file's row is a button, and looks like the others */
+.files .entry { display: block; width: 100%; height: 22px; padding: 0 12px 0 calc(var(--d) * 8px + 8px); border: 0; border-radius: 0; background: none; font: 13px/22px system-ui, sans-serif; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files .entry:hover { background: var(--line); }
+.files .entry.active { background: #1c2a3d; }
+.files .entry:focus-visible { outline-offset: -1px; }
+.files summary { cursor: pointer; }
+/* a folder's arrow: to the right when closed, down when open */
+.files summary::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 7px 2px 3px; border: solid var(--dim); border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); }
+.files details[open] > summary::before { margin-bottom: 3px; transform: rotate(45deg); }
+/* a file's mark stands where a folder's name begins, as in VS Code, whose folders have an arrow and no icon */
+.files .entry:not(summary) { padding-left: calc(var(--d) * 8px + 24px); }
+.files .entry i { display: inline-block; width: 16px; margin-right: 6px; font: bold 9px/1 var(--mono); text-align: center; vertical-align: 1px; }
+/* the line down from an open folder's arrow, beside what is in it: there while the mouse is over the tree */
+.files .kids { position: relative; }
+.files-tree:hover .kids::before { content: ""; position: absolute; top: 0; bottom: 0; left: calc(var(--d) * 8px + 14px); border-left: 1px solid var(--line); }
+/* the file on show: its name, which stays in view, then the numbers of its lines beside the lines. A long
+   line is not broken, as in an editor: the view scrolls sideways, and the numbers stay where they are */
+.files-view { flex: 1; min-width: 0; overflow: auto; }
+.files-path { position: sticky; top: 0; left: 0; z-index: 2; padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--line); color: var(--dim); overflow-wrap: anywhere; }
+.files-code { display: flex; width: max-content; min-width: 100%; }
+.files-code pre { margin: 0; padding: 6px 12px; font: inherit; line-height: 20px; tab-size: 8; cursor: text; }
+.files-code .nums { position: sticky; left: 0; z-index: 1; flex: none; background: var(--panel); color: var(--dim); text-align: right; user-select: none; cursor: default; }
 
 /* ---- worktrees, pull requests ---- */
 #worktree-list, #box-list, #prs { flex: 1; min-height: 0; overflow: auto; }

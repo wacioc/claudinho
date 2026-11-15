@@ -334,6 +334,7 @@ async function startBox(inst, { model, effort, prompt, resume }) {
           inst.proc.onExit(() => { inst.proc = null; resolve(); });
         });
       }
+      if (inst.issue) assignIssue(inst);   // to the account that is signed in here, which the session works as
       const identity = [];
       for (const key of ['user.name', 'user.email']) { const v = await git(['config', key], inst.root).catch(() => ''); if (v) identity.push([key, v]); }
       await boxes.fill(b.name, { root: inst.root, work: b.work, branch: inst.name, origin: `https://github.com/${github.owner}/${github.name}.git`, identity, configDir: configDir(), say });
@@ -1059,6 +1060,20 @@ setInterval(checkSelf, 3600 * 1000);
 
 // ---------- issue dispatch pool ----------
 
+// An issue that a session is sent after is assigned to the GitHub account of that session: the one `gh` is
+// signed in to where the session works, which is this computer, or its container (see startBox). That account
+// is added to whoever is assigned already. The issue is named by its address, so `gh` needs no folder to tell
+// the repository by. Nothing waits for it, and the session starts either way: what GitHub refuses, an account
+// that may not assign in that repository for one, goes to the bell.
+// https://cli.github.com/manual/gh_issue_edit
+function assignIssue(inst) {
+  const url = issueLink(inst);
+  if (!url) return;   // the folder has no repository on GitHub
+  const argv = ['gh', 'issue', 'edit', url, '--add-assignee', '@me'];
+  (inst.box ? boxes.inBox(inst.box.name, argv, { timeout: GH_WAIT }) : run(argv[0], argv.slice(1), inst.root, GH_WAIT))
+    .catch(e => notify('issue', `could not be assigned issue #${inst.issue}: ${e.message.split('\n')[0]}`, inst));
+}
+
 let pumping = false, pumpAgain = false;
 async function pump() {
   if (pumping) { pumpAgain = true; return; }
@@ -1079,11 +1094,12 @@ async function pump() {
       if (!job.waitingOn.length && job.box && !await freeBox()) job.waitingOn = ['box'];   // every container is taken
       if (job.waitingOn.length || !queue.includes(job)) continue;
       queue.splice(queue.indexOf(job), 1);
-      spawnInstance({
+      const id = spawnInstance({
         cwd: job.root, worktree: lib.worktreeName(job.number, job.title), box: job.box || null, model: job.model, effort: job.effort, level: job.level,
         autonomy: job.autonomy, mayMerge: job.autonomy === 'semi', issue: job.number, issueUrl: job.url, pooled: job.pooled, group: job.group,
         prompt: lib.issuePrompt(job.template, job, job.autonomy, saved.settings.mergeMethod),
       });
+      if (!job.box) assignIssue(instances.get(id));   // one in a container is assigned from there, once it has one
     }
   } finally {
     pumping = false; push();
@@ -1128,6 +1144,33 @@ async function openRepo(dir) {
 // ---------- calls from the renderer ----------
 
 const configFile = rel => (rel.startsWith('~/') ? lib.homePath(configDir(), rel.slice(2)) : lib.configPath(repo.path, rel));
+
+// Where the Files tab may look: at a path within the session's folder ('' is the folder itself, '/' stands
+// between names), and nowhere else. A path that leaves that folder, by `..` or through a link, is refused.
+// root: the session's folder. Its worktree, else the folder it was started in; in a container, its clone.
+// That one stays where it is, where `inst.cwd` is the folder a hook or the status line reported last.
+// at: the path that was asked for, on this computer or inside the container.
+const OUTSIDE = 'Not in the folder of this session.';
+function inFolder(id, rel) {
+  const inst = instances.get(id);
+  if (!inst) throw new Error('This session is gone.');
+  if (inst.box) {
+    if (!inst.box.name) throw new Error('Its container is still being made.');
+    const root = inst.box.work, at = path.posix.join(root, String(rel));
+    if (!`${at}/`.startsWith(`${root}/`)) throw new Error(OUTSIDE);
+    return { inst, root, at };   // where a link in it leads, only the container can say: see inClone
+  }
+  const root = inst.wt || inst.root, at = path.resolve(root, String(rel));
+  if (!lib.isInside(lib.realPath(root), lib.realPath(at))) throw new Error(OUTSIDE);
+  return { inst, root, at };
+}
+// A shell command on such a path inside a container. There it is "$p": the path as the container resolves it,
+// links and all, which has to lie in the clone as it has to on this computer.
+const inClone = (inst, at, command, encoding = 'utf8') =>
+  boxes.inBox(inst.box.name, ['sh', '-c', `p=$(realpath -e -- "$1") && r=$(realpath -e -- "$2") || exit 3; case "$p/" in "$r"/*) ;; *) exit 4 ;; esac; ${command}`, 'sh', at, inst.box.work], { encoding, timeout: 30000 })
+    .catch(e => { throw e.code === 4 ? new Error(OUTSIDE) : e; });
+// How large a file the Files tab reads to show it.
+const VIEW_BYTES = 1024 * 1024;
 
 const rpc = {
   state: snapshot,
@@ -1258,6 +1301,29 @@ const rpc = {
   // work is done here, where a whole pull request in one go would hold up every terminal. Measured: 8 µs a
   // line, 25 ms for the slowest of 700 files.
   diffColours: (file, hunks) => lib.colourHunks(String(file), hunks),
+  // What the Files tab lists: one folder of the session's own (see inFolder). Names and kinds are read, and
+  // nothing else. A link is listed as a file and not followed.
+  // ponytail: one `docker exec` for each folder of a container that is open in the tab, a tenth of a second
+  // apiece. Have one `find` list them all if a tree with many folders open drags.
+  async files(id, rel = '') {
+    const { inst, root, at } = inFolder(id, rel);
+    if (inst.box) return { root, ...lib.dirRows(lib.findEntries(await inClone(inst, at, 'exec find "$p" -mindepth 1 -maxdepth 1 -printf \'%y%f\\0\''))) };
+    const entries = await fs.promises.readdir(at, { withFileTypes: true });
+    return { root, ...lib.dirRows(entries.map(e => ({ name: e.name, dir: e.isDirectory() }))) };
+  },
+  // What the Files tab shows of one file of that folder: its lines, or a note where there are none to show
+  // (lib.fileLines). The file is read and nothing is written: the tab has no way to change one.
+  async fileRead(id, rel) {
+    const { inst, at } = inFolder(id, rel);
+    const large = { note: `This file is larger than ${VIEW_BYTES / 2 ** 20} MB, and is not shown here.` }, other = { note: 'This is not a file.' };
+    if (inst.box) {
+      // 5 and 6: the shell's own words for "not a file" and "too large"
+      const read = `[ -f "$p" ] || exit 5; [ "$(stat -c %s "$p")" -le ${VIEW_BYTES} ] || exit 6; exec cat "$p"`;
+      return inClone(inst, at, read, 'buffer').then(lib.fileLines, e => { if (e.code === 5) return other; if (e.code === 6) return large; throw e; });
+    }
+    const st = await fs.promises.stat(at);
+    return !st.isFile() ? other : st.size > VIEW_BYTES ? large : lib.fileLines(await fs.promises.readFile(at));
+  },
   answer(id, requestId, choice) {
     const inst = instances.get(id);
     const p = inst && inst.pending.find(x => x.view.id === requestId);

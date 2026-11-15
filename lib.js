@@ -341,6 +341,32 @@ function colourHunks(file, hunks) {
   return out;
 }
 
+// ---------- the Files tab ----------
+
+// One folder's entries in the order of VS Code's explorer: folders first, then files, each by name, with digits
+// read as numbers ("f2" before "f10") and capitals among the small letters. What that explorer leaves out by
+// default is left out here (the default of its `files.exclude` setting, in files.contribution.ts of its source).
+// entries: [{ name, dir }]. more: how many the folder holds beyond the ones listed.
+// ponytail: a folder's first 10,000 entries, all drawn at once, which took 17 µs a row when measured. VS Code
+// draws only the rows in view: do that if a folder with more is to be read to its end.
+const FILES_HIDDEN = new Set(['.git', '.svn', '.hg', '.jj', '.DS_Store', 'Thumbs.db']);
+const nameOrder = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+function dirRows(entries, max = 10000) {
+  const rows = entries.filter(e => !FILES_HIDDEN.has(e.name))
+    .sort((a, b) => b.dir - a.dir || nameOrder.compare(a.name, b.name) || (a.name < b.name ? -1 : 1));
+  return { rows: rows.slice(0, max), more: Math.max(0, rows.length - max) };
+}
+// A folder inside a container, as GNU find prints it with -printf '%y%f\0': for each entry a letter for its
+// kind, its name, and a zero byte behind, since a name may hold a line break.
+const findEntries = text => String(text).split('\0').filter(Boolean).map(s => ({ name: s.slice(1), dir: s[0] === 'd' }));
+// What the tab shows of a file that is clicked: its lines, or a note where there are none to show. buf: what
+// the file holds. A zero byte among the first 8000 makes it binary, as for git and for the Diff tab.
+function fileLines(buf) {
+  if (!buf.length) return { note: 'Empty file.' };
+  if (buf.subarray(0, 8000).includes(0)) return { note: 'Binary file not shown.' };
+  return { lines: buf.toString('utf8').replace(/\r?\n$/, '').split(/\r?\n/) };
+}
+
 // ---------- auto-merge: the review of a turn that ended ----------
 
 // With auto-merge on, the app merges a session's pull request once the session says it is ready. A Claude run
@@ -998,7 +1024,7 @@ function homePath(home, rel) {
 module.exports = {
   worktreeName, openBlockers, defaultTemplate, renderTemplate, AUTONOMY, autonomyOf, mergeInstruction, mergeNote, toldToMerge, issuePrompt, prAction, backgroundWork, ownPrompt,
   byNumber, issuesQuery, mapIssue, issueUrl, parseGitHub,
-  PR_FIELDS, checksOf, mapPr, parsePatch, mapDiffFile, mapDiff, unquotePath, patchFiles, untrackedRow, colouredLines, colourHunks, groupName,
+  PR_FIELDS, checksOf, mapPr, parsePatch, mapDiffFile, mapDiff, unquotePath, patchFiles, untrackedRow, colouredLines, colourHunks, dirRows, findEntries, fileLines, groupName,
   REVIEW_SYSTEM, REVIEW_SCHEMA, reviewPrompt, reviewVerdict, waitForChecks,
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,
   auditEntries, auditPick, toolKey, parseVersion, newerVersion,

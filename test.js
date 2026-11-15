@@ -183,6 +183,22 @@ assert.deepStrictEqual([coloured[1][0], coloured[1].find(r => r[1] === 'let'), c
 // a file whose name tells no language, and plain text, get no colours
 assert.deepStrictEqual([lib.colourHunks('LICENSE', []), lib.colourHunks('notes.txt', []), lib.colourHunks('Dockerfile', []), lib.colourHunks('page.vue', [])], [null, null, [], []]);
 
+// the Files tab: a folder's entries in the order of VS Code's explorer. Folders first, digits as numbers,
+// capitals among the small letters, without what VS Code leaves out; and no more of them than asked for
+const entry = (name, dir = false) => ({ name, dir });
+assert.deepStrictEqual(lib.dirRows([entry('b.js'), entry('Zed.md'), entry('.git', true), entry('f10'), entry('src', true), entry('f2'), entry('.DS_Store'), entry('.github', true), entry('a.js'), entry('A.js'), entry('.jj', true), entry('Thumbs.db')]),
+  { rows: [entry('.github', true), entry('src', true), entry('A.js'), entry('a.js'), entry('b.js'), entry('f2'), entry('f10'), entry('Zed.md')], more: 0 });
+assert.deepStrictEqual(lib.dirRows([entry('c'), entry('b'), entry('a')], 2), { rows: [entry('a'), entry('b')], more: 1 });
+// the same folder as find prints it inside a container: a link is no folder, and a name may hold a line break
+assert.deepStrictEqual(lib.findEntries('dsrc\0fa\nb.txt\0lnode_modules\0'), [entry('src', true), entry('a\nb.txt'), entry('node_modules')]);
+assert.deepStrictEqual(lib.findEntries(''), []);
+// a file that is clicked there: its lines without the break at its end, whichever kind of break it has; and a
+// note for a file with nothing to show
+assert.deepStrictEqual(lib.fileLines(Buffer.from('one\n\ntwo\n')), { lines: ['one', '', 'two'] });
+assert.deepStrictEqual(lib.fileLines(Buffer.from('one\r\ntwo')), { lines: ['one', 'two'] });
+assert.deepStrictEqual(lib.fileLines(Buffer.from('\n')), { lines: [''] });
+assert.deepStrictEqual([lib.fileLines(Buffer.alloc(0)), lib.fileLines(Buffer.from([80, 78, 71, 0, 1]))], [{ note: 'Empty file.' }, { note: 'Binary file not shown.' }]);
+
 // groups: a name, tidied; nothing left means no group
 assert.strictEqual(lib.groupName('  payments   batch \n'), 'payments batch');
 assert.strictEqual(lib.groupName(''), null);
