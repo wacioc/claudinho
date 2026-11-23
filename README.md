@@ -119,7 +119,9 @@ With Docker chosen:
 - A project's own set-up is not the image's: `uv sync`, `npm ci`, `flutter pub get`. It is the repository's,
   as for a worktree: its `SessionStart` hook, or the session itself. Sessions may use `sudo`, and what npm,
   pip, uv and Playwright download is kept for all containers: a browser that one session fetched
-  (`playwright install chromium`) is there for every other, and the command finds nothing to do.
+  (`playwright install chromium`) is there for every other, and the command finds nothing to do. A release
+  can empty those caches, for every container made after the update, when something broken got into them.
+  Its entry in the changelog says so.
 - Logins are made inside a container, once, and kept in Docker volumes that all containers share. Where GitHub
   has none yet, the card runs `gh auth login` before anything else. Claude Code's login there is to be the
   account this computer is signed in to: where it has none, or another one, the card runs `claude auth login`
@@ -655,7 +657,8 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   looks is a volume all containers share. A build gets there when the image is built for a folder that names
   Playwright among its tools, or when the first session that needs it fetches it. The version named in
   `mise.toml` has to be kept the same as the lockfile's by hand. Builds of versions that nothing uses any more
-  stay in that volume. Only Chromium is fetched: the image has no libraries for Firefox or WebKit.
+  stay in that volume until a release empties the caches. Only Chromium is fetched: the image has no
+  libraries for Firefox or WebKit.
 - A new version of Claude Code on this computer makes the next container wait for the image to be built
   again, about a minute. Sessions in containers that are already running keep the version they started with.
 - Quitting the app stops the containers of its sessions, and a resume does not start again what those

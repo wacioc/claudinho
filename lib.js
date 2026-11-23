@@ -720,6 +720,15 @@ function boxDisk(text, prefix = 'claudinho') {
   };
 }
 
+// The volumes of the caches all containers share that a release has left behind (see CACHE in containers.js),
+// out of `docker volume ls --format {{.Name}}`: the names from before they had a number, and those of a lower
+// number than `cache`. Never a higher one, which a newer test copy may be using. The caches are named one by
+// one, so that nothing else of ours goes, the logins least of all.
+const staleCaches = (text, cache) => text.split(/\r?\n/).map(s => s.trim()).filter(name => {
+  const m = /^claudinho-(?:npm-cache|pip-cache|uv-cache|playwright)(?:-(\d+))?$/.exec(name);
+  return m && (m[1] === undefined || Number(m[1]) < cache);
+});
+
 // ---------- CPU and memory of a process tree ----------
 
 const SAMPLE_SECONDS = 2;
@@ -1028,7 +1037,7 @@ module.exports = {
   REVIEW_SYSTEM, REVIEW_SCHEMA, reviewPrompt, reviewVerdict, waitForChecks,
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,
   auditEntries, auditPick, toolKey, parseVersion, newerVersion,
-  BOX_CPUS, BOX_MEMORY_GB, boxLimit, freeSlot, boxWork, projectDir, memoryDir, boxNote, clipText, portList, toolNames, excludeLines, parsePorts, parseBoxStats, boxDisk,
+  BOX_CPUS, BOX_MEMORY_GB, boxLimit, freeSlot, boxWork, projectDir, memoryDir, boxNote, clipText, portList, toolNames, excludeLines, parsePorts, parseBoxStats, boxDisk, staleCaches,
   childEnv, mcpServersFor, pluginsOn, marketplaceSource, isInside, realPath, samePath, parseWorktrees, labelFor, scanConfig, configPath, ROOT_FILES, HOME_FILES, HOME_DIRS, scanHome, homePath,
   SAMPLE_SECONDS, samplerCommand, cpuSeconds, parseProcs, treeOf, treeUsage, sparedPids, byName,
   WEIGHTS, MIN_SHARE, shareCpu, scopeUnit, scopeProps, scopeCommand, throttleTargets, nextDuty,
