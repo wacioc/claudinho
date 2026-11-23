@@ -251,7 +251,7 @@ const freeBox = () => Promise.all([boxes.info(), boxes.list()])
 let boxLine = Promise.resolve();
 function makeBox(inst, image, memory) {
   const made = boxLine.then(async () => {
-    const { limit } = await boxes.info();
+    const { limit } = await boxes.info(120000);
     const n = lib.freeSlot((await boxes.list()).map(r => r.n), limit);
     if (!n) throw new Error(`All ${limit} containers are taken. Close a session, or remove a container that was kept: they are on the Containers tab.`);
     return boxes.create({ n, image, root: inst.root, name: inst.name, work: inst.box.work, key: inst.box.key, dir: inst.dir, ports: lib.portList(saved.settings.boxPorts), memory, memoryGb: saved.settings.boxMemoryGb });

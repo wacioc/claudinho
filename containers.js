@@ -62,6 +62,8 @@ function docker(args, { input, timeout = 120000, encoding = 'utf8' } = {}) {
   return new Promise((resolve, reject) => {
     const child = execFile('docker', args, { timeout, encoding, maxBuffer: 64 * 1024 * 1024, windowsHide: true, env: { ...process.env, DOCKER_CLI_HINTS: 'false' } }, (err, stdout, stderr) => {
       if (!err) return resolve(stdout);
+      // Killed at `timeout`: Node's own message is then only "Command failed: <the command>".
+      if (err.killed && err.code == null) return reject(Object.assign(new Error(`Docker did not answer \`docker ${args[0]}\` within ${timeout / 1000} seconds.`), { code: err.code }));
       reject(Object.assign(new Error(String(stderr || err.message).trim().split(/\r?\n/).slice(-2).join(' ') || `docker ${args[0]} failed`), { code: err.code }));
     });
     if (input != null) { child.stdin.on('error', () => { /* it ended before reading: its exit code says why */ }); child.stdin.end(input); }
@@ -89,9 +91,11 @@ function follow(args, say) {
   });
 }
 
-// Docker itself: the processors and the memory it has, and how many containers that allows.
-async function info() {
-  const [cpus, mem, version] = (await docker(['info', '--format', '{{.NCPU}} {{.MemTotal}} {{.ServerVersion}}'], { timeout: 15000 })).trim().split(' ');
+// Docker itself: the processors and the memory it has, and how many containers that allows. 15 seconds suits
+// the status bar, which asks again soon; a session's start, which can wait, passes the longer wait of any
+// other docker command. A busy Docker can take longer than 15 seconds.
+async function info(timeout = 15000) {
+  const [cpus, mem, version] = (await docker(['info', '--format', '{{.NCPU}} {{.MemTotal}} {{.ServerVersion}}'], { timeout })).trim().split(' ');
   return { cpus: Number(cpus), mem: Number(mem), version, limit: lib.boxLimit(Number(cpus)) };
 }
 
