@@ -314,6 +314,16 @@ assert.strictEqual(lib.boxDisk(JSON.stringify({ Images: [
   { Repository: 'claudinho-slot', Tag: 'a', Size: '2.1GB', UniqueSize: '100MB', SharedSize: '2GB' },
   { Repository: 'claudinho-slot', Tag: 'b', Size: '4.5GB', UniqueSize: '2.5GB', SharedSize: '2GB' },
   { Repository: 'python', Tag: '3.13-slim', Size: '180MB', UniqueSize: '0B', SharedSize: '180MB' }] })).image, 100e6 + 2.5e9 + 2e9);
+assert.strictEqual(lib.boxDisk(JSON.stringify({ Volumes: [{ Name: 'claudinho-npm-cache-2', Size: '2GB' }] })).volumes, 2e9);   // the caches with their number
+
+// the caches a release has left behind: unnumbered or of a lower number; never a higher one, the logins, a
+// container's Docker, a test copy's, or anything else
+const volumes = ['claudinho-claude', 'claudinho-gh', 'claudinho-slot-1-docker', 'cltest-slot-2-docker', 'claudinho-npm-cache', 'claudinho-pip-cache',
+  'claudinho-uv-cache', 'claudinho-playwright', 'claudinho-npm-cache-1', 'claudinho-playwright-2', 'claudinho-pip-cache-3', 'claudinho-uv-cache-10',
+  'claudinho-npm-cache-old', 'claudinho-npm-cache-1-x', 'x-claudinho-npm-cache', 'claudinho-yarn-cache-1', 'pgdata', ''].join('\r\n');
+assert.deepStrictEqual(lib.staleCaches(volumes, 3), ['claudinho-npm-cache', 'claudinho-pip-cache', 'claudinho-uv-cache', 'claudinho-playwright', 'claudinho-npm-cache-1', 'claudinho-playwright-2']);
+assert.deepStrictEqual(lib.staleCaches(volumes, 1), ['claudinho-npm-cache', 'claudinho-pip-cache', 'claudinho-uv-cache', 'claudinho-playwright']);
+assert.deepStrictEqual(lib.staleCaches('', 1), []);
 
 // the tools a folder names, for the window: the keys of [tools], also quoted ones and those with a table of
 // their own, and the first words of a .tool-versions; nothing of other tables, of comments or of a lock file

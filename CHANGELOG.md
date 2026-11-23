@@ -10,8 +10,14 @@ the [releases page](https://github.com/wacioc/claudinho/releases).
 
 - An MCP server that a session in a container starts with `npx` has two minutes to start, where Claude Code
   gives it 30 seconds otherwise. Its first start installs it, and claude-context took longer than 30 seconds:
-  stopped halfway, the install stayed broken in every container. A folder already broken that way is not
-  mended: delete it in `~/.npm/_npx` in any container.
+  stopped halfway, the install stayed broken in every container. A folder already broken that way goes with
+  the caches, below.
+- The caches that all containers share, what npm, pip and uv downloaded and Playwright's browsers, carry a
+  number now. A release that raises it gives every container made after the update empty caches, so that
+  something broken in them is gone without anybody looking for it. The app removes the old ones when it
+  starts, each once no container uses it: a container that was kept goes on with the old caches until it is
+  removed. This version is the first and empties them once. Packages are downloaded again as they are asked
+  for, and Playwright's browser by the first session that needs it, 300 MB and more.
 
 ## 0.8.1 (2026-11-15)
 

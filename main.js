@@ -1533,6 +1533,7 @@ function createWindow() {
 app.whenReady().then(async () => {
   claudeBin = findExe('claude');
   dockerBin = findExe('docker');
+  if (dockerBin && usedDocker()) boxes.clearCaches().catch(() => { /* Docker is not running: at the next start */ });
   await startHookServer();
   createWindow();
   if (claudeBin) run(claudeBin, ['auth', 'status']).then(out => { account = JSON.parse(out); push(); }, () => {});

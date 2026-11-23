@@ -12,8 +12,9 @@
 //                                 for all containers. Both logins are made inside a container, by the owner.
 //                                 Claude Code's is to be the account this computer is signed in to (see
 //                                 signInBox in main.js).
-//   claudinho-npm-cache, -pip-cache, -uv-cache, -playwright   what npm, pip and uv downloaded, and the
-//                                 browsers Playwright fetched
+//   claudinho-npm-cache-C, -pip-cache-C, -uv-cache-C, -playwright-C   what npm, pip and uv downloaded, and
+//                                 the browsers Playwright fetched. C is the number CACHE: a release that raises
+//                                 it gives every container made after the update empty caches.
 // The folder on this computer is mounted read-only at /src and cloned from there. A session's work leaves its
 // container by `git push`. One folder of this computer it writes to directly: the memory that Claude Code keeps
 // for the repository, mounted where Claude Code looks for it inside (see memoryIn). Sessions in containers and
@@ -41,12 +42,19 @@ const nameOf = n => `${PREFIX}-slot-${n}`;
 const numberOf = name => { const m = new RegExp(`^${PREFIX}-slot-(\\d+)$`).exec(name || ''); return m ? Number(m[1]) : null; };
 // Where Claude Code inside a container looks for the memory of the clone in `work`.
 const memoryIn = work => `${HOME}/.claude/projects/${lib.projectDir(work)}/memory`;
+// The caches all containers share go by this number. Raise it in a release when something broken got into
+// one, as a half-written npx install did (#1), and say so in that version's CHANGELOG.md entry: every
+// container made after the update then starts with empty caches, and the app's next start removes the old
+// ones (clearCaches). Not the app's version, which would fetch everything again with each release,
+// Playwright's browsers of 300 MB and more included. A new cache goes into lib.staleCaches as well.
+const CACHE = 1;
+const cache = name => `claudinho-${name}-${CACHE}`;
 // Playwright's browsers: one volume for all containers, at the place where every Playwright looks. Each version
 // of Playwright wants builds of its own, and they lie there side by side. A Playwright that installs its builds
 // also removes those that no installation it knows of still uses, and from inside one container it knows of
 // none in another: so that is turned off (https://playwright.dev/docs/browsers#stale-browser-removal).
-// ponytail: builds that nothing asks for any more stay in the volume until somebody clears it.
-const BROWSERS = ['-e', 'PLAYWRIGHT_SKIP_BROWSER_GC=1', '-v', `claudinho-playwright:${HOME}/.cache/ms-playwright`];
+// ponytail: builds that nothing asks for any more stay in the volume until a release raises CACHE.
+const BROWSERS = ['-e', 'PLAYWRIGHT_SKIP_BROWSER_GC=1', '-v', `${cache('playwright')}:${HOME}/.cache/ms-playwright`];
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
 // One docker command. Rejects with the last lines of what it printed as an error, and with its exit code.
@@ -168,8 +176,8 @@ async function create({ n, image: tag, root, name, work, key, dir, ports, memory
     // 127.0.0.1 without a port: Docker picks a free one on this computer for each of them (see `ports`)
     ...ports.flatMap(p => ['-p', `127.0.0.1::${p}`]),
     '-v', `${box}-docker:/var/lib/docker`, '-v', `claudinho-claude:${HOME}/.claude`, '-v', `claudinho-gh:${HOME}/.config/gh`,
-    '-v', `claudinho-npm-cache:${HOME}/.npm`, '-v', `claudinho-pip-cache:${HOME}/.cache/pip`,
-    '-v', `claudinho-uv-cache:${HOME}/.cache/uv`, ...BROWSERS,
+    '-v', `${cache('npm-cache')}:${HOME}/.npm`, '-v', `${cache('pip-cache')}:${HOME}/.cache/pip`,
+    '-v', `${cache('uv-cache')}:${HOME}/.cache/uv`, ...BROWSERS,
     '-v', `${root}:/src:ro`, '-v', `${dir}:/claudinho`, '-v', `${memory}:${memoryIn(work)}`, tag]);
   return box;
 }
@@ -335,5 +343,10 @@ const stop = names => (names.length ? docker(['stop', '-t', '5', ...names], { ti
 const stopBehind = names => { if (names.length) spawn('docker', ['stop', '-t', '5', ...names], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); };
 // The volume of its Docker's images is left, for the next session at that number.
 const remove = box => docker(['rm', '-f', '-v', box], { timeout: 120000 });
+// The cache volumes of an older number (see CACHE). Docker refuses one that a container still mounts, running
+// or stopped: that one goes at a start after the container is removed.
+async function clearCaches() {
+  for (const name of lib.staleCaches(await docker(['volume', 'ls', '--format', '{{.Name}}']), CACHE)) await docker(['volume', 'rm', name]).catch(() => { /* in use */ });
+}
 
-module.exports = { recipe, nameOf, numberOf, memoryIn, docker, inBox, info, toolFiles, tagOf, image, list, create, ready, copyConfig, fill, state, signedIn, terminal, ports, stats, resize, disk, exists, start, stop, stopBehind, remove };
+module.exports = { recipe, nameOf, numberOf, memoryIn, docker, inBox, info, toolFiles, tagOf, image, list, create, ready, copyConfig, fill, state, signedIn, terminal, ports, stats, resize, disk, exists, start, stop, stopBehind, remove, CACHE, clearCaches };

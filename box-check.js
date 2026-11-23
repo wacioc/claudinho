@@ -76,6 +76,8 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
     check(await inside(['sudo', '-n', 'id', '-u']) === '0', 'the session\'s user may become root, for what a project\'s set-up installs');
     check(Number(await inside(['sh', '-c', 'ldconfig -p | grep -c -E "libnss3|libatk-1|libgbm"'])) >= 3 && /^\d{4}\./.test(await inside(['mise', '--version'])), 'the libraries of a headless Chromium are there, and mise');
     check(await inside(['sh', '-c', 'echo "$PLAYWRIGHT_SKIP_BROWSER_GC"; test -w ~/.cache/ms-playwright && echo writable']) === '1\nwritable', 'Playwright\'s browsers are the shared volume, from which no installation removes another one\'s');
+    const caches = (await inspect('{{range .Mounts}}{{.Name}} {{end}}')).split(' ').filter(v => /^claudinho-(npm-cache|pip-cache|uv-cache|playwright)/.test(v));
+    check(caches.length === 4 && caches.every(v => v.endsWith(`-${boxes.CACHE}`)) && !lib.staleCaches(caches.join('\n'), boxes.CACHE).length, `the four caches it mounts carry the number ${boxes.CACHE}, and the clearing at the app's start leaves them: ${caches.join(' ')}`);
 
     console.log('\nthe repository\'s memory, which is a folder on this computer');
     check(await inside(['cat', `${memoryIn}/MEMORY.md`]) === '- a note from this computer', 'a note written on this computer is read inside, where Claude Code looks for its memory');

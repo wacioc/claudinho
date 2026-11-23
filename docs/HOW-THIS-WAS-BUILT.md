@@ -186,7 +186,7 @@ What was not exercised:
 | A 25% CPU ceiling ran at 56% with pause-and-resume on Linux. | `ps` on Linux prints CPU time in whole seconds, far too coarse to steer by. | On Linux the listing reads `/proc/<pid>/stat` (10 ms ticks). |
 | With sharing on, limits dropped to 1% for a moment whenever load ramped up, then took 20 seconds to settle. | The step mixed readings from different stretches of time. | One step per measurement; see section 6. |
 | Instances that had been held down beside a busy program outside the app stayed down. | Their limit was derived from what they used, and the other program took whatever they left. | The instances may claim a tenth of what outside programs use; see section 6. |
-| The claude-context MCP server failed in every container with `Cannot find module 'langchain/text_splitter'` (issue #1). | `npx` installs it at its first start, which took 32 seconds; Claude Code waits 30 for an MCP server to start and then stops it. The install was cut short in `~/.npm/_npx/<hash>`, which lies in the npm volume all containers share, and `npx` runs a half-written install again without mending it. Reproduced in a container with an empty npm cache: stopped after 12 seconds, `langchain` was left without its `package.json`, and the next start failed at once. | The image sets `MCP_TIMEOUT=120000`, Claude Code's start timeout for MCP servers. In the new image, with an empty npm cache, the server connected after 18 seconds. A broken folder is not mended: it is deleted by hand. |
+| The claude-context MCP server failed in every container with `Cannot find module 'langchain/text_splitter'` (issue #1). | `npx` installs it at its first start, which took 32 seconds; Claude Code waits 30 for an MCP server to start and then stops it. The install was cut short in `~/.npm/_npx/<hash>`, which lies in the npm volume all containers share, and `npx` runs a half-written install again without mending it. Reproduced in a container with an empty npm cache: stopped after 12 seconds, `langchain` was left without its `package.json`, and the next start failed at once. | The image sets `MCP_TIMEOUT=120000`, Claude Code's start timeout for MCP servers. In the new image, with an empty npm cache, the server connected after 18 seconds. A broken folder is not mended by that. Since issue #2 the shared caches carry a number, and a release that raises it empties them (section 18). 0.8.2 is the first, which empties them once. |
 
 ## 6. CPU: from a display to real limits
 
@@ -1880,8 +1880,10 @@ update button was pressed. Not tried: the click in a packaged copy, which asks G
   volume, and a memory moved with `autoMemoryDirectory` is not followed. An image cannot be pasted into a
   session in a container. The Playwright version a folder names for its browser is kept equal to its
   lockfile's by hand. An MCP server that `npx` takes longer than two minutes to install is still cut short and
-  stays broken in every container (section 5). Whether containers started side by side, which install the
-  same server into the same folder at once, can break it the same way is not known.
+  stays broken in every container (section 5), until its folder is deleted by hand or a release empties the
+  caches. Whether containers started side by side, which install the same server into the same folder at
+  once, can break it the same way is not known. A kept container goes on with the caches it was made with,
+  and their volumes go at the first start of the app after it is removed.
 - A pull request's later fate on GitHub (merged or closed there) reaches a card only when the session's next
   turn ends.
 - The Diff tab has GitHub's default view and no other, and shows no diff where GitHub's list of files gives
@@ -1953,6 +1955,18 @@ update button was pressed. Not tried: the click in a packaged copy, which asks G
   logins are shared with the copy in use, so the test sessions are logged in; those volumes are never removed
   by a test. `npm run check:box` checks a container without a session. A full house is made with
   `docker create --name <name>-slot-N <the image> true`, which takes a number and starts nothing.
+- **The caches all containers share** are emptied by raising `CACHE` in `containers.js` in a release, which
+  that version's `CHANGELOG.md` entry says (issue #2). Their volumes carry it (`claudinho-npm-cache-1`), so
+  every container made after the update gets new, empty ones, and at its start the app removes those of a
+  lower number and those from before the number. Docker refuses one that a container still mounts, running or
+  stopped; that one goes at a later start. A number and not the app's version, or each release would fetch
+  everything again, Playwright's browsers of 300 MB and more included. Lower numbers only: a test copy shares
+  these volumes with the copy in use, which may be the older one. The names are listed one by one in
+  `lib.staleCaches`, never `claudinho-*`, which would take the logins. Tried with `CACHE` raised to 2: the
+  `-1` volumes, one holding a stand-in for a broken `_npx` folder, were gone half a second later, the
+  unnumbered ones that running containers mounted stayed, and a new container mounted the `-2` ones with an
+  empty `~/.npm`. A test copy started with a scratch data folder removed a stale `-0` volume two seconds after
+  its start and left the `-2` ones alone.
 - **A test that writes a script through a shell** should look at what arrived. In this session a doubled
   backslash came out single, which turned `\342` in a JavaScript string into one character.
 - **Windows** is the development machine. `npm run check:cpu` runs the job-object mechanism directly.
