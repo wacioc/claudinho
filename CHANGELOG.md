@@ -4,6 +4,15 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.9.1 (2026-11-23)
+
+**Docker containers**
+
+- A session's start waits up to two minutes for Docker to say how many processors and how much memory it
+  has, where it gave up after 15 seconds. A busy Docker took longer, and the session did not start.
+- A docker command that runs out of time says so: "Docker did not answer `docker info` within 15 seconds",
+  where it said no more than "Command failed" and the command.
+
 ## 0.9.0 (2026-11-23)
 
 **Docker containers**
