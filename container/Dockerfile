@@ -126,3 +126,12 @@ RUN echo "Claude Code on the computer: $CLAUDE_CODE" \
     && apt-get install -y --no-install-recommends claude-code \
     && rm -rf /var/lib/apt/lists/* \
     && claude --version
+
+# How long Claude Code waits for an MCP server to start: two minutes, where it waits 30 seconds otherwise. A
+# server that a session starts with npx is installed at its first start, which took claude-context 32 seconds.
+# Cut short, the install stays half-written in the npm cache that all containers share, and npx runs it as it is
+# at every later start, in every container. It comes last, so that a change here builds no other layer again.
+# https://code.claude.com/docs/en/mcp
+# ponytail: an install that takes longer than this is still cut short. Delete its folder, ~/.npm/_npx/<hash>,
+# in any container; have the app look for such folders when a container is made, if that happens.
+ENV MCP_TIMEOUT=120000

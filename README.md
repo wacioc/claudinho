@@ -142,7 +142,9 @@ With Docker chosen:
   starts, settings and keys included. A server that runs a program the image does not have, or reaches an
   address of this computer (`localhost`), does not work there. One that signs in through a browser has no
   login there. A server that indexes the code by its path, such as claude-context, keeps one index for the
-  containers, apart from this computer's.
+  containers, apart from this computer's. A server started with `npx` is installed at its first start and has
+  two minutes for that. One cut short stays broken in every container until its folder in `~/.npm/_npx` is
+  deleted in one of them.
 - The memory that Claude Code keeps for the repository is one, for both ways of working. Every new container
   gets the folder's memory from this computer (under `~/.claude/projects`), where the sessions in worktrees
   keep theirs. What a session notes in a container, later sessions read wherever they work, and the other way
