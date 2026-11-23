@@ -186,6 +186,7 @@ What was not exercised:
 | A 25% CPU ceiling ran at 56% with pause-and-resume on Linux. | `ps` on Linux prints CPU time in whole seconds, far too coarse to steer by. | On Linux the listing reads `/proc/<pid>/stat` (10 ms ticks). |
 | With sharing on, limits dropped to 1% for a moment whenever load ramped up, then took 20 seconds to settle. | The step mixed readings from different stretches of time. | One step per measurement; see section 6. |
 | Instances that had been held down beside a busy program outside the app stayed down. | Their limit was derived from what they used, and the other program took whatever they left. | The instances may claim a tenth of what outside programs use; see section 6. |
+| The claude-context MCP server failed in every container with `Cannot find module 'langchain/text_splitter'` (issue #1). | `npx` installs it at its first start, which took 32 seconds; Claude Code waits 30 for an MCP server to start and then stops it. The install was cut short in `~/.npm/_npx/<hash>`, which lies in the npm volume all containers share, and `npx` runs a half-written install again without mending it. Reproduced in a container with an empty npm cache: stopped after 12 seconds, `langchain` was left without its `package.json`, and the next start failed at once. | The image sets `MCP_TIMEOUT=120000`, Claude Code's start timeout for MCP servers. In the new image, with an empty npm cache, the server connected after 18 seconds. A broken folder is not mended: it is deleted by hand. |
 
 ## 6. CPU: from a display to real limits
 
@@ -1878,7 +1879,9 @@ update button was pressed. Not tried: the click in a packaged copy, which asks G
   longer opened stay on the disk. The notes that containers wrote among themselves before 0.7.3 stay in their
   volume, and a memory moved with `autoMemoryDirectory` is not followed. An image cannot be pasted into a
   session in a container. The Playwright version a folder names for its browser is kept equal to its
-  lockfile's by hand.
+  lockfile's by hand. An MCP server that `npx` takes longer than two minutes to install is still cut short and
+  stays broken in every container (section 5). Whether containers started side by side, which install the
+  same server into the same folder at once, can break it the same way is not known.
 - A pull request's later fate on GitHub (merged or closed there) reaches a card only when the session's next
   turn ends.
 - The Diff tab has GitHub's default view and no other, and shows no diff where GitHub's list of files gives

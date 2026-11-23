@@ -4,6 +4,15 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.8.2 (2026-11-23)
+
+**Docker containers**
+
+- An MCP server that a session in a container starts with `npx` has two minutes to start, where Claude Code
+  gives it 30 seconds otherwise. Its first start installs it, and claude-context took longer than 30 seconds:
+  stopped halfway, the install stayed broken in every container. A folder already broken that way is not
+  mended: delete it in `~/.npm/_npx` in any container.
+
 ## 0.8.1 (2026-11-15)
 
 **Versions**
