@@ -102,6 +102,8 @@ With Docker chosen:
 - The first container needs an image, which the app builds by itself: once, and again when Claude Code on this
   computer has a new version, so that containers run that version too. The first build downloads several
   hundred megabytes and takes some minutes; the card shows it going.
+- Every new container gets the newest gh. Without an answer from GitHub's package repository it keeps the one
+  the image was built with, and its card says so.
 - The image holds git, gh, jq, curl, Python, Node.js, Docker with Compose, and the system libraries a headless
   Chromium needs. What else a folder's sessions need, the folder names in a `mise.toml` (or `.tool-versions`)
   at its root, for [mise](https://mise.jdx.dev/configuration.html): `just`, `uv`, Flutter, another Node.js.

@@ -273,6 +273,15 @@ async function copyIncluded(box, root, work) {
   return files.length;
 }
 
+// The newest gh, in every new container: the image has the one that was newest when it was built. Only GitHub's
+// package repository is asked, so this takes a fraction of a second when the image's gh is the newest, and two
+// seconds when it is not. Without Error-Mode=any apt ends well although the repository did not answer.
+const GH_UPGRADE = 'apt-get update -q -o APT::Update::Error-Mode=any -o Acquire::Retries=0 -o Acquire::https::Timeout=15'
+  + ' -o Dir::Etc::sourcelist=sources.list.d/github-cli.list -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0'
+  + ' && apt-get install -y -q --only-upgrade gh';
+const upgradeGh = (box, say) => inBox(box, ['sh', '-c', GH_UPGRADE], { root: true, timeout: 300000 })
+  .catch(e => say(`gh could not be brought up to its newest version, so this container keeps the image's: ${e.message}`));
+
 // What a new container gets before its session starts: the configuration, and the folder as a clone on a new
 // branch. origin: the address to push to. identity: git's user.name and user.email for this folder.
 // say: told what is going on, for the card.
@@ -282,6 +291,7 @@ async function fill(box, { root, work, branch, origin, identity, configDir, say 
   // For a folder's first container, Docker made the folders above the memory's mount, in the shared volume and
   // as root. Claude Code keeps the session's conversation in the one right above, as the session's user.
   await inBox(box, ['sh', '-c', 'chown agent:agent "$1" "$1/.."', 'sh', path.posix.dirname(memoryIn(work))], { root: true });
+  await upgradeGh(box, say);
   await copyConfig(box, configDir);
   await installPlugins(box, configDir, root, say);
   say('Cloning the folder into the container…');

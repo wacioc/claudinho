@@ -8,10 +8,10 @@ FROM python:3.13-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# What sessions use (git, gh, jq, curl), and what the two repositories below need (certificates, gnupg to
+# What sessions use (git, jq, curl), and what the two repositories below need (certificates, gnupg to
 # look at a key before it is trusted).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl gnupg git gh jq procps less openssh-client xz-utils \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg git jq procps less openssh-client xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Docker's engine, command line, Buildx and Compose, from Docker's own repository for Debian.
@@ -126,6 +126,20 @@ RUN echo "Claude Code on the computer: $CLAUDE_CODE" \
     && apt-get install -y --no-install-recommends claude-code \
     && rm -rf /var/lib/apt/lists/* \
     && claude --version
+
+# gh, from GitHub's own package repository: Debian's is years behind. The build stops when the file holds a key
+# that is not one of the two that gh's documentation names. It comes after Claude Code so that it is built again
+# as often, and a new container then brings it up to the newest (see upgradeGh in containers.js).
+# https://github.com/cli/cli/blob/trunk/docs/install_linux.md
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli.gpg \
+    && chmod a+r /etc/apt/keyrings/githubcli.gpg \
+    && keys=$(gpg --show-keys --with-colons /etc/apt/keyrings/githubcli.gpg | awk -F: '$1=="pub"{p=1} $1=="fpr"&&p{print $10; p=0}') \
+    && test -n "$keys" && ! echo "$keys" | grep -qvxE '2C6106201985B60E6C7AC87323F3D4EA75716059|7F38BBB59D064DBCB3D84D725612B36462313325' \
+    && echo "deb [signed-by=/etc/apt/keyrings/githubcli.gpg arch=$(dpkg --print-architecture)] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/* \
+    && gh --version
 
 # How long Claude Code waits for an MCP server to start: two minutes, where it waits 30 seconds otherwise. A
 # server that a session starts with npx is installed at its first start, which took claude-context 32 seconds.

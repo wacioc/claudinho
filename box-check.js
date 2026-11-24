@@ -58,6 +58,9 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
     await boxes.create({ n: 1, image, root: __dirname, name: 'box-check', work, key: 'c0ffee00', dir, ports: [8000], memory, memoryGb: 3 });
     await boxes.ready(box);
     const made = secs(t);
+    // As in a container from an image that was built a while ago: Debian's old gh, which `fill` has to replace.
+    await boxes.inBox(box, ['sh', '-c', 'apt-get update -q && apt-get install -y -q --allow-downgrades "gh/$(. /etc/os-release; echo "$VERSION_CODENAME")"'], { root: true, timeout: 300000 });
+    const ghVersion = async () => lib.parseVersion(await inside(['gh', '--version'], { cwd: '/' })), oldGh = await ghVersion();
     // As it is for a folder's first container: Docker has made the folder above the memory, as root.
     await boxes.inBox(box, ['chown', 'root:root', path.posix.dirname(memoryIn)], { root: true });
     await boxes.fill(box, { root: __dirname, work, branch: 'box-check', origin: `https://github.com/${github.owner}/${github.name}.git`, identity: [['user.name', 'box-check'], ['user.email', 'box-check@example.invalid']], configDir: path.join(dir, 'no-config'), say: line => console.log(`     ${line}`) });
@@ -71,6 +74,8 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
     check(await inside(['sh', '-c', 'touch /src/x 2>&1; test -f package.json && echo there']).then(s => /Read-only/.test(s) && /there$/.test(s)), 'the folder on this computer is there to read, and cannot be written to');
     check(/^\d+\.\d+/.test(await inside(['docker', 'compose', 'version', '--short'])) && /^\d+\./.test(await inside(['docker', 'info', '--format', '{{.ServerVersion}}'])), 'a Docker of its own inside, with Compose');
     check(lib.parseVersion(await inside(['claude', '--version'])) !== null && /^v\d+/.test(await inside(['node', '--version'])) && /^Python 3/.test(await inside(['python', '--version'])), `Claude Code ${lib.parseVersion(await inside(['claude', '--version']))}, Node.js and Python are in it`);
+    const newGh = lib.parseVersion((await (await fetch('https://api.github.com/repos/cli/cli/releases/latest')).json()).tag_name);
+    check(newGh && oldGh !== newGh && await ghVersion() === newGh, `gh ${oldGh} was replaced by ${await ghVersion()}, the newest (${newGh})`);
     check(await inside(['just', '--version']) === 'just 1.36.0', 'the tool the folder names is in the image, and found from inside the clone without any set-up');
     check(await boxes.docker(['run', '--rm', '--entrypoint', 'sh', image, '-c', 'test ! -e /home/agent/.cache/mise && echo none']).then(x => x.trim() === 'none', () => false), 'and the image keeps nothing of what mise downloaded to install it');
     check(await inside(['sudo', '-n', 'id', '-u']) === '0', 'the session\'s user may become root, for what a project\'s set-up installs');
