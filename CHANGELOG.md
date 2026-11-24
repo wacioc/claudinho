@@ -4,6 +4,15 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.9.2 (2026-11-25)
+
+**Docker containers**
+
+- Every new container gets the newest gh, from GitHub's own package repository. It had the one that Debian
+  packages, 2.46.0 of January 2025. Without an answer from that repository a container keeps the gh its image
+  was built with, and its card says so. The first container after this update waits for the image to be built
+  again, all of it, a folder's own tools included. Containers that exist already keep the gh they have.
+
 ## 0.9.1 (2026-11-23)
 
 **Docker containers**
