@@ -4,6 +4,17 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.10.0 (2026-11-25)
+
+**Docker containers**
+
+- A container is no longer held to two processors. One that is alone at work has all of Docker's processors, and
+  those that are busy share them evenly, so together they can now keep the whole computer busy. How many
+  containers there may be has not changed. A container that exists already is freed when its session is resumed
+  or a new one is started in it.
+- A tool that starts as many workers as it sees processors now starts more of them in a container, within the
+  same memory ceiling. That ceiling can be raised under ⚙.
+
 ## 0.9.2 (2026-11-25)
 
 **Docker containers**
