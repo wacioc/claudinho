@@ -37,13 +37,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 && r
     && tar -xJf "$f" -C /usr/local --strip-components=1 --no-same-owner --exclude='*/CHANGELOG.md' --exclude='*/README.md' \
     && rm -f "$f" SHASUMS256.txt && node --version && npm --version
 
-# What sessions asked for beyond that: sudo, the tools that unpack what toolchains come in, and the system
+# What sessions asked for beyond that: sudo, file, the tools that unpack what toolchains come in, and the system
 # libraries a headless Chromium needs, as Playwright itself lists them for this system (about a hundred packages,
 # 350 MB). The browser is not in the image: a project fetches the one its Playwright version wants, into a
 # volume the containers share.
 # https://playwright.dev/docs/browsers#install-system-dependencies
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends sudo unzip zip \
+    && apt-get install -y --no-install-recommends sudo file unzip zip \
     && npx -y playwright@latest install-deps chromium \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
