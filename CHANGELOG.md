@@ -4,6 +4,15 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.10.3 (2026-11-25)
+
+**Header**
+
+- After Claude Code was signed in to another account, the header showed the new account's address beside the old
+  account's 5h and 7d usage. The figures are now kept with the account they were read for, and the header shows
+  them only for the account signed in now. Until a session of that account gets its first reply, it shows none.
+  A session still running from before the switch can report the old account's figures as the new one's.
+
 ## 0.10.2 (2026-11-25)
 
 **Docker containers**
