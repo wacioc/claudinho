@@ -1345,6 +1345,8 @@ Docker Desktop did vanish twice during the trial. That was not the containers: i
 Not built: Docker Engine alone on Linux, where `host.docker.internal` does not exist by itself; a ceiling per
 container that follows the app's CPU settings; an image per repository.
 
+Since then, a container is held to no number of processors: see "After 0.9.2" below.
+
 ### The pull request button
 
 The app looked for a session's pull request in two places only: when a turn ended, and when the Diff tab was
@@ -1714,6 +1716,28 @@ settings in the clone, and `git status` there empty. `box-check.js` passed. Not 
 app. On this Mac neither GitHub nor Claude Code was signed in in the volumes, and the card asks for GitHub
 first. claude-context running inside a container.
 
+### After 0.9.2: no ceiling on a container's processors
+
+Asked for: a container that is the only one should have all of the CPU, not two processors of sixteen.
+
+| Decision | Why |
+|---|---|
+| The ceiling is gone, and nothing takes its place. | The kernel already divides the processors between the containers that are busy. A ceiling worked out from the number of containers would hold the one at work back for the sake of six idle ones. |
+| How many containers there may be is worked out as before: one for every two processors, less one. | It was not asked about. |
+| A container made before is freed when it is started, by `docker update --cpu-quota -1`. | Every session that goes on in one passes through that start. `docker update --cpus 0` leaves the ceiling as it is. |
+
+Measured on the owner's PC, with Docker 29.9 and throwaway containers:
+
+| Question | Measured |
+|---|---|
+| Does a lone container get everything? | On one processor, with four busy processes: 99% of it. |
+| Do two busy ones share it evenly, whatever each runs? | Four processes against one: 49.6% and 48.8%. |
+| Does `--cpu-quota -1` hold? | `cpu.max` read `max` on a running container, on one that was stopped and then started, after a stop and a start, and after a change of the memory ceiling. |
+| What does a program see? | Node's `os.availableParallelism()` says 2 with the ceiling and 16 without: tools that go by it start more workers, within the same memory ceiling. `nproc` says 16 in both cases. |
+
+The price: seven containers used 14 of 16 processors at most, and can now use all. How Windows feels with all of
+them busy was not measured.
+
 ## 16. The eleventh round: a Files tab, and issues assigned to their session
 
 On 15 November, after 0.7.5, on the owner's Mac. Two requests, the second while the first was being built:
@@ -1873,7 +1897,8 @@ update button was pressed. Not tried: the click in a packaged copy, which asks G
   Not tried in the Diff tab.
 - An issue stays assigned when its session is closed without a pull request.
 - Sessions in containers: what section 15 lists as not verified or not tried. Docker Engine alone on Linux
-  is not served. The processors of a container are not a setting. A container's ports are fixed when it is
+  is not served. Containers share the processors evenly, without weights, and how the computer feels with all
+  of them busy was not measured. A container's ports are fixed when it is
   made. A kept container can be given a new session, not its old conversation. A Dev Container file is not
   read. A change of one tool fetches all of a folder's tools again, and the images of folders that are no
   longer opened stay on the disk. The notes that containers wrote among themselves before 0.7.3 stay in their
@@ -2078,8 +2103,8 @@ work relied on.
 
 **Sessions in containers**
 
-- <https://docs.docker.com/engine/containers/resource_constraints/> for `--memory`, `--cpus`, and what happens
-  at the memory ceiling
+- <https://docs.docker.com/engine/containers/resource_constraints/> for `--memory`, `--cpus`, `--cpu-shares`, and
+  what happens at the memory ceiling
 - <https://docs.docker.com/reference/cli/docker/container/stats/>, `.../container/exec/`, `.../container/port/`,
   `.../container/ls/` and <https://docs.docker.com/reference/cli/docker/buildx/build/>
 - <https://hub.docker.com/_/docker> for a Docker inside a container, and

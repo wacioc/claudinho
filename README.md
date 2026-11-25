@@ -87,7 +87,7 @@ is chosen, and the others go on out of sight.
 | Where a session works | In a git worktree under `.claude/worktrees`, made by `claude -w`. | In a container of its own, on a clone of the folder, on a new branch made from GitHub's default branch. |
 | Services and ports | All sessions share this computer. Two that start the same service on the same port get in each other's way, unless each worktree is given ports of its own. | Each container has a Docker of its own inside, so every session can run the same services on the same ports. |
 | What it takes | Nothing beyond the requirements. | Docker Desktop, running. About 2 GB of disk for the image, more for a folder's own tools, what each container's services pull, and memory for each container while it runs. |
-| How many at once | As many as you start. | One for every two of Docker's processors, less one: 7 where Docker has 16. Each may use 2 processors and 8 GB of memory, which is a setting. |
+| How many at once | As many as you start. | One for every two of Docker's processors, less one: 7 where Docker has 16. Each may use 8 GB of memory, which is a setting. One that is alone at work has all of Docker's processors; those that are busy share them evenly. |
 | Where the work is | On this computer, in the worktree. | In the container, until it is pushed. |
 
 With Docker chosen:
@@ -494,7 +494,7 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
 
 - Each instance is `claude` in a pseudo-terminal (`node-pty`), drawn with `xterm.js`.
 - A session in a container is `docker exec -it … claude` in the same kind of pseudo-terminal. Its container is
-  made with `docker run --privileged --cpus 2 --memory 8g` from an image built from `container/Dockerfile`:
+  made with `docker run --privileged --memory 8g` from an image built from `container/Dockerfile`:
   Debian with Python, Node.js, git, gh, Docker's engine with Compose, and Claude Code from Anthropic's package
   repository. Between what every folder shares and Claude Code lies a layer with the folder's own tools,
   installed by `mise install` from its `mise.toml`; the image's tag is worked out from the recipe, that file
@@ -628,9 +628,11 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   and, on Windows, the console layer in between. That has been seen on Windows 11 with Docker Desktop only. An
   image on the clipboard cannot be pasted into a session in a container: Claude Code looks for it on a
   clipboard of its own, which a container does not have.
-- Every container has the same ceiling: 2 processors, and the memory set under ⚙, 8 GB to begin with. The CPU
-  ceiling and the CPU weights there do not apply to it. When a container reaches its memory ceiling, the
-  kernel ends a process in it, which may be a service or Claude Code itself. The ceilings are not set aside:
+- Containers share Docker's processors evenly, with no ceiling: the CPU ceiling and the CPU weights under ⚙ do
+  not apply to them, and together they can keep all of Docker's processors busy. A tool that starts as many
+  workers as there are processors starts them all in one container, within its memory ceiling.
+- Every container has the same memory ceiling, the one set under ⚙, 8 GB to begin with. When it is reached, the
+  kernel ends a process in the container, which may be a service or Claude Code itself. It is not set aside:
   seven containers of 8 GB can ask for more than Docker has, and what Docker has is Docker's own setting
   (on Windows, the memory of its WSL machine).
 - The ports that reach this computer are set when a container is made. A service on another port is reached

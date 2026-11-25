@@ -5,7 +5,7 @@
 // same ports, and none sees another's.
 //
 // A container is a numbered place, claudinho-slot-N, and there are only so many of them (lib.boxLimit), each
-// held to two processors and a memory ceiling the owner sets. It is made when its session starts and removed when the session's
+// held to a memory ceiling the owner sets. It is made when its session starts and removed when the session's
 // card is closed, as a worktree is. Three kinds of volume outlive it:
 //   claudinho-slot-N-docker       the images its Docker pulled, kept for the next session at that number
 //   claudinho-claude, -gh         Claude Code's configuration with its login, and GitHub's login: one of each
@@ -175,7 +175,7 @@ async function list() {
 async function create({ n, image: tag, root, name, work, key, dir, ports, memory, memoryGb = lib.BOX_MEMORY_GB }) {
   const box = nameOf(n);
   await docker(['run', '-d', '--init', '--privileged', '--name', box, '--hostname', `slot-${n}`,
-    '--cpus', String(lib.BOX_CPUS), '--memory', `${memoryGb}g`,
+    '--memory', `${memoryGb}g`,
     '--label', `claudinho.root=${root}`, '--label', `claudinho.name=${name}`, '--label', `claudinho.work=${work}`, '--label', `claudinho.key=${key}`,
     // 127.0.0.1 without a port: Docker picks a free one on this computer for each of them (see `ports`)
     ...ports.flatMap(p => ['-p', `127.0.0.1::${p}`]),
@@ -344,7 +344,9 @@ const terminal = (box, work, argv) => ['exec', '-it', '-u', 'agent', ...(work ? 
 const ports = async box => lib.parsePorts(await docker(['port', box]).catch(() => ''));
 const stats = async names => lib.parseBoxStats(await docker(['stats', '--no-stream', '--format', '{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.PIDs}}', ...names], { timeout: 30000 }));
 const exists = box => docker(['container', 'inspect', '--format', '{{.Id}}', box]).then(() => true, () => false);
-const start = box => docker(['start', box]);
+// A container made by 0.9.2 or before is held to two processors. This quota takes that away; `--cpus 0` would
+// leave it as it is (tried with Docker 29.9). Where Docker refuses, the container starts as it was.
+const start = box => docker(['update', '--cpu-quota', '-1', box]).catch(() => {}).then(() => docker(['start', box]));
 // Another memory ceiling for containers that exist, running or not. The ceiling with swap goes along: Docker
 // had set it to twice the memory when the container was made, and refuses a memory above it.
 const resize = (names, memoryGb) => (names.length ? docker(['update', '--memory', `${memoryGb}g`, '--memory-swap', `${2 * memoryGb}g`, ...names]) : Promise.resolve());

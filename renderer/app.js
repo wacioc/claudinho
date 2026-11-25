@@ -304,7 +304,7 @@ function renderTop() {
   note.className = `chip${box && d.ok === false ? ' warn' : ''}`;
   note.textContent = d.building ? 'building the image for containers…' : d.ok === false ? 'Docker does not answer' : d.ok ? `${d.used} of ${d.limit} containers in use` : 'asking Docker…';
   note.title = d.building || (d.ok === false ? `${d.error}\nSessions in containers need Docker Desktop to be running.` : !d.ok ? ''
-    : `Each session works in a container of its own, which may use ${d.boxCpus} processors and ${d.boxGb} GB. Docker has ${d.cpus} processors, which makes ${d.limit} containers at most.`);
+    : `Each session works in a container of its own, which may use ${d.boxGb} GB of memory. Docker has ${d.cpus} processors, which makes ${d.limit} containers at most. Those that are busy share the processors evenly.`);
   $('#btn-new').disabled = !r || !state.claudeFound || (box && (!d.ok || !r.github));
   $('#btn-new').title = !box ? '' : !d.ok ? 'Docker does not answer.' : r && !r.github ? 'A session in a container works on a clone and pushes its work: that needs a folder with a GitHub remote.' : 'Starts a session in a new container.';
   $('#btn-worktree').disabled = !r || !r.isGit || !state.claudeFound;
@@ -531,7 +531,7 @@ function updateCard(t, inst, order) {
   ].filter(Boolean).map(c => (typeof c === 'string' ? h('span.chip', c) : c)), ...procChips(inst.procs, inst.limit), t.p.up);
   renderProcs(t.p.procs, inst.procs, inst.limit);
   if (document.activeElement !== t.p.weight) t.p.weight.value = inst.weight;
-  t.p.weight.parentNode.hidden = !!inst.box;   // a container has its two processors, whatever the others do
+  t.p.weight.parentNode.hidden = !!inst.box;   // containers share the processors evenly
   renderPending(t, inst);
   if (document.activeElement !== t.p.level) t.p.level.value = inst.level;
   if (document.activeElement !== t.p.merge) t.p.merge.value = inst.autonomy;

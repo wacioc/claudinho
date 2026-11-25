@@ -26,7 +26,7 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
   const inspect = format => boxes.docker(['inspect', box, '--format', format]).then(s => s.trim());
   try {
     const d = await boxes.info();
-    console.log(`Docker ${d.version}: ${d.cpus} processors, ${(d.mem / 2 ** 30).toFixed(1)} GB. That allows ${d.limit} containers of ${lib.BOX_CPUS} processors and ${lib.BOX_MEMORY_GB} GB.`);
+    console.log(`Docker ${d.version}: ${d.cpus} processors, ${(d.mem / 2 ** 30).toFixed(1)} GB. That allows ${d.limit} containers of ${lib.BOX_MEMORY_GB} GB.`);
     await boxes.remove(box).catch(() => { /* none left from a check that was stopped */ });
     let t = Date.now();
     const version = lib.parseVersion(execFileSync('claude', ['--version'], { encoding: 'utf8' }));
@@ -65,7 +65,13 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
     await boxes.inBox(box, ['chown', 'root:root', path.posix.dirname(memoryIn)], { root: true });
     await boxes.fill(box, { root: __dirname, work, branch: 'box-check', origin: `https://github.com/${github.owner}/${github.name}.git`, identity: [['user.name', 'box-check'], ['user.email', 'box-check@example.invalid']], configDir: path.join(dir, 'no-config'), say: line => console.log(`     ${line}`) });
     console.log(`  made and its Docker up after ${made}, filled after ${secs(t)}`);
-    check(await inspect('{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.Privileged}}') === `${lib.BOX_CPUS}000000000 ${3 * 2 ** 30} true`, `held to ${lib.BOX_CPUS} processors and the 3 GB it was made with`);
+    check(await inspect('{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.Privileged}}') === `0 ${3 * 2 ** 30} true`, 'held to the 3 GB it was made with, and to no number of processors');
+    // As a container that 0.9.2 or an older version made, which was held to two.
+    const quota = () => inside(['cat', '/sys/fs/cgroup/cpu.max'], { cwd: '/' });
+    await boxes.docker(['update', '--cpus', '2', box]);
+    const held = await quota();
+    await boxes.start(box);
+    check(held.startsWith('200000 ') && (await quota()).startsWith('max '), 'one that was held to two processors is not any more, once it is started');
     const row = (await boxes.list()).find(r => r.box === box);
     check(row && row.running && row.name === 'box-check' && row.work === work && row.key === 'c0ffee00' && lib.samePath(row.root, __dirname), 'on the list, with what was written on it');
     check(await inside(['git', 'branch', '--show-current']) === 'box-check', 'its clone is on the new branch');

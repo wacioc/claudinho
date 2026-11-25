@@ -615,15 +615,16 @@ function childEnv(env) {
 
 // ---------- sessions in Docker containers (see containers.js) ----------
 
-// What every container may use at most: two of Docker's processors, which is one core with its two threads on
-// most machines, and eight gigabytes unless the owner's setting says otherwise. A small project's session with
-// its services was measured at 0.5 to 0.7 GB; a project with a mobile toolchain and a browser under test did
-// not fit into the four gigabytes this began with.
-// ponytail: the same for every container, and the processors are not a setting.
-const BOX_CPUS = 2, BOX_MEMORY_GB = 8;
+// What every container may use of the memory at most: eight gigabytes unless the owner's setting says otherwise.
+// A small project's session with its services was measured at 0.5 to 0.7 GB; a project with a mobile toolchain
+// and a browser under test did not fit into the four gigabytes this began with.
+// The processors have no ceiling: a container that is alone at work has all of them, and the kernel divides them
+// evenly between those that are busy.
+// ponytail: even shares. `docker run --cpu-shares` is the way to weights.
+const BOX_MEMORY_GB = 8;
 // How many containers there may be: one for every pair of the processors Docker has, less the pair that is left
 // to the rest of the computer.
-const boxLimit = cpus => Math.max(1, Math.floor(cpus / BOX_CPUS) - 1);
+const boxLimit = cpus => Math.max(1, Math.floor(cpus / 2) - 1);
 // The lowest of the numbers 1..limit that no container has, or null when all are taken.
 function freeSlot(taken, limit) {
   for (let n = 1; n <= limit; n++) if (!taken.includes(n)) return n;
@@ -1037,7 +1038,7 @@ module.exports = {
   REVIEW_SYSTEM, REVIEW_SCHEMA, reviewPrompt, reviewVerdict, waitForChecks,
   pickRecommended, inputKind, permissionSummary, hookReply, statusLineCommand, instanceSettings, claudeArgs,
   auditEntries, auditPick, toolKey, parseVersion, newerVersion,
-  BOX_CPUS, BOX_MEMORY_GB, boxLimit, freeSlot, boxWork, projectDir, memoryDir, boxNote, clipText, portList, toolNames, excludeLines, parsePorts, parseBoxStats, boxDisk, staleCaches,
+  BOX_MEMORY_GB, boxLimit, freeSlot, boxWork, projectDir, memoryDir, boxNote, clipText, portList, toolNames, excludeLines, parsePorts, parseBoxStats, boxDisk, staleCaches,
   childEnv, mcpServersFor, pluginsOn, marketplaceSource, isInside, realPath, samePath, parseWorktrees, labelFor, scanConfig, configPath, ROOT_FILES, HOME_FILES, HOME_DIRS, scanHome, homePath,
   SAMPLE_SECONDS, samplerCommand, cpuSeconds, parseProcs, treeOf, treeUsage, sparedPids, byName,
   WEIGHTS, MIN_SHARE, shareCpu, scopeUnit, scopeProps, scopeCommand, throttleTargets, nextDuty,

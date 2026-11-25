@@ -121,7 +121,7 @@ function snapshot() {
   const worktrees = repo ? repo.worktrees : [];
   return {
     version: app.getVersion(), claudeFound: !!claudeBin, repo, account, usage: saved.usage, settings: saved.settings, cores: CORES,
-    cpuMechanism: cpu.mechanism, cpuError: cpu.error, docker: { ...dock, boxCpus: lib.BOX_CPUS, boxGb: saved.settings.boxMemoryGb, recipe: boxes.recipe },
+    cpuMechanism: cpu.mechanism, cpuError: cpu.error, docker: { ...dock, boxGb: saved.settings.boxMemoryGb, recipe: boxes.recipe },
     totals: totals(),
     notifications: notifications.slice(-100),
     // latest: only when it is newer than what is installed
@@ -144,7 +144,7 @@ function snapshot() {
         box: i.box && { name: i.box.name, n: boxes.numberOf(i.box.name), ports: i.ports || [] },
         status: i.status, session: { status: s.status || s.state, waitingFor: s.waitingFor, name: s.name },
         pending: i.pending.map(p => p.view), pr: i.pr, merge: i.merge, procs: i.exited ? undefined : i.box ? i.usage : procUsage.get(i.pid),
-        weight: i.weight, limit: i.box ? lib.BOX_CPUS / CORES : i.limited && !i.exited ? cpu.limit(i.id) : 1, group: i.group, starting: i.starting && !i.exited,
+        weight: i.weight, limit: i.limited && !i.exited ? cpu.limit(i.id) : 1, group: i.group, starting: i.starting && !i.exited,
         done: i.done && !i.exited, background: i.exited ? null : i.background, auditRev: i.auditRev,
       };
     }),
