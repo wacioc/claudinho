@@ -86,7 +86,7 @@ is chosen, and the others go on out of sight.
 |---|---|---|
 | Where a session works | In a git worktree under `.claude/worktrees`, made by `claude -w`. | In a container of its own, on a clone of the folder, on a new branch made from GitHub's default branch. |
 | Services and ports | All sessions share this computer. Two that start the same service on the same port get in each other's way, unless each worktree is given ports of its own. | Each container has a Docker of its own inside, so every session can run the same services on the same ports. |
-| What it takes | Nothing beyond the requirements. | Docker Desktop, running. About 2 GB of disk for the image, more for a folder's own tools, what each container's services pull, and memory for each container while it runs. |
+| What it takes | Nothing beyond the requirements. | Docker Desktop, running. About 3 GB of disk for the image, more for a folder's own tools, what each container's services pull, and memory for each container while it runs. |
 | How many at once | As many as you start. | One for every two of Docker's processors, less one: 7 where Docker has 16. Each may use 8 GB of memory, which is a setting. One that is alone at work has all of Docker's processors; those that are busy share them evenly. |
 | Where the work is | On this computer, in the worktree. | In the container, until it is pushed. |
 
@@ -104,8 +104,8 @@ With Docker chosen:
   hundred megabytes and takes some minutes; the card shows it going.
 - Every new container gets the newest gh. Without an answer from GitHub's package repository it keeps the one
   the image was built with, and its card says so.
-- The image holds git, gh, jq, curl, Python, Node.js, Docker with Compose, and the system libraries a headless
-  Chromium needs. What else a folder's sessions need, the folder names in a `mise.toml` (or `.tool-versions`)
+- The image holds git, gh, Codex, jq, curl, Python, Node.js, Docker with Compose, and the system libraries a
+  headless Chromium needs. What else a folder's sessions need, the folder names in a `mise.toml` (or `.tool-versions`)
   at its root, for [mise](https://mise.jdx.dev/configuration.html): `just`, `uv`, Flutter, another Node.js.
   Those tools are built into that folder's image, so a container has them from its first second. Every start
   of a container asks for the image that goes with the file as it is: nothing is built while the file is the
@@ -130,6 +130,10 @@ With Docker chosen:
   with that account's address filled in. Open the address it shows, sign in, and paste the code it gives you.
   After you switch accounts here, the next container asks once more. Nothing is copied from the logins of this
   computer.
+- Codex has no login until you make one, and no card asks for it. Switch on device code login in the security
+  settings of your ChatGPT account, then run this on your computer, with the number of any container that is
+  running: `docker exec -it -u agent claudinho-slot-1 codex login --device-auth`. It holds for all containers.
+  A container made before this version has no Codex.
 - Your own Claude Code configuration is copied into the containers at each start, file by file and only what
   has changed: `CLAUDE.md`,
   `settings.json`, `keybindings.json`, agents, commands, output styles, rules, skills, hooks, and the scripts
@@ -613,9 +617,13 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
 - A container's work exists only in it until it is pushed. Removing a container removes its clone. The app
   asks first, as for a worktree, and keeps a container that holds something; Docker's own clean-up commands
   do not ask.
-- The logins of the containers are their own, in the Docker volumes `claudinho-claude` and `claudinho-gh`.
-  Removing those volumes signs the containers out. A setting of yours that names a path or a program of this
-  computer points nowhere inside a container: a status line or a hook written for Windows does not run there.
+- The logins of the containers are their own, in the Docker volumes `claudinho-claude`, `claudinho-gh` and
+  `claudinho-codex`. Removing those volumes signs the containers out. Every session in a container can read them.
+- All containers share one Codex login, and OpenAI advises against that for concurrent jobs. Codex locks the
+  file while it writes a renewed login, not while it asks for one: two containers that renew it in the same
+  moment can fail, and may have to be signed in again. Codex's configuration on this computer is not copied in.
+- A setting of yours that names a path or a program of this computer points nowhere inside a container: a
+  status line or a hook written for Windows does not run there.
 - Sessions in containers write to one folder of this computer: the repository's memory. A note that one of
   them writes is read by every session on the repository from then on, so a wrong one misleads them all. The
   notes are files, to read and to delete, under `~/.claude/projects/`, in the folder named after the

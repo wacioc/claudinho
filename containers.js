@@ -6,15 +6,21 @@
 //
 // A container is a numbered place, claudinho-slot-N, and there are only so many of them (lib.boxLimit), each
 // held to a memory ceiling the owner sets. It is made when its session starts and removed when the session's
-// card is closed, as a worktree is. Three kinds of volume outlive it:
+// card is closed, as a worktree is. Four kinds of volume outlive it:
 //   claudinho-slot-N-docker       the images its Docker pulled, kept for the next session at that number
 //   claudinho-claude, -gh         Claude Code's configuration with its login, and GitHub's login: one of each
 //                                 for all containers. Both logins are made inside a container, by the owner.
 //                                 Claude Code's is to be the account this computer is signed in to (see
 //                                 signInBox in main.js).
+//   claudinho-codex               Codex's configuration with its login, which the owner makes by hand, once.
+//                                 One file and not a copy for each container: its lock works across them, and
+//                                 a copy would stop working when another one's token is renewed.
 //   claudinho-npm-cache-C, -pip-cache-C, -uv-cache-C, -playwright-C   what npm, pip and uv downloaded, and
 //                                 the browsers Playwright fetched. C is the number CACHE: a release that raises
 //                                 it gives every container made after the update empty caches.
+// ponytail: Codex holds its login's lock while it writes a new token, not while it asks for one, so two containers that
+// ask in the same moment can fail, and OpenAI advises against sharing one login among concurrent jobs
+// (https://learn.chatgpt.com/docs/auth/ci-cd-auth). An API key, or a login for each number, if that happens.
 // The folder on this computer is mounted read-only at /src and cloned from there. A session's work leaves its
 // container by `git push`. One folder of this computer it writes to directly: the memory that Claude Code keeps
 // for the repository, mounted where Claude Code looks for it inside (see memoryIn). Sessions in containers and
@@ -179,7 +185,7 @@ async function create({ n, image: tag, root, name, work, key, dir, ports, memory
     '--label', `claudinho.root=${root}`, '--label', `claudinho.name=${name}`, '--label', `claudinho.work=${work}`, '--label', `claudinho.key=${key}`,
     // 127.0.0.1 without a port: Docker picks a free one on this computer for each of them (see `ports`)
     ...ports.flatMap(p => ['-p', `127.0.0.1::${p}`]),
-    '-v', `${box}-docker:/var/lib/docker`, '-v', `claudinho-claude:${HOME}/.claude`, '-v', `claudinho-gh:${HOME}/.config/gh`,
+    '-v', `${box}-docker:/var/lib/docker`, '-v', `claudinho-claude:${HOME}/.claude`, '-v', `claudinho-gh:${HOME}/.config/gh`, '-v', `claudinho-codex:${HOME}/.codex`,
     '-v', `${cache('npm-cache')}:${HOME}/.npm`, '-v', `${cache('pip-cache')}:${HOME}/.cache/pip`,
     '-v', `${cache('uv-cache')}:${HOME}/.cache/uv`, ...BROWSERS,
     '-v', `${root}:/src:ro`, '-v', `${dir}:/claudinho`, '-v', `${memory}:${memoryIn(work)}`, tag]);

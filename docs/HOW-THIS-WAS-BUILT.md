@@ -1738,6 +1738,21 @@ Measured on the owner's PC, with Docker 29.9 and throwaway containers:
 The price: seven containers used 14 of 16 processors at most, and can now use all. How Windows feels with all of
 them busy was not measured.
 
+### After 0.10.0: Codex
+
+Asked for: Codex in all containers.
+
+| Decision | Why |
+|---|---|
+| It is in the image, from npm, in a layer after gh's. | A folder's `mise.toml` could name it, for that folder alone. The layers after Claude Code's are built again with each of its versions, so a new image has the newest Codex, and no folder's tools are built again for this one. The install script that OpenAI names first keeps its package in `~/.codex`, where the volume goes. |
+| Its login is one, in a volume all containers share, made by the owner inside a container. No card asks for it. | As for the other two logins, except that a session does not need this one to start, and an owner without Codex would be asked at every container. |
+| One login for all, although OpenAI writes not to share one file across concurrent jobs. | A login for each container would be one for every session, and a copy for each stops working when another one's token is renewed. In the source of Codex 0.172.0 (`login/src/auth/storage.rs`, `manager.rs`) a process locks `auth.lock` to write the login, and reads the file again before it renews it. The lock is not held while the new token is asked for, so two that ask in the same moment can still fail. |
+| Codex's sandbox is left as it is. | Its documentation says it may not work in Docker. In these containers, which are privileged, it does. |
+
+Tried in throwaway containers, without a login: npm installs it and it adds 429 MB to the image; `codex sandbox`
+runs a command and refuses it a write; a lock on a file in a volume holds back a second container. Not tried: the
+login itself, a run that calls a model, and two containers that renew the login at once.
+
 ## 16. The eleventh round: a Files tab, and issues assigned to their session
 
 On 15 November, after 0.7.5, on the owner's Mac. Two requests, the second while the first was being built:
@@ -2100,6 +2115,14 @@ work relied on.
 - <https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options>
 - <https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart>
 - <https://signpath.org/terms>
+
+**Codex in containers**
+
+- <https://github.com/openai/codex/blob/main/README.md>, and of the same repository, at `rust-v0.172.0`,
+  `codex-rs/login/src/auth/storage.rs` and `codex-rs/login/src/auth/manager.rs`
+- <https://learn.chatgpt.com/docs/auth>, <https://learn.chatgpt.com/docs/auth/ci-cd-auth>,
+  <https://learn.chatgpt.com/docs/agent-approvals-security> and
+  <https://learn.chatgpt.com/docs/config-file/environment-variables>
 
 **Sessions in containers**
 

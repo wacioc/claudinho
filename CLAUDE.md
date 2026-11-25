@@ -64,9 +64,9 @@ npm run check:pack -- <exe>    # starts a packaged copy of the app and checks it
 - Worktree removal deletes folders and branches. Test it in a scratch repository, never in this one.
 - Sessions in containers are tested live in the clone of the test repository too. Start the test copy with
   `CLAUDINHO_BOX=<a name>`: its containers are then called `<name>-slot-N`, and it never takes, stops or
-  removes a container of the copy in use. The image and the volumes with the two logins are shared with that
-  copy, so a test session is logged in. Never remove the volumes `claudinho-claude` and `claudinho-gh`: they
-  hold the owner's logins for containers.
+  removes a container of the copy in use. The image and the volumes with the logins are shared with that
+  copy, so a test session is logged in. Never remove the volumes `claudinho-claude`, `claudinho-gh` and
+  `claudinho-codex`: they hold the owner's logins for containers.
 - A folder's tools are tested with a `mise.toml` that names a small tool (`just`), as `box-check.js` does:
   the image for it builds in seconds once the shared layers exist. The check removes its image again; a live
   test should remove the images marked with its folder (`claudinho.tools-of`).

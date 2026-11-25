@@ -318,7 +318,7 @@ assert.strictEqual(lib.boxDisk(JSON.stringify({ Volumes: [{ Name: 'claudinho-npm
 
 // the caches a release has left behind: unnumbered or of a lower number; never a higher one, the logins, a
 // container's Docker, a test copy's, or anything else
-const volumes = ['claudinho-claude', 'claudinho-gh', 'claudinho-slot-1-docker', 'cltest-slot-2-docker', 'claudinho-npm-cache', 'claudinho-pip-cache',
+const volumes = ['claudinho-claude', 'claudinho-gh', 'claudinho-codex', 'claudinho-slot-1-docker', 'cltest-slot-2-docker', 'claudinho-npm-cache', 'claudinho-pip-cache',
   'claudinho-uv-cache', 'claudinho-playwright', 'claudinho-npm-cache-1', 'claudinho-playwright-2', 'claudinho-pip-cache-3', 'claudinho-uv-cache-10',
   'claudinho-npm-cache-old', 'claudinho-npm-cache-1-x', 'x-claudinho-npm-cache', 'claudinho-yarn-cache-1', 'pgdata', ''].join('\r\n');
 assert.deepStrictEqual(lib.staleCaches(volumes, 3), ['claudinho-npm-cache', 'claudinho-pip-cache', 'claudinho-uv-cache', 'claudinho-playwright', 'claudinho-npm-cache-1', 'claudinho-playwright-2']);

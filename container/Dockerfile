@@ -141,6 +141,16 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o 
     && rm -rf /var/lib/apt/lists/* \
     && gh --version
 
+# Codex, OpenAI's command line, for sessions that ask it something. It is built again as often as gh, which brings
+# it up to the newest. The image's own Node.js installs it, whichever one the folder names for mise. Its folder is
+# made here and not with the others above, so that no folder's tools are built again for it: a volume goes there,
+# for the login that all containers share.
+# https://github.com/openai/codex/blob/main/README.md
+RUN PATH=/usr/local/bin:$PATH npm install -g --no-fund --no-update-notifier @openai/codex \
+    && codex --version \
+    && rm -rf /root/.npm /root/.codex \
+    && install -d -o agent -g agent /home/agent/.codex
+
 # How long Claude Code waits for an MCP server to start: two minutes, where it waits 30 seconds otherwise. A
 # server that a session starts with npx is installed at its first start, which took claude-context 32 seconds.
 # Cut short, the install stays half-written in the npm cache that all containers share, and npx runs it as it is
