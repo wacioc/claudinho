@@ -61,6 +61,12 @@ const cache = name => `claudinho-${name}-${CACHE}`;
 // none in another: so that is turned off (https://playwright.dev/docs/browsers#stale-browser-removal).
 // ponytail: builds that nothing asks for any more stay in the volume until a release raises CACHE.
 const BROWSERS = ['-e', 'PLAYWRIGHT_SKIP_BROWSER_GC=1', '-v', `${cache('playwright')}:${HOME}/.cache/ms-playwright`];
+// Claude Code keeps a file for each running session in `sessions`, named after the session's process id, and answers
+// `claude agents --json` from it. Containers number their processes each for itself, so two sessions can have the
+// same id, and in the volume they share one wrote over the other's file: the app then saw no status of that one.
+// So each container has that folder to itself, in memory: the files are of no use once its processes are gone.
+// https://code.claude.com/docs/en/claude-directory and https://docs.docker.com/engine/storage/tmpfs/
+const SESSIONS = ['--tmpfs', `${HOME}/.claude/sessions:uid=1000,gid=1000,mode=700`];
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
 // One docker command. Rejects with the last lines of what it printed as an error, and with its exit code.
@@ -185,7 +191,7 @@ async function create({ n, image: tag, root, name, work, key, dir, ports, memory
     '--label', `claudinho.root=${root}`, '--label', `claudinho.name=${name}`, '--label', `claudinho.work=${work}`, '--label', `claudinho.key=${key}`,
     // 127.0.0.1 without a port: Docker picks a free one on this computer for each of them (see `ports`)
     ...ports.flatMap(p => ['-p', `127.0.0.1::${p}`]),
-    '-v', `${box}-docker:/var/lib/docker`, '-v', `claudinho-claude:${HOME}/.claude`, '-v', `claudinho-gh:${HOME}/.config/gh`, '-v', `claudinho-codex:${HOME}/.codex`,
+    '-v', `${box}-docker:/var/lib/docker`, '-v', `claudinho-claude:${HOME}/.claude`, ...SESSIONS, '-v', `claudinho-gh:${HOME}/.config/gh`, '-v', `claudinho-codex:${HOME}/.codex`,
     '-v', `${cache('npm-cache')}:${HOME}/.npm`, '-v', `${cache('pip-cache')}:${HOME}/.cache/pip`,
     '-v', `${cache('uv-cache')}:${HOME}/.cache/uv`, ...BROWSERS,
     '-v', `${root}:/src:ro`, '-v', `${dir}:/claudinho`, '-v', `${memory}:${memoryIn(work)}`, tag]);

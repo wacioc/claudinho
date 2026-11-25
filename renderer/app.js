@@ -343,7 +343,7 @@ function statusOf(i) {
   if (s === 'waiting') return { text: `needs input${i.session.waitingFor ? `: ${i.session.waitingFor}` : ''}`, cls: 'wait' };
   if (s === 'busy') return { text: 'working', cls: 'busy' };
   if (s === 'idle') return { text: i.pr ? 'finished' : 'idle', cls: 'idle' };
-  return { text: s || 'starting', cls: 'off' };
+  return { text: s || (i.prompted ? 'unknown' : 'starting'), cls: 'off' };   // unknown: Claude Code does not list it
 }
 
 // Windows/Linux terminal conventions: Ctrl+C copies when text is selected (else it interrupts), Ctrl+V pastes.

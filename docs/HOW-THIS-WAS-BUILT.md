@@ -1753,6 +1753,29 @@ Tried in throwaway containers, without a login: npm installs it and it adds 429 
 runs a command and refuses it a write; a lock on a file in a volume holds back a second container. Not tried: the
 login itself, a run that calls a model, and two containers that renew the login at once.
 
+### After 0.10.1: two sessions with one process id
+
+Seen: a session in a container had finished its work, and its card said "starting". `claude agents --json` in its
+container answered `[]`. Claude Code's file for a running session is `~/.claude/sessions/<process id>.json`, in the
+volume all containers share, and each container numbers its processes for itself: that session and one in another
+container both had 1488. The one that started 1.4 seconds later had written over the file. The trial of section 15
+("Each container's `claude agents --json` listed its own session and no other") had no two with the same id.
+
+| Decision | Why |
+|---|---|
+| `sessions` is a tmpfs of each container's own, inside the shared volume. | The files are for processes that end with the container, and the conversations are elsewhere (`projects`). The rest of the configuration stays shared. |
+| A session without a status that has taken a prompt since it was started says "unknown". | "Starting" was the fallback for every missing status, so a session at work looked like one that was not up yet. |
+
+Tried with Claude Code 2.1.332 in two throwaway containers on a volume of their own, the next process id set
+through `/proc/sys/kernel/ns_last_pid`, without a login: both 5000. Shared, the first was not listed in its own
+container. With the tmpfs each listed its own. After a stop and a start the folder was the session's user's, with
+its mode. Docker's documentation warns that the mode may be lost there.
+
+The word on the card was checked in a test copy of the app, with a session that sat at the trust question and so
+had no status: "starting", and "unknown" once its prompt hook had been sent by hand.
+
+Containers made before keep the shared folder until they are removed.
+
 ## 16. The eleventh round: a Files tab, and issues assigned to their session
 
 On 15 November, after 0.7.5, on the owner's Mac. Two requests, the second while the first was being built:
@@ -2115,6 +2138,11 @@ work relied on.
 - <https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options>
 - <https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart>
 - <https://signpath.org/terms>
+
+**The records of running sessions**
+
+- <https://code.claude.com/docs/en/claude-directory> (`sessions/`), <https://code.claude.com/docs/en/agent-view>
+  (`claude agents --json`) and <https://docs.docker.com/engine/storage/tmpfs/>
 
 **Codex in containers**
 

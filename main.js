@@ -144,7 +144,7 @@ function snapshot() {
         box: i.box && { name: i.box.name, n: boxes.numberOf(i.box.name), ports: i.ports || [] },
         status: i.status, session: { status: s.status || s.state, waitingFor: s.waitingFor, name: s.name },
         pending: i.pending.map(p => p.view), pr: i.pr, merge: i.merge, procs: i.exited ? undefined : i.box ? i.usage : procUsage.get(i.pid),
-        weight: i.weight, limit: i.limited && !i.exited ? cpu.limit(i.id) : 1, group: i.group, starting: i.starting && !i.exited,
+        weight: i.weight, limit: i.limited && !i.exited ? cpu.limit(i.id) : 1, group: i.group, starting: i.starting && !i.exited, prompted: i.prompted,
         done: i.done && !i.exited, background: i.exited ? null : i.background, auditRev: i.auditRev,
       };
     }),
@@ -205,7 +205,8 @@ function spawnInstance({ cwd, worktree, box = null, resume, transcript, model, e
     starting: !!((wt || box) && prompt && !resume),
     // done: its last turn has ended with nothing it started still running, and no prompt has gone in since.
     // background: what was still running when its last turn ended (see onStop). audit: every input request (see onHook).
-    done: false, background: null, audit: Array.isArray(audit) ? audit : [], auditRev: 0,
+    // prompted: a prompt has gone in since it was started here, so a session without a status is not "starting".
+    prompted: false, done: false, background: null, audit: Array.isArray(audit) ? audit : [], auditRev: 0,
     status: null, pending: [], pr: null, merge: null, finished: false, exited: false, weight, limited,
     // Auto-merge (see mergeWhenReady): what the session wrote last, the follow-ups it got since the last prompt
     // of the owner's, that prompt, and the review that is under way.
@@ -733,7 +734,7 @@ function onHook(inst, ev, res) {
   }
   if (ev.hook_event_name === 'UserPromptSubmit') {
     reply(mergeNote(inst, ev));
-    inst.done = false; inst.background = null;   // a new turn begins; what still runs is reported again at its end
+    inst.prompted = true; inst.done = false; inst.background = null;   // a new turn begins; what still runs is reported again at its end
     // With a prompt of the owner's, what the app was settling starts over, and the review is told what the owner
     // asked for last. What wakes a session comes as a prompt too (see lib.ownPrompt) and changes neither.
     if (lib.ownPrompt(ev.prompt)) { inst.asked = []; inst.reviewing = null; inst.lastPrompt = ev.prompt || null; }

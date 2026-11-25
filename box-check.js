@@ -83,6 +83,8 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
     check(lib.parseVersion(await inside(['codex', '--version'])) !== null && await inside(['sh', '-c', 'test -w ~/.codex && echo writable']) === 'writable' && (await inspect('{{range .Mounts}}{{.Name}}={{.Destination}} {{end}}')).includes('claudinho-codex=/home/agent/.codex'), `Codex ${lib.parseVersion(await inside(['codex', '--version']))} is in it, and its folder is the shared volume, which the session's user may write to`);
     // In the sandbox Codex gives its commands: a read-only one. Without a login and without a model call.
     check(/^ran\nrefused$/.test(await inside(['sh', '-c', 'codex sandbox -- sh -c "echo ran; touch /tmp/codex-check 2>/dev/null || echo refused" 2>/dev/null'])), 'Codex\'s own sandbox works in the container');
+    const sessions = () => inside(['sh', '-c', 'cd ~/.claude/sessions && stat -f -c %T . && stat -c "%U %a" . && touch x && rm x && echo writable'], { cwd: '/' });
+    check(await sessions() === 'tmpfs\nagent 700\nwritable', 'the folder of its running sessions is its own, not in the volume all containers share, where two with the same process id met');
     const newGh = lib.parseVersion((await (await fetch('https://api.github.com/repos/cli/cli/releases/latest')).json()).tag_name);
     check(newGh && oldGh !== newGh && await ghVersion() === newGh, `gh ${oldGh} was replaced by ${await ghVersion()}, the newest (${newGh})`);
     check(await inside(['just', '--version']) === 'just 1.36.0', 'the tool the folder names is in the image, and found from inside the clone without any set-up');
@@ -157,6 +159,7 @@ const secs = t => `${((Date.now() - t) / 1000).toFixed(1)} s`;
     await boxes.start(box);
     await boxes.ready(box);
     check(await inside(['cat', 'check.txt']) === 'x', 'started again, it holds what it held');
+    check(await sessions() === 'tmpfs\nagent 700\nwritable', 'and the folder of its running sessions is its user\'s again');
     await boxes.remove(box);
     check(!await boxes.exists(box), 'removed');
   } finally {
