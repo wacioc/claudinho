@@ -4,6 +4,15 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.10.4 (2026-11-25)
+
+**Docker containers**
+
+- The `file` command is in every new container: a session that ran it to see what it had downloaded was told it
+  does not exist. The first container after this update waits for a new image, of which the part from the system
+  libraries for Playwright on is built again, a folder's own tools with it. Containers that exist already stay
+  without it.
+
 ## 0.10.3 (2026-11-25)
 
 **Header**
