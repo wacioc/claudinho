@@ -19,6 +19,8 @@ the [releases page](https://github.com/wacioc/claudinho/releases).
 
 ## 0.10.1 (2026-11-25)
 
+This version has a tag and no release: GitHub failed while it was published. 0.10.2 holds what is in it.
+
 **Docker containers**
 
 - Codex, OpenAI's command line, is in every new container. The first container after this update waits for a new
