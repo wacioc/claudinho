@@ -4,6 +4,19 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.10.2 (2026-11-25)
+
+**Docker containers**
+
+- A session in a container whose Claude Code had the same process id as that of another container lost its
+  status: its card said "starting" whatever it did, and a permission request answered in its terminal could stay
+  open on the card. Each container now keeps the records of its running sessions to itself. Containers that exist
+  already are as they were; resuming a session in one usually gives it another process id.
+
+**Cards**
+
+- A session that has taken a prompt and has no status says "unknown", where it said "starting".
+
 ## 0.10.1 (2026-11-25)
 
 **Docker containers**
