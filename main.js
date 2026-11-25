@@ -120,7 +120,9 @@ const issueLink = x => (!x.issue ? null : x.issueUrl || (repo && repo.github && 
 function snapshot() {
   const worktrees = repo ? repo.worktrees : [];
   return {
-    version: app.getVersion(), claudeFound: !!claudeBin, repo, account, usage: saved.usage, settings: saved.settings, cores: CORES,
+    version: app.getVersion(), claudeFound: !!claudeBin, repo, account,
+    usage: saved.usage && account && saved.usage.email === account.email ? saved.usage : null,   // another account's figures are not these
+    settings: saved.settings, cores: CORES,
     cpuMechanism: cpu.mechanism, cpuError: cpu.error, docker: { ...dock, boxGb: saved.settings.boxMemoryGb, recipe: boxes.recipe },
     totals: totals(),
     notifications: notifications.slice(-100),
@@ -456,7 +458,9 @@ function readStatus(inst) {
   // The conversation this instance is in now (it changes with /clear and /resume), and where Claude Code keeps it.
   if (st.session_id) { inst.sessionId = st.session_id; inst.transcript = st.transcript_path || null; }
   if (st.cwd) inst.cwd = (st.worktree && st.worktree.path) || st.cwd;
-  if (st.rate_limits) saved.usage = { ...st.rate_limits, at: Date.now() };
+  // ponytail: marked with the account signed in now; a session still running on a login from before a switch
+  // would mark its figures with the new one. Claude Code's status line does not say which account it is.
+  if (st.rate_limits) saved.usage = { ...st.rate_limits, at: Date.now(), email: account && account.email };
 }
 
 // A held permission request is also on screen as Claude Code's own dialog (and on Remote Control devices).
