@@ -4,6 +4,18 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.10.1 (2026-11-25)
+
+**Docker containers**
+
+- Codex, OpenAI's command line, is in every new container. The first container after this update waits for a new
+  image, of which only the last part is built after 0.9.2 or 0.10.0, and which is 430 MB larger. Containers that
+  exist already stay without it.
+- Codex has one login for all containers, in a Docker volume of its own, which you make once and by hand. The
+  README says how, under "Worktrees or Docker containers". No card asks for it, and a session starts without it.
+  OpenAI advises against one login for several jobs at once: two containers that renew it in the same moment can
+  fail, and may have to be signed in again.
+
 ## 0.10.0 (2026-11-25)
 
 **Docker containers**
