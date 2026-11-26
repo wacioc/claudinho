@@ -4,6 +4,15 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.11.1 (2026-11-26)
+
+**Issues**
+
+- The "Agents running at once" field is gone from the dialog for several issues. Each issue now starts as soon
+  as its blockers are closed and, with containers, a container is free; worktrees are still made one at a time.
+  The limit was shared by every group and set by the batch sent last, and an issue it held back could say it
+  was waiting for a free container while most were free.
+
 ## 0.11.0 (2026-11-26)
 
 **Pull requests**
