@@ -73,6 +73,15 @@ function prAction(pr, autoMerge) {
   return pr.isDraft ? 'none' : 'finished';
 }
 
+// What to do about a session's pull request while its work is done (see followPr in main.js): 'close' once one
+// that was seen open (inst.prWasOpen) is merged, 'look' again at an open one read a minute ago or more.
+// One merged before the app first saw it (a session resumed days later) closes nothing: that may be on purpose.
+function prFollow(inst, now) {
+  if (!inst.pr || !(inst.done || inst.exited)) return null;
+  if (inst.pr.state === 'MERGED') return inst.prWasOpen ? 'close' : null;
+  return inst.pr.state === 'OPEN' && now - (inst.prLooked || 0) >= 60000 ? 'look' : null;
+}
+
 // What a session still has running when its turn ends. tasks: the Stop hook's `background_tasks`, one entry
 // for each thing in flight, its kind in `type`: shell, subagent, monitor, workflow, teammate, cloud session,
 // MCP task. (A monitor started with the Monitor tool comes as a shell: measured on Claude Code 2.1.322.)
@@ -1032,7 +1041,7 @@ function homePath(home, rel) {
 }
 
 module.exports = {
-  worktreeName, openBlockers, defaultTemplate, renderTemplate, AUTONOMY, autonomyOf, mergeInstruction, mergeNote, toldToMerge, issuePrompt, prAction, backgroundWork, ownPrompt,
+  worktreeName, openBlockers, defaultTemplate, renderTemplate, AUTONOMY, autonomyOf, mergeInstruction, mergeNote, toldToMerge, issuePrompt, prAction, prFollow, backgroundWork, ownPrompt,
   byNumber, issuesQuery, mapIssue, issueUrl, parseGitHub,
   PR_FIELDS, checksOf, mapPr, parsePatch, mapDiffFile, mapDiff, unquotePath, patchFiles, untrackedRow, colouredLines, colourHunks, dirRows, findEntries, fileLines, groupName,
   REVIEW_SYSTEM, REVIEW_SCHEMA, reviewPrompt, reviewVerdict, waitForChecks,

@@ -479,6 +479,7 @@ async function tick() {
   if (claudeBin) { try { sessions = JSON.parse(await run(claudeBin, ['agents', '--json'])); } catch { /* keep the last list */ } }
   await Promise.all([...instances.values()].filter(i => i.box && i.pid && !i.exited).map(pollBox));
   for (const inst of instances.values()) if (!inst.exited) { readStatus(inst); dropAnswered(inst); }
+  for (const inst of [...instances.values()]) followPr(inst);   // a copy: a merged one leaves the map
   sampleBoxes();
   if (saved.settings.mode === 'docker' && Date.now() - dock.at > 15000) checkDocker();
   if (Date.now() - disk.at > 10 * 60000) measureDisk();
@@ -876,9 +877,11 @@ async function readPr(inst) {
   let pr = null;
   // gh reads the branch from the folder. A session in a container has no folder here, so its branch is named.
   if (inst.box && !inst.branch) return null;   // its container has not said yet which one it is on
-  try { pr = JSON.parse(await run('gh', ['pr', 'view', ...(inst.box ? [inst.branch] : []), '--json', 'number,state,url,isDraft,title,body,additions,deletions'], hostDir(inst), GH_WAIT)); } catch { /* no PR on this branch */ }
+  try { pr = JSON.parse(await run('gh', ['pr', 'view', ...(inst.box ? [inst.branch] : []), '--json', 'number,state,url,isDraft,title,body,additions,deletions,mergeable'], hostDir(inst), GH_WAIT)); } catch { /* no PR on this branch */ }
   if (!pr) return null;
-  inst.pr = { number: pr.number, url: pr.url, draft: !!pr.isDraft, state: pr.state };
+  // conflict: GitHub says it cannot be merged as it is. It answers UNKNOWN while it works that out, which a later look settles.
+  inst.pr = { number: pr.number, url: pr.url, draft: !!pr.isDraft, state: pr.state, conflict: pr.mergeable === 'CONFLICTING' };
+  if (pr.state === 'OPEN') inst.prWasOpen = true;
   if (pr.state === 'MERGED' && !/^merged/.test(inst.merge || '')) inst.merge = 'merged';
   return pr;
 }
@@ -887,12 +890,31 @@ async function readPr(inst) {
 // turn ends or the Diff tab is opened. So a session that is resumed, which starts without a turn, is looked
 // up when it starts, and one at work whenever a tool call of its has run: its pull request may just have been
 // opened, turns before its turn ends.
-// ponytail: one look in half a minute per session, and none once a pull request is known: what becomes of it later
-// (merged or closed on GitHub) shows when the next turn ends. Look on a timer if a card must follow that too.
+// ponytail: one look in half a minute per session, and none from here once a pull request is known: followPr
+// takes over while the session's work is done.
 function lookForPr(inst) {
   if (inst.pr || inst.exited || Date.now() - (inst.prLooked || 0) < 30000) return;
   inst.prLooked = Date.now();
   readPr(inst).then(pr => { if (pr) push(); });
+}
+
+// A session whose work is done and whose pull request is open has that pull request looked at once a minute: its
+// base can move on and give it a conflict, and it can be merged on GitHub. Once merged, the session is closed as
+// the ✕ would close it with "Remove" ticked, except that what would discard work is kept (see lib.prFollow).
+// ponytail: one `gh pr view` a minute for each such session. A GitHub webhook would need a public address.
+async function followPr(inst) {
+  const what = lib.prFollow(inst, Date.now());
+  if (what === 'look') { inst.prLooked = Date.now(); if (await readPr(inst)) push(); return; }
+  if (what !== 'close') return;
+  const n = inst.pr.number, where = inst.box ? 'container' : 'worktree';
+  let text;
+  try {
+    const done = await closeInstance(inst.id, 'safe');
+    text = done && done.removed ? `was closed: pull request #${n} is merged. Its ${where} was removed.`
+      : done && done.kept ? `was closed: pull request #${n} is merged. Its ${where} was kept, because removing it would discard work.`
+        : `was closed: pull request #${n} is merged.`;
+  } catch (e) { text = `was closed: pull request #${n} is merged. Its ${where} could not be removed: ${e.message}`; }
+  notify('done', text, inst);
 }
 
 // What a session's folder holds beyond the default branch, for a branch that has no pull request yet: the

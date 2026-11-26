@@ -705,17 +705,18 @@ runs on with real load and prints what it measured; `node cpu-check.js <scenario
   command, or have the session stop it. Claude Code lists a monitor started with its Monitor tool as a shell,
   so that is what the card calls it. A scheduled wake-up (`/loop`) is not something running: between two of
   them the session counts as done.
-- The button to merge or mark ready shows what the app knew when the session's turn ended. A pull request
-  merged or closed on GitHub since then still has its button until the next turn, and a session resumed after
-  a restart has none until then.
+- The button to merge or mark ready, or the "Merge conflicts" in its place, can be up to a minute behind
+  GitHub: while a session's work is done, its open pull request is looked at once a minute. A pull request
+  merged then closes its session, and its worktree or container goes unless that would discard work. One
+  that was already merged when the app first saw it (a session resumed after the merge) closes nothing.
 - The Issues tab lists the newest 1000 issues and the Pull requests tab the newest 200 open pull requests. In
   a repository with more, the oldest are missing from the lists.
 - A session's issue button knows where to go from the issue it was sent after. A session on record from 0.6.0
   or older has only the issue's number: its button leads to the open folder's repository, and where the
   session belongs to another folder there is no button, only the number. A pull request button shows what the
   app knew of the pull request when it last read it. It looks when a session is resumed, about every half
-  minute while a session that has none yet is at work, at the end of a turn, and when the Diff tab is opened.
-  What becomes of a pull request on GitHub after that shows at the end of the next turn.
+  minute while a session that has none yet is at work, at the end of a turn, when the Diff tab is opened, and
+  once a minute while the session's work is done and its pull request is open.
 - The Diff tab has GitHub's default view and no other: one column, no side-by-side view, no marking of the
   changed words inside a line, no unfolding of the lines between two hunks, no hiding of whitespace changes.
   Its colours are worked out hunk by hunk, where GitHub colours whole files: a hunk that starts inside a

@@ -382,6 +382,7 @@ function createCard(inst) {
     prLink: h('button', { hidden: true, onclick: e => { e.stopPropagation(); call('openUrl', t.inst.pr.url); } }),
     done: h('span.tick', { title: 'Done: its last turn has ended, nothing it started is still running, and nothing has been asked of it since.' }, '✓'),
     prBtn: h('button.pr-act', { hidden: true, onclick: e => { e.stopPropagation(); prAct(inst.id); } }),
+    conflict: h('span.chip.warn', { hidden: true }, 'Merge conflicts'),
     info: h('dl'), env: h('div.env'), procs: h('div.procs'), audit: h('div.audit'),
     // The detail view's three tabs: the session's terminal, the diff of its pull request, and its folder as a
     // tree with the file that was clicked beside it. Nothing in that last one can change a file, which its name says.
@@ -401,7 +402,7 @@ function createCard(inst) {
     h('div.diff-bar', p.filesRoot, h('span.spacer'), p.filesAt, h('button', { onclick: () => loadFiles(t) }, '↻ Refresh')),
     h('div.files-panes', p.tree, p.view));
   const card = h('article.card', { onclick: e => { if (detailId !== inst.id && !e.target.closest('button, .pending-box')) openDetail(inst.id); } },
-    h('div.head', p.done, p.title, p.group, p.badge, h('span.spacer'), p.prBtn,
+    h('div.head', p.done, p.title, p.group, p.badge, h('span.spacer'), p.prBtn, p.conflict,
       h('button.back', { onclick: e => { e.stopPropagation(); closeDetail(); } }, '← All instances'),
       h('button.x', { title: 'Stop and remove', onclick: e => { e.stopPropagation(); closeInstance(inst.id); } }, '✕')),
     p.meta, p.pending, p.tabs,
@@ -500,8 +501,11 @@ function updateCard(t, inst, order) {
     : 'Its first prompt has not gone in yet: Claude Code is still running the SessionStart hooks of this new worktree. Issues that are queued wait for it.';
   t.card.classList.toggle('attention', st.cls === 'wait');
   // Its work is done and its pull request is still open: the owner can mark a draft ready, or merge, from here.
+  // One that GitHub says has conflicts says so instead: those are settled in the session or on GitHub.
   const pr = inst.pr && inst.pr.state === 'OPEN' && (inst.done || inst.exited) ? inst.pr : null;
-  t.p.prBtn.hidden = !pr;
+  t.p.prBtn.hidden = !pr || pr.conflict;
+  t.p.conflict.hidden = !pr || !pr.conflict;
+  if (pr) t.p.conflict.title = `Pull request #${pr.number} has merge conflicts with its base branch. Once they are resolved and pushed, the Merge PR button is back within a minute.`;
   if (pr) {
     t.p.prBtn.textContent = pr.draft ? 'Mark ready for review' : 'Merge PR';
     t.p.prBtn.title = pr.draft ? `Pull request #${pr.number} is a draft: mark it as ready for review` : `Merge pull request #${pr.number} (${state.settings.mergeMethod})`;

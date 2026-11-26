@@ -48,6 +48,14 @@ assert.strictEqual(lib.prAction({ state: 'OPEN', isDraft: true }, false), 'none'
 assert.strictEqual(lib.prAction({ state: 'MERGED' }, false), 'merged');
 assert.strictEqual(lib.prAction({ state: 'MERGED' }, true), 'merged');
 assert.strictEqual(lib.prAction({ state: 'CLOSED' }, true), 'none');
+assert.strictEqual(lib.prFollow({ pr: { state: 'MERGED' }, prWasOpen: true, done: true }, 0), 'close');
+assert.strictEqual(lib.prFollow({ pr: { state: 'MERGED' }, prWasOpen: true, exited: true }, 0), 'close');
+assert.strictEqual(lib.prFollow({ pr: { state: 'MERGED' }, prWasOpen: true }, 0), null);              // mid-turn: not closed under it
+assert.strictEqual(lib.prFollow({ pr: { state: 'MERGED' }, done: true }, 0), null);                   // merged before the app saw it open
+assert.strictEqual(lib.prFollow({ pr: { state: 'OPEN' }, done: true, prLooked: 1000 }, 61000), 'look');
+assert.strictEqual(lib.prFollow({ pr: { state: 'OPEN' }, done: true, prLooked: 1000 }, 60000), null);
+assert.strictEqual(lib.prFollow({ pr: { state: 'CLOSED' }, done: true }, 1e9), null);
+assert.strictEqual(lib.prFollow({ done: true }, 1e9), null);
 
 // What a session still has running when its turn ends. The entries are what Claude Code 2.1.322 sent in the
 // Stop hook's background_tasks for a shell in the background, a monitor (it comes as a shell) and a subagent.

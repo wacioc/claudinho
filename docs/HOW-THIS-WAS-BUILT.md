@@ -1922,6 +1922,25 @@ In a copy started without the feeds, as one run from source: "This copy of claud
 does not update itself.", and for Claude Code, asked at its real address, that 2.1.325 is the newest. Neither
 update button was pressed. Not tried: the click in a packaged copy, which asks GitHub.
 
+### After 0.10.4: conflicts on the card, and a merged pull request closes its session
+
+> If the PR has merge conflicts, display that instead of the "Merge PR" button. If the PR has been merged,
+> automatically close the container/worktree (as if it was closed by the user). Release version 0.11.0.
+
+| Decision | Why |
+|---|---|
+| `gh pr view` also reads `mergeable`. CONFLICTING puts "Merge conflicts" where the button was, for a draft too. | GitHub's own word for it. It says UNKNOWN while it works that out, which the next look settles. |
+| While a session's work is done and its pull request is open, that pull request is looked at once a minute, from the tick (`followPr`, `lib.prFollow`). | A conflict comes when the base branch moves on, and a merge can happen on GitHub: neither ends a turn, which was the only time the app looked. A webhook would need a public address. Mid-turn there is no button to keep right. |
+| A pull request merged closes its session as the ✕ does with "Remove" ticked: the worktree or container goes only where nothing would be lost, else it is kept (a container stopped). A notification says which. | "As if closed by the user", without a dialog nobody is there to answer. Work that is not committed or pushed is never thrown away by an automatic step. |
+| Only a pull request the app saw open, and only while the session's work is done. | A session resumed on a branch merged days ago may be resumed on purpose. One mid-turn is not stopped under its own feet: it closes when its turn ends. Merges by the app itself (auto-merge, the button) close the same way. |
+
+Verified in a test copy on a scratch repository, with a session started without a prompt and its pull request
+written into the main process through the debugger (no GitHub write): with a conflict the card showed "Merge
+conflicts" and no button; without one, "Merge PR"; set to merged, within a tick the session was gone, its
+worktree and branch removed, and the notification said so. With a file left uncommitted in the worktree, the
+session closed and the worktree was kept, which the notification said. `gh` was checked to return `mergeable`
+(MERGEABLE, CONFLICTING) on a public repository. Not tried: a container, and a real merge on GitHub.
+
 ## 17. Still open
 
 - In a window as wide as the app opens it, with no usage figures yet and a long account name, the header is
