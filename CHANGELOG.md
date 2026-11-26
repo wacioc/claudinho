@@ -4,6 +4,19 @@ What each version of claudinho holds. Versions follow [semantic versioning](http
 is tagged `vX.Y.Z`, and the app shows its version in the header. From 0.1.1 on, each version's installers are on
 the [releases page](https://github.com/wacioc/claudinho/releases).
 
+## 0.11.0 (2026-11-26)
+
+**Pull requests**
+
+- A card whose pull request has merge conflicts says "Merge conflicts" where its Merge PR (or Mark ready for
+  review) button was.
+- A pull request that is merged, on GitHub, by its button or by auto-merge, now closes its session as the ✕
+  does: the worktree or container is removed, or kept where removing it would discard work. A notification says
+  which. A session in the middle of a turn is closed once the turn ends. One whose pull request was already
+  merged when the app first saw it, such as a session resumed after the merge, is left open.
+- While a session's work is done, its open pull request is looked at once a minute, so both of these show
+  within a minute of the change on GitHub. Before, the card learnt of it at the end of the next turn.
+
 ## 0.10.4 (2026-11-25)
 
 **Docker containers**
