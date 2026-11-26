@@ -340,13 +340,13 @@ reaches Claude.
 Worktrees are created one at a time. A repository can set a fresh worktree up in a `SessionStart` hook (install
 dependencies, copy files), and two of those running side by side get in each other's way. So the next issue's
 worktree is created only when the session in the previous one has finished its `SessionStart` hooks. Until
-then that card says "starting", and the queued issues say which one they are waiting for. How many agents then
-work at once is still the number you choose.
+then that card says "starting", and the queued issues say which one they are waiting for. Once started, they all
+work at once.
 
 With Docker containers chosen, each issue gets a container instead of a worktree, named after the issue the
 same way, and so is its branch. Containers do not wait for each other: the sessions of a batch start side by
-side, as many as you chose to run at once, because nothing one of them sets up can be in another's way. An
-issue waits in the queue while every container is taken.
+side, because nothing one of them sets up can be in another's way. An issue waits in the queue while every
+container is taken.
 
 An issue that is started is assigned on GitHub to the account of its session: the one `gh` is signed in to
 where the session works, which is this computer for a session in a worktree, and the containers for a session
@@ -354,9 +354,9 @@ in a container. Whoever is assigned already stays assigned. It happens when the 
 while the issue waits in the queue. Where GitHub refuses, because that account may not assign in the
 repository, say, the session starts all the same and the bell says why.
 
-Several issues are started lowest number first, whatever the order of the list. For them you also choose how many
-agents run at once (max 4; with containers, as many as there may be) and the group's name (see [Groups](#groups)). For one issue or several you choose
-the autonomy (next section).
+Several issues are started lowest number first, whatever the order of the list, each as soon as nothing holds
+it back: its blockers, the worktree before it, or a free container. For them you also choose the group's name
+(see [Groups](#groups)). For one issue or several you choose the autonomy (next section).
 
 ### Autonomy: who merges
 

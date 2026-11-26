@@ -81,8 +81,7 @@ let sessions = [];        // `claude agents --json`: every live Claude Code sess
 const instances = new Map();
 // What was open when the app last stopped, until each is resumed or forgotten (see "sessions on disk").
 let interrupted = Array.isArray(saved.sessions) ? saved.sessions : [];
-const queue = [];         // dispatched issues waiting for a pool slot or for their blockers
-let poolLimit = 1;
+const queue = [];         // dispatched issues waiting for their blockers, a worktree to start, or a free container
 const notifications = []; // what the bell lists, newest last (see notify)
 let tray = null;          // the tray icon; the window draws its picture (see rpc.tray)
 const claudeCode = { version: null, latest: null, updating: false };   // Claude Code itself (see checkClaude)
@@ -171,7 +170,7 @@ function userStatusLine() { return readJson(path.join(configDir(), 'settings.jso
 // box: the session works in a Docker container instead of a worktree (see containers.js). `true` asks for a
 // new one, which `worktree` then names, as it names its branch. { name, key, work } is a container that
 // exists: of a session that is resumed, or one that was kept when its card was closed.
-function spawnInstance({ cwd, worktree, box = null, resume, transcript, model, effort, prompt, level = 'manual', autonomy, autoMerge, mayMerge = false, kind = 'instance', issue = null, issueUrl = null, pooled = false, weight = 'normal', group = null, audit = [] }) {
+function spawnInstance({ cwd, worktree, box = null, resume, transcript, model, effort, prompt, level = 'manual', autonomy, autoMerge, mayMerge = false, kind = 'instance', issue = null, issueUrl = null, weight = 'normal', group = null, audit = [] }) {
   if (!claudeBin) throw new Error('Claude Code CLI (claude) was not found on PATH.');
   const root = cwd || repo.path;
   const id = crypto.randomBytes(4).toString('hex');
@@ -198,7 +197,7 @@ function spawnInstance({ cwd, worktree, box = null, resume, transcript, model, e
     limited = cpu.attach(id, proc.pid, limits);
   }
   const inst = {
-    id, kind, issue, issueUrl, pooled, model, effort, level, autonomy: lib.autonomyOf({ autonomy, autoMerge }), mayMerge: !!mayMerge,
+    id, kind, issue, issueUrl, model, effort, level, autonomy: lib.autonomyOf({ autonomy, autoMerge }), mayMerge: !!mayMerge,
     root, wt, box, name: box ? worktree : null, prompt, proc, env, dir, statusFile, pid: proc && proc.pid, startedAt: Date.now(),
     cwd: box ? box.work : wt || root, sessionId: resume || null, transcript: transcript || null, group: lib.groupName(group),
     // A new worktree with a first prompt: until that prompt has gone in, the session is still running its
@@ -209,7 +208,7 @@ function spawnInstance({ cwd, worktree, box = null, resume, transcript, model, e
     // background: what was still running when its last turn ended (see onStop). audit: every input request (see onHook).
     // prompted: a prompt has gone in since it was started here, so a session without a status is not "starting".
     prompted: false, done: false, background: null, audit: Array.isArray(audit) ? audit : [], auditRev: 0,
-    status: null, pending: [], pr: null, merge: null, finished: false, exited: false, weight, limited,
+    status: null, pending: [], pr: null, merge: null, exited: false, weight, limited,
     // Auto-merge (see mergeWhenReady): what the session wrote last, the follow-ups it got since the last prompt
     // of the owner's, that prompt, and the review that is under way.
     said: null, asked: [], lastPrompt: null, reviewing: null,
@@ -496,7 +495,7 @@ async function tick() {
 // on top of that: which instances were open, where, and with which settings. That is written out every ten
 // seconds, and whenever an instance comes or goes.
 const sessionRecord = i => ({
-  id: i.id, root: i.root, worktree: i.wt && path.basename(i.wt), box: i.box, name: i.name, kind: i.kind, issue: i.issue, issueUrl: i.issueUrl, pooled: i.pooled, model: i.model, effort: i.effort,
+  id: i.id, root: i.root, worktree: i.wt && path.basename(i.wt), box: i.box, name: i.name, kind: i.kind, issue: i.issue, issueUrl: i.issueUrl, model: i.model, effort: i.effort,
   level: i.level, autonomy: i.autonomy, mayMerge: i.mayMerge, weight: i.weight, group: i.group, prompt: i.prompt, sessionId: i.sessionId, transcript: i.transcript, savedAt: Date.now(),
   audit: i.audit,
 });
@@ -862,13 +861,11 @@ async function onStop(inst, ev, gone) {
   push(); pump();
 }
 
-// "Finished" = the agent ended its turn and its branch has an open PR. That frees its pool slot. With
-// auto-merge on, what the session wrote decides what happens to the PR; a follow-up for it is returned.
+// With auto-merge on, what the session wrote decides what happens to its pull request; a follow-up for it is
+// returned.
 async function checkPr(inst, gone, canAsk) {
   const pr = await readPr(inst);
-  const action = lib.prAction(pr, inst.autonomy === 'full');
-  if (action === 'review') return mergeWhenReady(inst, pr, gone, canAsk);
-  if (action !== 'none') inst.finished = true;
+  if (lib.prAction(pr, inst.autonomy === 'full') === 'review') return mergeWhenReady(inst, pr, gone, canAsk);
 }
 
 // The pull request of the instance's branch as GitHub has it now, kept for the card: its number, whether it is
@@ -1005,7 +1002,6 @@ async function mergeWhenReady(inst, pr, gone = () => false, canAsk = true) {
     if (canAsk && inst.asked.length < MAX_FOLLOW_UPS) return ask(v.message);
     v = { verdict: 'hold', message: canAsk ? `not settled after ${MAX_FOLLOW_UPS} follow-ups` : `to settle first: ${v.message}` };
   }
-  inst.finished = true; pump();   // from here on it only waits, so its place in the pool is free
   if (v.verdict === 'hold') return state(`not merged: ${v.message}`);
   const n = String(pr.number);
   let problem;
@@ -1019,7 +1015,6 @@ async function mergeWhenReady(inst, pr, gone = () => false, canAsk = true) {
   if (!problem) return state(v.message ? `merged: ${v.message}` : 'merged');
   if (inst.reviewing !== mine) return;   // a newer turn is under review: that one speaks for the card
   if (!problem.owner && canAsk && !stale() && inst.asked.length < MAX_FOLLOW_UPS) {
-    inst.finished = false;
     return ask(`The pull request could not be merged: ${problem.why}.\nRepair that, push, and say when the pull request is ready for merge.`);
   }
   state(`not merged: ${problem.why}`);
@@ -1114,8 +1109,6 @@ async function pump() {
       // SessionStart hooks, so two worktrees are never being set up side by side. Containers do not wait, for
       // each other or for a worktree: each is set up where nothing of another's can be in its way.
       if (!job.box && [...instances.values()].some(i => i.starting && !i.exited && !i.box)) continue;
-      const active = [...instances.values()].filter(i => i.pooled && !i.exited && !i.finished).length;
-      if (job.pooled && active >= poolLimit) continue;
       try {
         job.waitingOn = lib.openBlockers(JSON.parse(await run('gh', ['api', `repos/{owner}/{repo}/issues/${job.number}/dependencies/blocked_by`], job.root)));
       } catch { job.waitingOn = ['?']; }   // gh failed: like claude_worktree, wait and retry
@@ -1126,7 +1119,7 @@ async function pump() {
       queue.splice(queue.indexOf(job), 1);
       const id = spawnInstance({
         cwd: job.root, worktree: lib.worktreeName(job.number, job.title), box: job.box || null, model: job.model, effort: job.effort, level: job.level,
-        autonomy: job.autonomy, mayMerge: job.autonomy === 'semi', issue: job.number, issueUrl: job.url, pooled: job.pooled, group: job.group,
+        autonomy: job.autonomy, mayMerge: job.autonomy === 'semi', issue: job.number, issueUrl: job.url, group: job.group,
         prompt: lib.issuePrompt(job.template, job, job.autonomy, saved.settings.mergeMethod),
       });
       if (!job.box) assignIssue(instances.get(id));   // one in a container is assigned from there, once it has one
@@ -1441,16 +1434,14 @@ const rpc = {
     return out.sort(lib.byNumber);
   },
   // box: each issue's session works in a container of its own instead of a worktree.
-  dispatch({ issues, model, effort, level, parallel, autonomy, template, group, box }) {
+  dispatch({ issues, model, effort, level, autonomy, template, group, box }) {
     if (!claudeBin) throw new Error('Claude Code CLI (claude) was not found on PATH.');
     lib.issuePrompt(template, issues[0]);   // a prompt that cannot be filled in is refused here, before anything is queued
-    const pooled = issues.length > 1;
     group = lib.groupName(group);
-    if (pooled && !group) throw new Error('Issues started together are a group: give it a name.');
-    if (pooled) poolLimit = Math.min(box ? Math.max(1, dock.limit) : 4, Math.max(1, Number(parallel) || 1));
+    if (issues.length > 1 && !group) throw new Error('Issues started together are a group: give it a name.');
     for (const is of issues) {
       if (queue.some(j => j.number === is.number)) continue;
-      queue.push({ number: is.number, title: is.title, url: is.url, root: repo.path, model, effort, level, autonomy, template, pooled, group, box: !!box, waitingOn: [] });
+      queue.push({ number: is.number, title: is.title, url: is.url, root: repo.path, model, effort, level, autonomy, template, group, box: !!box, waitingOn: [] });
     }
     pump();
   },

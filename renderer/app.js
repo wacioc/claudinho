@@ -1181,9 +1181,8 @@ const batchName = picked => { const n = picked.map(i => `#${i.number}`); return 
 async function tackle(picked) {
   // Whatever the order of the list: issues sent together start with the lowest number, the way a plan is numbered.
   picked = picked.slice().sort((a, b) => a.number - b.number);
-  // With containers chosen, each issue's session works in a container of its own, and as many run at once as
-  // there are containers.
-  const box = docker(), most = box ? Math.max(1, (state.docker || {}).limit || 1) : 4;
+  // With containers chosen, each issue's session works in a container of its own.
+  const box = docker();
   if (box && !(state.docker || {}).ok) return toast('Docker does not answer. Sessions in containers need Docker Desktop to be running.');
   const multi = picked.length > 1;
   const v = await formDialog(multi ? `Tackle ${picked.length} issues` : `Tackle #${picked[0].number}`, [
@@ -1193,7 +1192,6 @@ async function tackle(picked) {
     }) },
     box && toolsField(),
     ...launchFields(),
-    multi && { key: 'parallel', label: 'Agents running at once', type: 'number', min: 1, max: most, value: Math.min(most, picked.length), hint: `One instance and ${box ? 'container' : 'worktree'} per issue; the rest queue (max ${most}).` },
     autonomyField(),
     multi && { key: 'group', label: 'Group', type: 'text', list: 'groups', maxLength: 40, required: true, value: batchName(picked),
       hint: 'Issues started together are a group: their cards carry this name and its colour. An existing name adds them to that group.' },

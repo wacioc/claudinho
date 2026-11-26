@@ -1941,6 +1941,19 @@ worktree and branch removed, and the notification said so. With a file left unco
 session closed and the worktree was kept, which the notification said. `gh` was checked to return `mergeable`
 (MERGEABLE, CONFLICTING) on a public repository. Not tried: a container, and a real merge on GitHub.
 
+### After 0.11.0: no limit on how many issues run at once
+
+> Why are there queued issues waiting for a free container when there are only 3/7 containers in use?
+> Remove the group's parallel limit feature. Roll that out in version 0.11.1.
+
+| Decision | Why |
+|---|---|
+| The "Agents running at once" field is gone, and with it the count of the pool: an issue starts as soon as its blockers are closed and the worktree before it has started or a container is free. | Asked for. The limit was one number for the whole app, set by whichever batch was sent last, and counted the sessions of every group, so a second batch changed the first's. An issue held by it kept the reason it was given before (a full house, say), which is what the owner saw: three containers of seven in use and the chips saying they waited for one. |
+| Worktrees have no ceiling of their own any more (it was 4). | The limit that held it is gone. They are still set up one at a time; the CPU limits share the machine between them once they run. |
+| `finished`, which only gave a session's place in the pool back, is gone with it. | Nothing else read it. |
+
+Verified with `npm test` and by reading the queue: nothing else held an issue back on the count. Not tried live.
+
 ## 17. Still open
 
 - In a window as wide as the app opens it, with no usage figures yet and a long account name, the header is
